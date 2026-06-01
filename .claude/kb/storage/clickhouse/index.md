@@ -62,6 +62,21 @@ Pod 2 should use the **Native protocol** for the Collector exporter:
 
 The HTTP interface remains useful for readiness probes (`GET /?query=SELECT+1`) and local debug queries.
 
+> **Correction 2026-06-01 · Confidence 0.95 (verified locally, Pod 2 Day-3)**
+> Two *different* Rust crates are easy to confuse — and Pod 2's scaffold pins
+> the HTTP one, not the native one:
+>
+> | Crate | Transport | Port | Notes |
+> |---|---|---|---|
+> | **`clickhouse`** (ClickHouse-official) | **HTTP**, binary RowBinary body | **8123** | What `services/collector-rust/Cargo.toml` actually pins (`0.13`). Despite the name, it does **not** speak native TCP. |
+> | `clickhouse-rs` (third-party) | Native TCP | 9000 | The crate this section originally recommended; **not** what we use. |
+>
+> So the current Pod 2 exporter URL is `http://localhost:8123`, RowBinary over
+> HTTP — not the native `:9000` path. RowBinary keeps the payload compact, so
+> the "HTTP adds JSON overhead" caveat above does **not** apply to the
+> `clickhouse` crate (it's binary, just over HTTP). Revisit the native-vs-HTTP
+> throughput question with a real bake-off before assuming `:9000` is required.
+
 ---
 
 ## OTel storage schema
@@ -195,13 +210,13 @@ CREATE TABLE otel_metrics_1m
     window_start  DateTime,
     ServiceName   LowCardinality(String),
     MetricName    LowCardinality(String),
-    count         UInt64,
-    sum_val       Float64,
-    sum_sq        Float64,    -- for stddev: sqrt(sum_sq/count - (sum/count)^2)
-    min_val       Float64,
-    max_val       Float64
+    count         SimpleAggregateFunction(sum, UInt64),
+    sum_val       SimpleAggregateFunction(sum, Float64),    -- mean = sum_val/count
+    sum_sq        SimpleAggregateFunction(sum, Float64),    -- stddev: sqrt(sum_sq/n - (sum/n)^2)
+    min_val       SimpleAggregateFunction(min, Float64),
+    max_val       SimpleAggregateFunction(max, Float64)
 )
-ENGINE = SummingMergeTree
+ENGINE = AggregatingMergeTree
 PARTITION BY toDate(window_start)
 ORDER BY (ServiceName, MetricName, window_start);
 
@@ -224,6 +239,28 @@ GROUP BY window_start, ServiceName, MetricName;
 
 The `rolling_stats` agent reads from `otel_metrics_1m`, not the raw table. This keeps detection latency under 1s even at high ingest rates.
 
+> **Corrected 2026-06-01 · Confidence 0.97 (verified live on ClickHouse 25.4, Pod 2 Day-3)**
+> This table **must not be `SummingMergeTree`** — that engine sums *every*
+> non-key numeric column on merge, which silently corrupts `min_val`/`max_val`
+> (two parts holding `min=10` and `min=100` would merge to `min=110`, proven in
+> testing). Use **`AggregatingMergeTree` + `SimpleAggregateFunction(<fn>, T)`**
+> so each column declares its own merge combinator (`sum` for count/sum_val/
+> sum_sq, `min`/`max` for the extremes). `SimpleAggregateFunction` stores the
+> plain value (not an opaque `-State` blob), so reads are ordinary columns —
+> **but parts may be unmerged, so the reader MUST re-aggregate with the same
+> function in a `GROUP BY`** (or use `FINAL`):
+>
+> ```sql
+> SELECT ServiceName, MetricName, window_start,
+>        sum(count) AS n, sum(sum_val) AS total,
+>        min(min_val) AS lo, max(max_val) AS hi
+> FROM otel_metrics_1m
+> GROUP BY ServiceName, MetricName, window_start;
+> ```
+>
+> Reading `min_val` directly (without `min(...)`) can return a per-part partial,
+> not the true window min. See `infra/clickhouse/ddl/003_otel_metrics.sql`.
+
 An equivalent `otel_traces_1m` view (keyed on `ServiceName`, `SpanName`, bucketed duration p50/p95 via `quantileMerge`) supports the Latency watcher (W05).
 
 ---
@@ -237,13 +274,27 @@ TTL is declared on the partition column (`Timestamp`) as shown in the DDL stubs 
 - **TTL does not fire immediately** on the expiry date; it fires during the next background merge. Force with `OPTIMIZE TABLE otel_logs FINAL` (avoid in production — expensive).
 - Tiered storage (S3 → local NVMe) can be added later via `STORAGE POLICY` without schema changes.
 
+> **Gotcha 2026-06-01 · Confidence 0.97 (verified live on ClickHouse 25.4, Pod 2 Day-3)**
+> TTL is evaluated against **event time** (the `Timestamp` column), not ingest
+> time. So replaying an **old-dated fixture** is purged on the first merge:
+> inserting Pod 1's golden file (timestamped `2023-11-14`) under a 30/90-day TTL
+> makes `count()` return the right number immediately, then **drop to 0** after
+> any background merge or `OPTIMIZE`. This bit Day-3 schema verification.
+> Mitigation for tests that replay aged fixtures: shift the fixture timestamps
+> to ~now in the replay harness (closest to production, where OTLP arrives in
+> real time), or strip TTL in the test-only schema variant
+> (`ALTER TABLE … MODIFY TTL … + INTERVAL 100 YEAR`). Do **not** weaken the
+> production TTL to accommodate aged test data.
+
 ---
 
 ## Common gotchas
 
 | Gotcha | Detail |
 |---|---|
-| **Nullable columns are slower** | `Nullable(T)` adds a null-bitmap column internally; avoid unless semantically required. Use empty string `''` for optional `String`, `-1` for optional integers, or a sentinel value. `ParentSpanId` is the only justified `Nullable` in the schema above (root spans have no parent). |
+| **Nullable columns are slower** | `Nullable(T)` adds a null-bitmap column internally; avoid unless semantically required. Use empty string `''` for optional `String`, `-1` for optional integers, or a sentinel value. Pod 2 stores `TraceId`/`SpanId`/`ParentSpanId` as `''`-when-absent (**not** `Nullable`) per [ADR-0006](../../../../docs/adr/0006-optional-id-representation.md) — a present ID is validated 32/16-hex upstream, so `''` can never collide with a real value. |
+| **`Map` ↔ `Vec<(K,V)>` in the `clickhouse` Rust crate** | The `clickhouse` 0.13 crate does **not** serialize `HashMap<K,V>` into a `Map(String,String)` column — the `Row` struct field must be `Vec<(String, String)>`. Convert with `map.into_iter().collect::<Vec<_>>()`; pre-sort if deterministic output matters. *(verified 2026-06-01)* |
+| **`DateTime64(9)` serde path** | For a `DateTime64(9,'UTC')` column with the crate's `"time"` feature, annotate the `Row` field `#[serde(with = "clickhouse::serde::time::datetime64::nanos")]` over a `time::OffsetDateTime`. Build it from `i64` nanos via `OffsetDateTime::from_unix_timestamp_nanos(nanos as i128)` — note the **`i128`** arg. *(verified 2026-06-01)* |
 | **Map vs JSONString** | `Map(String, String)` is the right type for `LogAttributes` / `SpanAttributes` — structured key lookup, not full-text scan. `JSONString` (plain `String` with JSON blob) is faster to ingest but forces client-side parsing. Never use `JSONString` for fields the detection engine will filter on. |
 | **LZ4 on by default** | ClickHouse compresses all columns with LZ4 by default. No action needed, but know that ZSTD (`CODEC(ZSTD(1))`) gives better ratios at moderate CPU cost for `Body` (log message text). Benchmark before changing. |
 | **INSERT batching** | Small inserts (< 1000 rows) create many small parts, triggering excessive merges. The Collector exporter must batch to at least 5000 rows or 1s flush intervals (aligns with Pod 1's `batch_size: 5000` in `clickhouse_schema.yaml`). |
