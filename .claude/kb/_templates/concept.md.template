@@ -1,0 +1,60 @@
+# {{CONCEPT_NAME}}
+
+> **Purpose**: {{ONE_LINE_DESCRIPTION}}
+> **Confidence**: {{CONFIDENCE_LEVEL}}
+> **MCP Validated**: {{VALIDATION_DATE}}
+> **Added**: {{DATE_ADDED}}
+
+## Overview
+
+{{OVERVIEW_2_3_SENTENCES}}
+
+## The Pattern
+
+```{{LANGUAGE}}
+{{CODE_EXAMPLE_10_30_LINES}}
+```
+
+## Quick Reference
+
+| Input | Output | Notes |
+|-------|--------|-------|
+| `{{EXAMPLE_INPUT}}` | `{{EXAMPLE_OUTPUT}}` | {{NOTES}} |
+
+## Common Mistakes
+
+### Wrong
+
+```{{LANGUAGE}}
+{{ANTI_PATTERN}}
+```
+
+Why this fails: {{ANTI_PATTERN_REASON}}
+
+### Right
+
+```{{LANGUAGE}}
+{{CORRECT_PATTERN}}
+```
+
+## When to Use This
+
+- {{USE_CASE_1}}
+- {{USE_CASE_2}}
+
+## When NOT to Use This
+
+- {{NON_USE_CASE_1}}
+
+## Sentinel Context
+
+{{HOW_THIS_APPLIES_TO_SENTINEL}}
+
+## See Also
+
+- [`../index.md`](../index.md) — domain index
+- [`../patterns/{{RELATED_PATTERN}}.md`](../patterns/{{RELATED_PATTERN}}.md) — production usage
+
+## Sources
+
+- {{AUTHORITATIVE_SOURCE_URL}}
