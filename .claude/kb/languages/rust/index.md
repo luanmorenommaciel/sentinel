@@ -395,6 +395,12 @@ Matches Pod 1's `signal_type` discriminator in `contract/schema/otlp_output.sche
 ```rust
 #[cfg(test)]
 mod tests {
+    // REQUIRED when the crate sets `unwrap_used = "deny"` / `expect_used = "warn"`.
+    // Tests are allowed to fail-fast with unwrap/expect — that IS the test. Without
+    // this inner attribute, `cargo clippy --all-targets -- -D warnings` fails on
+    // every `.unwrap()` in this module. Crate-level lints apply to test code too.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
 
     #[test]
@@ -405,11 +411,65 @@ mod tests {
 }
 ```
 
+> **Added 2026-06-01 · Confidence 0.95 (verified locally on Rust 1.96.0, Pod 2 Day-2)**
+> The `unwrap_used = "deny"` lint in `Cargo.toml` `[lints.clippy]` applies to
+> **all** code in the crate, including `#[cfg(test)]` modules. The fix is a
+> module-inner `#![allow(clippy::unwrap_used, clippy::expect_used)]` (note the
+> `#!` — inner attribute, first line inside the `mod tests { }` body). For
+> integration tests under `tests/`, put the same `#![allow(...)]` at the **top
+> of the file** (each integration test file is its own crate root). This is why
+> the Day-1 scaffold's tests compiled but the Day-2 lint-tightening PR needed
+> the allow added in three places: `src/contract.rs`, `src/lib.rs`, and
+> `tests/golden_parse.rs`.
+
+### Negative tests against an ordered validator
+
+When testing a `Result`-returning validator that checks fields in a fixed order
+and returns on the **first** failure (Sentinel's `Signal::validate()` is the
+canonical example), every test must hold all OTHER fields valid so the variant
+under test is the one that actually fires:
+
+```rust
+#[test]
+fn negative_timestamp_is_detected() {
+    let log = LogSignal {
+        contract_version: "1.0.0".to_string(),  // valid — checked FIRST
+        service_name: "s".to_string(),          // valid — checked SECOND
+        time_unix_nano: -1,                      // the field UNDER TEST
+        resource_attributes: req_attrs(),       // valid — checked LAST
+        // ...
+    };
+    // assert_eq! with the exact payload when it's deterministic and worth pinning
+    assert_eq!(log.validate(), Err(ContractError::NegativeTimestamp(-1)));
+}
+```
+
+The trap: a negative test can pass for the **wrong reason** — an earlier guard
+trips before validation reaches the field you meant to test. Mitigations:
+
+- Use `assert_eq!(x.validate(), Err(ContractError::Exact { .. }))` (not just
+  `is_err()`) so the *specific* variant is pinned.
+- Use `matches!` only when the variant's payload is genuinely incidental:
+  `assert!(matches!(x.validate(), Err(ContractError::InvalidTraceId(_))))`.
+- Always pair negative tests with **boundary-positive** tests (e.g. `time == 0`
+  is valid when the rule is `< 0`; `end == start` is valid when the rule is
+  `end < start`) — they catch an over-eager validator that the negatives can't.
+
+> **Added 2026-06-01 · Confidence 0.90 (Pod 2 Day-2, test-generator agent + review)**
+> Property-based testing (`proptest`) is a strong fit for hand-rolled string
+> parsers like Sentinel's `is_semver` and `is_lowercase_hex` — multi-byte UTF-8,
+> NUL bytes, and exhaustive length boundaries are exactly what example-based
+> tests miss. Deferred (no `proptest` dev-dependency yet) but flagged for a
+> "harden the primitives" pass. Add `proptest = "1"` to `[dev-dependencies]` and
+> a separate `#[cfg(test)] mod prop_tests` when picked up.
+
 ### Async unit tests
 
 ```rust
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]  // see Unit tests note above
+
     use super::*;
 
     #[tokio::test]
@@ -520,6 +580,8 @@ blocking. Use it over `join_all` when individual future durations vary significa
 | Concurrent branches | `tokio::select!` |
 | Spawn a task | `tokio::spawn(async move { ... })` |
 | Integration test | `tests/<name>.rs` + `cargo nextest run` |
+| Unwrap in tests under deny-lint | `#![allow(clippy::unwrap_used, clippy::expect_used)]` inside `mod tests` |
+| Pin exact error variant | `assert_eq!(x.validate(), Err(MyError::Exact { .. }))` |
 | Serde snake_case | `#[serde(rename_all = "snake_case")]` |
 | Discriminated union | `#[serde(tag = "type")]` enum |
 | Error with context | `thiserror::Error` + `#[error("...{field}...")]` |
