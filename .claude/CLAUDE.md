@@ -55,11 +55,11 @@ sentinel/
 ├── infra/                         # ClickHouse, Docker compose, deployment configs
 ├── .claude/
 │   ├── CLAUDE.md                  # This file
-│   ├── agents/                    # Specialized subagents (15) + _schema.json
-│   ├── skills/                    # Slash commands (8)
+│   ├── agents/                    # Specialized subagents (15) + _schema.json + _template.md.example
+│   ├── skills/                    # Slash commands (9) + _template.md.example
 │   ├── kb/                        # Knowledge bases (10 seed KBs) + _templates/ + _index.yaml
-│   ├── docs/                      # Internal standards (OCR, ingestion, roadmap, glossary, Rust standards)
-│   └── rules/                     # Path-scoped instruction files
+│   ├── docs/                      # Internal standards (5 — OCR, ingestion, roadmap, glossary, Rust standards)
+│   └── rules/                     # Path-scoped instruction files (1 — kb-enrichment)
 └── README.md
 ```
 
@@ -79,7 +79,7 @@ sentinel/
 
 Each agent has its own `.md` under `.claude/agents/<category>/<name>.md`. All agents have a `Use PROACTIVELY when …` trigger line so auto-invocation fires consistently. The frontmatter schema is documented in [`.claude/agents/_schema.json`](agents/_schema.json) (recommended-not-required at bootstrap).
 
-## Skills (8 slash commands)
+## Skills (9 slash commands)
 
 | Skill | Purpose |
 |---|---|
@@ -91,6 +91,15 @@ Each agent has its own `.md` under `.claude/agents/<category>/<name>.md`. All ag
 | `/update-kbs` | Refresh existing KBs with latest documentation |
 | `/ingest-doc` | Process a document (PDF, slide deck, transcript) into the KB (handles scanned PDFs via vision) |
 | `/adr` | Open a new ADR using the Sentinel template |
+| `/day-1-rust` | Pod-2 onboarding: install toolchain · verify scaffold · generate `contract.rs` from Pod 1's schema · open first parser PR |
+
+Skill frontmatter follows [`.claude/skills/_template.md.example`](skills/_template.md.example).
+
+## Rules (1 path-scoped file)
+
+| Rule | Scope | Purpose |
+|---|---|---|
+| [`kb-enrichment.md`](rules/kb-enrichment.md) | all | Policy: knowledge discovered during sessions must flow back into `.claude/kb/` via `/enrich-kb` or `/create-kb`. Defines the decision tree for KB vs. CLAUDE.md placement and the dating + confidence convention. |
 
 ## Knowledge Base (10 seed KBs)
 
@@ -160,6 +169,7 @@ Full WoW: `kb/process/crew-b-wow/index.md`.
 | Write web findings back to KB | `/enrich-kb <topic>` |
 | Generate / refresh a README | `/readme-maker` |
 | Process a document (PDF, transcript) into KB | `/ingest-doc <path>` |
+| Onboard a new Astronaut to Pod 2's Rust path | `/day-1-rust` |
 | Design OTel Collector pipeline | otel-collector-specialist agent |
 | Design ClickHouse schema | clickhouse-engineer agent |
 | Optimize Rust async code | rust-specialist agent |
