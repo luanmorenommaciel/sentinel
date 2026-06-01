@@ -1,12 +1,23 @@
 //! Sentinel OTel Collector — library crate.
 //!
-//! Hosts the contract module and the parser pipeline. The binary
-//! (`src/main.rs`) is a thin wrapper that calls [`run`] from CLI args.
-//! Integration tests (`tests/`) consume this library directly.
+//! Hosts the contract module, the parser pipeline, and the ClickHouse
+//! exporter. The binary (`src/main.rs`) is a thin wrapper that calls [`run`]
+//! from CLI args. Integration tests (`tests/`) consume this library directly.
 //!
-//! Design: keep this crate stateless and side-effect-free (file I/O and
-//! logging only). All ClickHouse, gRPC, and runtime concerns live in
-//! later phases per `docs/research/learning-roadmap-pod2-rust.md`.
+//! # Module layout
+//!
+//! - [`contract`] — the `Signal` enum and all contract types (mirrors Pod 1's
+//!   v1.0.0 JSON Schema). No I/O — pure data types and validation logic.
+//! - [`clickhouse_exporter`] — Row structs, `From<Signal>` conversions, and
+//!   the async [`clickhouse_exporter::export`] entry point. Requires a running
+//!   ClickHouse instance to do I/O; the parse path (`run`) does not.
+//!
+//! # Design
+//!
+//! `run()` is kept stateless and side-effect-free (file I/O and logging only)
+//! so the golden-parse integration test never needs a ClickHouse instance.
+//! The exporter path is additive: `run_and_export` reuses the same parse
+//! logic and adds the ClickHouse write.
 
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -14,6 +25,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use tracing::warn;
 
+pub mod clickhouse_exporter;
 pub mod contract;
 
 pub use contract::{ContractError, MetricType, Signal, StatusCode, CONTRACT_VERSION};
@@ -46,18 +58,24 @@ impl Counts {
     }
 }
 
-/// Parse every line of `path` as an NDJSON-encoded [`Signal`] and tally the
-/// results.
+/// Parse every line of `path` as an NDJSON-encoded [`Signal`] and return the
+/// validated signals together with error tallies.
+///
+/// This is the shared parse kernel used by both [`run`] (count-only, no I/O to
+/// ClickHouse) and [`run_and_export`] (parse + write). Factoring it out means
+/// neither caller duplicates the parse loop.
 ///
 /// # Errors
 ///
 /// Returns an error only when the file cannot be opened or a read syscall
-/// fails. Per-line parse and validation errors are accumulated in [`Counts`]
-/// and logged via `tracing::warn` — they do NOT short-circuit the run.
-pub fn run(path: &Path) -> Result<Counts> {
+/// fails. Per-line parse and validation errors are accumulated in the returned
+/// [`Counts`] and logged via `tracing::warn` — they do NOT short-circuit the
+/// parse.
+pub fn parse_file(path: &Path) -> Result<(Vec<Signal>, Counts)> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut counts = Counts::default();
+    let mut signals: Vec<Signal> = Vec::new();
 
     for (line_no, line) in reader.lines().enumerate() {
         let line_no = line_no + 1;
@@ -82,7 +100,69 @@ pub fn run(path: &Path) -> Result<Counts> {
         }
 
         counts.record(&signal);
+        signals.push(signal);
     }
+
+    Ok((signals, counts))
+}
+
+/// Parse every line of `path` as an NDJSON-encoded [`Signal`] and tally the
+/// results.
+///
+/// This is the original Day-1 entry point. It does **not** touch ClickHouse —
+/// `cargo test` and the golden-parse integration test use this path and do not
+/// require a running ClickHouse instance.
+///
+/// # Errors
+///
+/// Returns an error only when the file cannot be opened or a read syscall
+/// fails. Per-line parse and validation errors are accumulated in [`Counts`]
+/// and logged via `tracing::warn` — they do NOT short-circuit the run.
+pub fn run(path: &Path) -> Result<Counts> {
+    let (_signals, counts) = parse_file(path)?;
+    Ok(counts)
+}
+
+/// Parse `path` and export the validated signals to ClickHouse.
+///
+/// This is the Day-4 additive path. It calls [`parse_file`] to get a
+/// `Vec<Signal>` and then calls [`clickhouse_exporter::export`] to write them.
+/// The returned [`Counts`] reflects only successfully exported rows (parse and
+/// validation errors are in `counts.parse_errors` / `counts.validation_errors`
+/// but export errors cause an early return).
+///
+/// # Errors
+///
+/// - `anyhow::Error` wrapping file I/O failures from [`parse_file`].
+/// - `anyhow::Error` wrapping [`clickhouse_exporter::ExporterError`] on insert
+///   failure.
+///
+/// # Example
+///
+/// ```no_run
+/// # tokio_test::block_on(async {
+/// let client = sentinel_collector::clickhouse_exporter::client_from_env();
+/// let counts = sentinel_collector::run_and_export(
+///     std::path::Path::new("contract/golden/baseline_seed42.jsonl"),
+///     &client,
+/// )
+/// .await
+/// .expect("export failed");
+/// println!("exported {} logs, {} spans, {} metrics", counts.logs, counts.spans, counts.metrics);
+/// # });
+/// ```
+pub async fn run_and_export(path: &Path, client: &clickhouse::Client) -> Result<Counts> {
+    let (signals, mut counts) = parse_file(path)?;
+
+    let export_counts = clickhouse_exporter::export(client, signals)
+        .await
+        .with_context(|| "clickhouse export failed")?;
+
+    // Merge the export counts back into the parse counts so the caller gets a
+    // single unified tally (parse errors + export row counts in one struct).
+    counts.logs = export_counts.logs;
+    counts.spans = export_counts.spans;
+    counts.metrics = export_counts.metrics;
 
     Ok(counts)
 }

@@ -33,6 +33,13 @@ futures = "0.3"
 # Bake-off alternative: klickhouse (native TCP) — swap and re-run perf gate
 clickhouse = { version = "0.13", features = ["lz4", "time"] }
 
+# time is a transitive dependency of clickhouse (pulled in via the "time" feature).
+# We declare it directly here so that `use time::OffsetDateTime` compiles in
+# clickhouse_exporter.rs. Without a direct dep declaration, Rust cannot resolve the
+# `time` crate name even though it is already in Cargo.lock. The version pin matches
+# what clickhouse 0.13 already resolves to; `cargo update` will keep them in sync.
+time = { version = "0.3", features = ["std"] }
+
 # Meta-telemetry (Collector observing itself — required so Sentinel can watch Sentinel)
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
