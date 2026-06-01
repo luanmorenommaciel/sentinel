@@ -209,7 +209,8 @@ This contract freezes to `v1.0.0` only after **all** of:
    `ResourceAttributes`; span `Duration` derived correctly. Proven live against
    ClickHouse 25.4 via `tests/clickhouse_roundtrip.rs` (commit `973a1f0`),
    including the TTL-vs-fixture-age handling (strip TTL on the 2023-dated
-   fixture). *(Day-5 follow-up: run this in CI with a service container.)*
+   fixture). Now also runs in CI against a containerized ClickHouse
+   (`.github/workflows/rust-ci.yml`, `integration` job).
 4. ☐ **Pod 3 review sign-off** — Pod 3 reviews this the way Pod 2 reviewed
    Pod 1's contract (`docs/research/contract-review-pod1-v1.0.0.md`), filing
    blockers if any.

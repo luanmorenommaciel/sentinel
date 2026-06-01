@@ -111,18 +111,23 @@ pub fn build_client(url: &str) -> clickhouse::Client {
 /// Library code must route config through the Sentinel config loader instead
 /// (enforced by `clippy::disallowed_methods` in `clippy.toml`).
 pub fn client_from_env() -> clickhouse::Client {
-    // `std::env::var` is disallowed in lib production code by clippy.toml.
-    // This function is intended to be called from test code and the binary
-    // crate, where the disallowed-methods restriction is lifted per the
-    // clippy.toml note ("Tests can still use it").
-    //
-    // We use an explicit `#[allow]` here so clippy accepts this one call site
-    // within the library module. All other call sites should go through the
-    // Sentinel config loader.
+    build_client(&url_from_env().unwrap_or_else(|| DEFAULT_CLICKHOUSE_URL.to_string()))
+}
+
+/// Read the `CLICKHOUSE_URL` env var, returning `None` when it is unset.
+///
+/// Used by the binary entry point to decide between **export mode** (URL set →
+/// parse + write to ClickHouse) and **count mode** (URL unset → parse only, no
+/// ClickHouse dependency). Returning `Option` keeps the "is export configured?"
+/// decision out of `main` while keeping the single `std::env` access in this
+/// module (the `disallowed_methods` lint forbids it elsewhere in library code;
+/// real config will move to the Sentinel config loader — see ADR-0004 follow-ups).
+#[must_use]
+pub fn url_from_env() -> Option<String> {
+    // The one sanctioned `std::env::var` call site in the library. Binary +
+    // test callers rely on this rather than reading the environment directly.
     #[allow(clippy::disallowed_methods)]
-    let url =
-        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| DEFAULT_CLICKHOUSE_URL.to_string());
-    build_client(&url)
+    std::env::var("CLICKHOUSE_URL").ok()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
