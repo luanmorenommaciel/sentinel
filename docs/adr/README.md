@@ -10,8 +10,10 @@ This directory holds Sentinel's ADRs. Per the [Crew B WoW spec](../../README.md)
 | 0002 | Where the baseline lives | _Pending_ | Crew B (Sprint 1) |
 | 0003 | Primary user of Sentinel | _Pending_ | Crew B (Sprint 1) |
 | 0004 | [Collector implementation language](0004-collector-implementation-language.md) | **Proposed** | Pod 2 |
+| 0005 | [ClickHouse storage schema for OTLP signals](0005-clickhouse-storage-schema.md) | **Proposed** | Pod 2 |
+| 0006 | [Optional trace/span ID representation](0006-optional-id-representation.md) | **Proposed** | Pod 2 |
 
-ADRs 0001–0003 are the three Sprint 1 ADRs the Commander assigned (`bem-vindos.md`). ADR-0004 is a Pod 2 proposal opening the Collector language bake-off (Sync 02 action A7).
+ADRs 0001–0003 are the three Sprint 1 ADRs the Commander assigned (`bem-vindos.md`). ADR-0004 is a Pod 2 proposal opening the Collector language bake-off (Sync 02 action A7). ADRs 0005–0006 are Pod 2's Day-3 storage-schema decisions, gating the [Pod 2 → Pod 3 ClickHouse read contract](../contracts/pod2-pod3-read-contract.md).
 
 ## Template
 
