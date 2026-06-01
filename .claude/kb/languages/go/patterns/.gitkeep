@@ -1,0 +1,3 @@
+# Production-proven patterns go here.
+# One pattern per file, <200 lines, follow _templates/pattern.md.template.
+# Add only after first real production use in Sentinel (link the PR/commit).

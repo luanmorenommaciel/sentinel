@@ -2,9 +2,10 @@
 victor_docs/
 
 # Rust
+# Cargo.lock IS committed for binaries (per .claude/docs/RUST_PROJECT_STANDARDS.md);
+# do not add it to this ignore list.
 target/
 **/*.rs.bk
-Cargo.lock
 
 # Python
 __pycache__/
@@ -27,3 +28,8 @@ venv/
 .env
 .env.local
 *.local
+
+# Build artefacts
+dist/
+build/
+*.egg-info/

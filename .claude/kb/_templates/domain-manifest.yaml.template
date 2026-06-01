@@ -1,0 +1,32 @@
+# Domain manifest fragment — add to .claude/kb/_index.yaml under `domains:`.
+
+{{DOMAIN_KEY}}:
+  name: {{DOMAIN_DISPLAY_NAME}}
+  description: {{DOMAIN_DESCRIPTION}}
+  path: {{DOMAIN_CATEGORY}}/{{DOMAIN_KEY}}/
+  mcp_validated: "{{VALIDATION_DATE}}"
+  confidence: {{CONFIDENCE}}
+  sentinel_touch_points:
+    - {{TOUCH_POINT_1}}
+    - {{TOUCH_POINT_2}}
+  entry_points:
+    index: index.md
+    quick_reference: quick-reference.md
+  concepts:
+    - name: {{CONCEPT_1}}
+      path: concepts/{{CONCEPT_1}}.md
+      confidence: 0.85
+  patterns:
+    - name: {{PATTERN_1}}
+      path: patterns/{{PATTERN_1}}.md
+      first_use: {{PR_OR_COMMIT_REF}}
+  specs:
+    - name: {{SPEC_1}}
+      path: specs/{{SPEC_1}}.yaml
+  reference:
+    - name: {{REF_1}}
+      path: reference/{{REF_1}}.md
+  related_agents:
+    - {{AGENT_NAME_1}}
+  related_adrs:
+    - {{ADR_NUMBER}}

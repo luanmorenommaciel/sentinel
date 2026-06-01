@@ -1,0 +1,242 @@
+# Sentinel Knowledge Base Index
+# Machine-readable registry for KB domains.
+# Consumed by /create-kb, /enrich-kb, /update-kbs, and kb-architect.
+
+version: "1.0"
+last_updated: "2026-06-01"
+project: sentinel
+
+# File-size limits (single source of truth — enforced by /create-kb + reviewers)
+limits:
+  quick_reference: 100
+  concept: 150
+  pattern: 200
+  spec: null
+  reference: null
+
+# Templates (canonical shapes — kb-architect copies from these)
+templates:
+  - name: index
+    path: _templates/index.md.template
+  - name: quick-reference
+    path: _templates/quick-reference.md.template
+  - name: concept
+    path: _templates/concept.md.template
+  - name: pattern
+    path: _templates/pattern.md.template
+  - name: domain-manifest
+    path: _templates/domain-manifest.yaml.template
+
+# Confidence scoring scale (mirrors /enrich-kb skill)
+confidence_scale:
+  "0.95": "KB + MCP agree; matches official docs"
+  "0.85": "MCP-validated only (newer than local KB)"
+  "0.75": "KB-only (no recent re-validation)"
+  "0.50": "Conflict between sources; needs human review"
+
+# Domain registry (10 seed KBs)
+domains:
+
+  opentelemetry:
+    name: OpenTelemetry
+    description: OTel core concepts, OTLP wire format, signal types, semantic conventions
+    path: telemetry/opentelemetry/
+    mcp_validated: "2026-06-01"
+    confidence: 0.85
+    sentinel_touch_points:
+      - Pod 2 OTel Collector (Generator → Collector → ClickHouse)
+      - All 6 Watcher Crews (signal consumers)
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts: []
+    patterns: []
+    specs: []
+    reference: []
+    related_agents:
+      - otel-collector-specialist
+    related_adrs:
+      - ADR-0004
+
+  otel-collector:
+    name: OTel Collector Architecture
+    description: Collector receiver/processor/exporter pipeline, backpressure, what Sentinel builds vs configures
+    path: telemetry/otel-collector/
+    mcp_validated: "2026-06-01"
+    confidence: 0.85
+    sentinel_touch_points:
+      - Pod 2 (Victor's pod) — owns this component
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts: []
+    patterns: []
+    related_agents:
+      - otel-collector-specialist
+      - rust-specialist
+    related_adrs:
+      - ADR-0004
+
+  clickhouse:
+    name: ClickHouse / ClickStack
+    description: ClickHouse schema, native protocol, ingestion throughput, query optimization, OTel storage
+    path: storage/clickhouse/
+    mcp_validated: "2026-06-01"
+    confidence: 0.85
+    sentinel_touch_points:
+      - Pod 3 — storage layer owner
+      - Pod 2 — Collector's export target
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts: []
+    patterns: []
+    related_agents:
+      - clickhouse-engineer
+    related_adrs: []
+
+  gcp-telemetry:
+    name: GCP Telemetry
+    description: GCP Cloud Logging, Cloud Monitoring, Cloud Trace; resource attributes per service; OTLP integration
+    path: cloud/gcp-telemetry/
+    mcp_validated: "2026-06-01"
+    confidence: 0.85
+    sentinel_touch_points:
+      - Pod 1 — generator emulates real GCP shapes
+      - Pod 2 — Collector validates against real GCP when generator is swapped out
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts: []
+    patterns: []
+    related_agents:
+      - gcp-engineer
+      - otel-collector-specialist
+    related_adrs: []
+
+  rust:
+    name: Rust
+    description: Rust language patterns — tokio, tonic, serde, error handling, lifetimes (project setup in docs/RUST_PROJECT_STANDARDS.md)
+    path: languages/rust/
+    mcp_validated: "2026-06-01"
+    confidence: 0.85
+    sentinel_touch_points:
+      - Pod 2 — services/collector-rust/
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts: []
+    patterns: []
+    related_agents:
+      - rust-specialist
+      - otel-collector-specialist
+    related_adrs:
+      - ADR-0004
+    project_setup: ../../docs/RUST_PROJECT_STANDARDS.md
+
+  go:
+    name: Go
+    description: Go language patterns — goroutines, channels, context, OTel Collector upstream internals
+    path: languages/go/
+    mcp_validated: "2026-06-01"
+    confidence: 0.85
+    sentinel_touch_points:
+      - Pod 2 — services/collector-go/ (bake-off alternative)
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts: []
+    patterns: []
+    related_agents: []
+    related_adrs:
+      - ADR-0004
+
+  contracts:
+    name: Contracts (Pydantic + Protobuf + JSON Schema)
+    description: Boundary contracts — Pydantic in Python, Protobuf in Go/Rust, JSON Schema as human-readable layer; versioning, validation
+    path: contracts/
+    mcp_validated: "2026-06-01"
+    confidence: 0.85
+    sentinel_touch_points:
+      - Sync 02 D8 — every component declares input/output contracts
+      - Pod 1 → Pod 2 contract (otlp_output.schema.json) is the live case study
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts: []
+    patterns: []
+    related_agents:
+      - the-planner
+      - code-reviewer
+      - python-developer
+    related_adrs: []
+    related_research:
+      - ../../docs/research/contract-review-pod1-v1.0.0.md
+
+  anomaly-detection:
+    name: Anomaly Detection
+    description: Tier 1 of the 3-tier cascade — z-scores, robust z-score, rolling windows, drift tests, cross-Watcher correlation
+    path: detection/anomaly-detection/
+    mcp_validated: "2026-06-01"
+    confidence: 0.85
+    sentinel_touch_points:
+      - All 6 Watcher Crews — Tier 1 detection
+      - Stage 04 cross_watcher of the 8-stage spine
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts: []
+    patterns: []
+    related_agents:
+      - anomaly-detection-engineer
+    related_adrs:
+      - ADR-002
+
+  crew-b-wow:
+    name: Crew B Way of Working
+    description: Sentinel's process — roles, sprints, ADRs, 8-step PR flow, 7 CI gates, attribution contract
+    path: process/crew-b-wow/
+    mcp_validated: "2026-06-01"
+    confidence: 0.95
+    sentinel_touch_points:
+      - Every Crew B Astronaut, every PR, every sync
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts: []
+    patterns: []
+    related_agents:
+      - the-planner
+      - code-reviewer
+    related_adrs:
+      - ADR-001
+      - ADR-002
+      - ADR-003
+      - ADR-0004
+
+  agentic-architecture:
+    name: Agentic Architectural Patterns
+    description: Index into the Packt book — multi-agent patterns relevant to Sentinel (CrewAI Watcher crews, LLM cascade, hierarchical orchestration)
+    path: patterns/agentic-architecture/
+    mcp_validated: "2026-06-01"
+    confidence: 0.75
+    sentinel_touch_points:
+      - Tier 3 (LLM cascade) design
+      - Watcher CrewAI crew patterns
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts: []
+    patterns: []
+    related_agents:
+      - the-planner
+      - adaptive-explainer
+    related_adrs: []
+    external_source: ../../victor_docs/book-agentic-architectural-patterns-multi-agent-systems.pdf
+
+# Stats (auto-derived; update on KB add/remove)
+stats:
+  domain_count: 10
+  agent_count: 15
+  total_files: 68     # bootstrap + agents/_schema + agents/_template + 3 new agents; concepts/patterns to grow
+  templates_count: 5
