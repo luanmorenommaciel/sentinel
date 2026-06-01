@@ -1,8 +1,8 @@
-# `sentinel-collector` · Rust scaffold
+# `sentinel-collector` · Rust (Day 1: NDJSON parser)
 
-The Rust implementation of the Sentinel OTel Collector. Receives OTLP over gRPC on `:4317`, validates, batches, exports to ClickHouse.
+The Rust implementation of the Sentinel OTel Collector. Eventually receives OTLP over gRPC on `:4317`, validates against Pod 1's contract, batches, and exports to ClickHouse.
 
-> **Status: scaffold.** Does not yet bind a port or write to ClickHouse. It exists to anchor [ADR-0004](../../docs/adr/0004-collector-implementation-language.md), prove the toolchain compiles, and give Pod 2 a starting point for the bake-off against Go.
+> **Status: Day 1 of the [10-day Pod 2 sprint plan](../../docs/research/learning-roadmap-pod2-rust.md).** Currently reads Pod 1's golden NDJSON fixture (`contract/golden/baseline_seed42.jsonl`), deserializes into the canonical `Signal` enum, validates against the v1.0.0 contract, and prints per-signal-type counts. ClickHouse exporter lands Day 3-5; OTLP gRPC receiver lands Day 8-9.
 
 ## Why this exists
 

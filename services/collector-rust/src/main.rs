@@ -1,50 +1,66 @@
-// Sentinel OTel Collector — Rust skeleton.
-//
-// Status: scaffold only. Does not yet bind to :4317 or write to ClickHouse.
-// The point of this file is to anchor the Cargo manifest and CI gates; the
-// receiver + exporter loop lands once ADR-0004 is accepted.
-//
-// See: docs/adr/0004-collector-implementation-language.md
-//      docs/research/rust-otel-collector.md
+//! Sentinel OTel Collector — Day 1 binary.
+//!
+//! Thin wrapper around [`sentinel_collector::run`]. All logic lives in the
+//! library crate so integration tests in `tests/` can consume it.
+//!
+//! Usage:
+//!     cargo run -- [path/to/file.jsonl]
+//!
+//! If no path is given, defaults to `contract/golden/baseline_seed42.jsonl`
+//! relative to the workspace root.
 
-use anyhow::Result;
-use tracing::info;
+use std::env;
+use std::path::PathBuf;
+use std::process::ExitCode;
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+const DEFAULT_GOLDEN: &str = "../../contract/golden/baseline_seed42.jsonl";
+
+fn main() -> ExitCode {
     init_tracing();
+
+    let path = env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_GOLDEN.to_string());
+    let path = PathBuf::from(path);
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
-        "sentinel-collector starting (scaffold — no receiver bound yet)"
+        contract = sentinel_collector::CONTRACT_VERSION,
+        path = %path.display(),
+        "sentinel-collector day-1 parser starting"
     );
 
-    // Next: bind tonic OTLP gRPC server on :4317.
-    // Reference shape:
-    //
-    //   let addr = "0.0.0.0:4317".parse()?;
-    //   let trace_svc = TraceServiceServer::new(SentinelTraceReceiver::default());
-    //   tonic::transport::Server::builder()
-    //       .add_service(trace_svc)
-    //       .serve(addr)
-    //       .await?;
-
-    info!("scaffold exiting cleanly");
-    Ok(())
+    match sentinel_collector::run(&path) {
+        Ok(counts) => {
+            info!(
+                logs = counts.logs,
+                spans = counts.spans,
+                metrics = counts.metrics,
+                total_ok = counts.total_ok(),
+                parse_errors = counts.parse_errors,
+                validation_errors = counts.validation_errors,
+                "parser complete"
+            );
+            if counts.has_errors() {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(err) => {
+            error!(error = %err, "parser failed");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn init_tracing() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .json()
-        .init();
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn scaffold_compiles() {
-        assert!(true, "if this doesn't pass we have bigger problems");
-    }
+        .try_init();
 }
