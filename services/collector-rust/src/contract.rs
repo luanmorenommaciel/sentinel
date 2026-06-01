@@ -427,4 +427,277 @@ mod tests {
             Err(ContractError::InvalidSpanInterval { .. })
         ));
     }
+
+    // --- Day-2: negative / edge-case tests ---
+
+    // `is_semver` requires exactly X.Y.Z with digit-only parts, checked before
+    // the version-equality comparison. "v1.0.0" and "1.0" fail the format test;
+    // "2.0.0" is well-formed so it reaches VersionMismatch (already covered).
+    #[test]
+    fn invalid_semver_is_detected() {
+        for bad_version in &["1.0", "v1.0.0", "1.0.x", "1..0", ""] {
+            let log = LogSignal {
+                contract_version: (*bad_version).to_string(),
+                time_unix_nano: 1,
+                severity_text: "INFO".to_string(),
+                severity_number: 9,
+                service_name: "s".to_string(),
+                body: "b".to_string(),
+                trace_id: None,
+                span_id: None,
+                attributes: HashMap::new(),
+                resource_attributes: req_attrs(),
+            };
+            assert!(
+                matches!(log.validate(), Err(ContractError::InvalidSemver(_))),
+                "expected InvalidSemver for contract_version = {:?}",
+                bad_version
+            );
+        }
+    }
+
+    // service_name is checked after contract_version, so version must be valid.
+    #[test]
+    fn empty_service_name_is_detected() {
+        let log = LogSignal {
+            contract_version: "1.0.0".to_string(),
+            time_unix_nano: 1,
+            severity_text: "INFO".to_string(),
+            severity_number: 9,
+            service_name: "".to_string(),
+            body: "b".to_string(),
+            trace_id: None,
+            span_id: None,
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert_eq!(log.validate(), Err(ContractError::EmptyServiceName));
+    }
+
+    // timestamp check is third in Log's ordering, so version + service_name must be valid.
+    #[test]
+    fn negative_timestamp_is_detected_log() {
+        let log = LogSignal {
+            contract_version: "1.0.0".to_string(),
+            time_unix_nano: -1,
+            severity_text: "INFO".to_string(),
+            severity_number: 9,
+            service_name: "s".to_string(),
+            body: "b".to_string(),
+            trace_id: None,
+            span_id: None,
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert_eq!(log.validate(), Err(ContractError::NegativeTimestamp(-1)));
+    }
+
+    // Metric has its own validate() path; NegativeTimestamp must be covered there too.
+    #[test]
+    fn negative_timestamp_is_detected_metric() {
+        let metric = MetricSignal {
+            contract_version: "1.0.0".to_string(),
+            time_unix_nano: -1,
+            name: "latency".to_string(),
+            metric_type: MetricType::Gauge,
+            value: 1.0,
+            service_name: "s".to_string(),
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert_eq!(metric.validate(), Err(ContractError::NegativeTimestamp(-1)));
+    }
+
+    // Span uses start_unix_nano for the NegativeTimestamp guard (not time_unix_nano).
+    #[test]
+    fn negative_start_is_detected_span() {
+        let span = SpanSignal {
+            contract_version: "1.0.0".to_string(),
+            trace_id: "0".repeat(32),
+            span_id: "0".repeat(16),
+            parent_span_id: None,
+            name: "n".to_string(),
+            service_name: "s".to_string(),
+            start_unix_nano: -1,
+            end_unix_nano: 1,
+            status_code: StatusCode::Ok,
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert_eq!(span.validate(), Err(ContractError::NegativeTimestamp(-1)));
+    }
+
+    // trace_id must be valid (32 lowercase hex) so validation reaches the span_id check.
+    #[test]
+    fn invalid_span_id_is_detected() {
+        let span = SpanSignal {
+            contract_version: "1.0.0".to_string(),
+            trace_id: "a".repeat(32),
+            span_id: "xyz".to_string(), // wrong length + non-hex
+            parent_span_id: None,
+            name: "n".to_string(),
+            service_name: "s".to_string(),
+            start_unix_nano: 1,
+            end_unix_nano: 2,
+            status_code: StatusCode::Ok,
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert!(matches!(
+            span.validate(),
+            Err(ContractError::InvalidSpanId(_))
+        ));
+    }
+
+    // parent_span_id is a separate branch from span_id; both must be covered.
+    // trace_id + span_id are valid here so validation reaches the parent check.
+    #[test]
+    fn invalid_parent_span_id_is_detected() {
+        let span = SpanSignal {
+            contract_version: "1.0.0".to_string(),
+            trace_id: "a".repeat(32),
+            span_id: "a".repeat(16),
+            parent_span_id: Some("BADPARENT".to_string()),
+            name: "n".to_string(),
+            service_name: "s".to_string(),
+            start_unix_nano: 1,
+            end_unix_nano: 2,
+            status_code: StatusCode::Ok,
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert!(matches!(
+            span.validate(),
+            Err(ContractError::InvalidSpanId(_))
+        ));
+    }
+
+    // name is checked fourth in Metric's ordering; version, service_name, and
+    // timestamp must all be valid to reach this guard.
+    #[test]
+    fn empty_metric_name_is_detected() {
+        let metric = MetricSignal {
+            contract_version: "1.0.0".to_string(),
+            time_unix_nano: 1,
+            name: "".to_string(),
+            metric_type: MetricType::Sum,
+            value: 0.0,
+            service_name: "s".to_string(),
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert_eq!(metric.validate(), Err(ContractError::EmptyMetricName));
+    }
+
+    // --- Boundary / positive tests ---
+
+    // The rule is end < start → error; equal timestamps must succeed (zero-duration spans
+    // are valid in OTLP, e.g. point-in-time events).
+    #[test]
+    fn span_with_equal_start_and_end_is_valid() {
+        let span = SpanSignal {
+            contract_version: "1.0.0".to_string(),
+            trace_id: "a".repeat(32),
+            span_id: "a".repeat(16),
+            parent_span_id: None,
+            name: "n".to_string(),
+            service_name: "s".to_string(),
+            start_unix_nano: 100,
+            end_unix_nano: 100,
+            status_code: StatusCode::Ok,
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert_eq!(span.validate(), Ok(()));
+    }
+
+    // time_unix_nano == 0 is valid (epoch origin); the constraint is strictly < 0.
+    #[test]
+    fn zero_timestamp_is_valid() {
+        let log = LogSignal {
+            contract_version: "1.0.0".to_string(),
+            time_unix_nano: 0,
+            severity_text: "INFO".to_string(),
+            severity_number: 9,
+            service_name: "s".to_string(),
+            body: "b".to_string(),
+            trace_id: None,
+            span_id: None,
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert_eq!(log.validate(), Ok(()));
+    }
+
+    // The schema's lowercase-only pattern is deliberate (contract review N4).
+    // Uppercase hex is structurally plausible but must be rejected.
+    #[test]
+    fn uppercase_hex_trace_id_is_rejected() {
+        let span = SpanSignal {
+            contract_version: "1.0.0".to_string(),
+            trace_id: "A".repeat(32), // correct length, valid hex digits — but uppercase
+            span_id: "a".repeat(16),
+            parent_span_id: None,
+            name: "n".to_string(),
+            service_name: "s".to_string(),
+            start_unix_nano: 1,
+            end_unix_nano: 2,
+            status_code: StatusCode::Ok,
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert!(matches!(
+            span.validate(),
+            Err(ContractError::InvalidTraceId(_))
+        ));
+    }
+
+    // Positive partner to the hex-rejection tests: exact-length lowercase hex
+    // IDs must be accepted without error.
+    #[test]
+    fn exact_length_lowercase_hex_ids_are_valid() {
+        let span = SpanSignal {
+            contract_version: "1.0.0".to_string(),
+            trace_id: "0123456789abcdef".repeat(2), // 32 chars
+            span_id: "0123456789abcdef".to_string(), // 16 chars
+            parent_span_id: None,
+            name: "n".to_string(),
+            service_name: "s".to_string(),
+            start_unix_nano: 1,
+            end_unix_nano: 2,
+            status_code: StatusCode::Ok,
+            attributes: HashMap::new(),
+            resource_attributes: req_attrs(),
+        };
+        assert_eq!(span.validate(), Ok(()));
+    }
+
+    // Off-by-one on trace_id length: 31 or 33 chars of otherwise valid lowercase hex
+    // must fail even though every character is individually legal.
+    #[test]
+    fn trace_id_wrong_length_is_rejected() {
+        for bad_id in &[
+            "a".repeat(31), // one short
+            "a".repeat(33), // one long
+        ] {
+            let span = SpanSignal {
+                contract_version: "1.0.0".to_string(),
+                trace_id: bad_id.clone(),
+                span_id: "a".repeat(16),
+                parent_span_id: None,
+                name: "n".to_string(),
+                service_name: "s".to_string(),
+                start_unix_nano: 1,
+                end_unix_nano: 2,
+                status_code: StatusCode::Ok,
+                attributes: HashMap::new(),
+                resource_attributes: req_attrs(),
+            };
+            assert!(
+                matches!(span.validate(), Err(ContractError::InvalidTraceId(_))),
+                "expected InvalidTraceId for trace_id of length {}",
+                bad_id.len()
+            );
+        }
+    }
 }
