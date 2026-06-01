@@ -26,6 +26,7 @@ use std::path::Path;
 use tracing::warn;
 
 pub mod clickhouse_exporter;
+pub mod config;
 pub mod contract;
 
 pub use contract::{ContractError, MetricType, Signal, StatusCode, CONTRACT_VERSION};

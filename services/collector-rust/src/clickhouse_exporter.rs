@@ -96,9 +96,18 @@ pub const DEFAULT_CLICKHOUSE_URL: &str = "http://localhost:8123";
 /// );
 /// ```
 pub fn build_client(url: &str) -> clickhouse::Client {
+    build_client_with_database(url, "default")
+}
+
+/// Build a [`clickhouse::Client`] targeting `url` and a specific `database`.
+///
+/// Used by the config-driven binary path so `clickhouse.database` from
+/// `config.yaml` is honoured. [`build_client`] is the `database = "default"`
+/// convenience wrapper.
+pub fn build_client_with_database(url: &str, database: &str) -> clickhouse::Client {
     clickhouse::Client::default()
         .with_url(url)
-        .with_database("default")
+        .with_database(database)
 }
 
 /// Convenience wrapper for integration tests and the binary entry point.

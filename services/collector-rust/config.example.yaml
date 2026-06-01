@@ -1,0 +1,38 @@
+# Sentinel OTel Collector — example configuration (Day 6).
+#
+# Copy to `config.yaml` and pass it as the first argument:
+#     cargo run -- config.yaml
+#
+# With no argument the binary uses built-in defaults (this file's values),
+# which run in COUNT mode against the golden fixture. Every field is optional;
+# unknown keys are rejected to catch typos.
+
+# Where to read NDJSON-encoded signals from.
+input:
+  path: ../../contract/golden/baseline_seed42.jsonl
+
+# ClickHouse target. Omit this WHOLE section for count-only mode (parse + tally,
+# no database). The `clickhouse` 0.13 crate speaks RowBinary over HTTP — use the
+# 8123 HTTP port, not native 9000.
+#
+# CLICKHOUSE_URL in the environment overrides `clickhouse.url` (and creates this
+# section if absent).
+clickhouse:
+  url: http://localhost:8123
+  database: default
+
+# Contract-version policy enforced at the receive boundary.
+contract:
+  # Must equal the contract version this binary was built for, or it refuses to
+  # start (a 1.0.0 collector cannot validate a 2.0.0 pipeline).
+  expected_version: "1.0.0"
+  # false → skip + count bad signals, export the good ones.
+  # true  → any parse/validation error aborts the run BEFORE export (all-or-nothing).
+  strict: false
+
+# Structured logging.
+logging:
+  # Level or EnvFilter directive. RUST_LOG, if set, overrides this.
+  level: info
+  # json (machine-ingestible, production default) | text (human-readable).
+  format: json
