@@ -1,0 +1,17 @@
+# Formatter config — Sentinel's UV-equivalent of [tool.ruff.format].
+# Run with `cargo fmt` (from inside services/collector-rust/) or
+# `just fmt` (component-level) / `just rust-fmt` (root).
+#
+# Only stable rustfmt options here. Nightly-only options (imports_granularity,
+# group_imports) are deferred until the project moves to nightly or those
+# options stabilize.
+
+edition = "2021"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+newline_style = "Unix"
+reorder_imports = true
+reorder_modules = true
+use_field_init_shorthand = true
+use_try_shorthand = true

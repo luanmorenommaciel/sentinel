@@ -274,9 +274,7 @@ fn validate_service_name(name: &str) -> Result<(), ContractError> {
     Ok(())
 }
 
-fn validate_required_resource_keys(
-    attrs: &HashMap<String, String>,
-) -> Result<(), ContractError> {
+fn validate_required_resource_keys(attrs: &HashMap<String, String>) -> Result<(), ContractError> {
     for key in REQUIRED_RESOURCE_KEYS {
         if !attrs.contains_key(*key) {
             return Err(ContractError::MissingResourceKey((*key).to_string()));
@@ -298,13 +296,16 @@ fn is_hex_16(s: &str) -> bool {
 }
 
 fn is_lowercase_hex(s: &str, expected_len: usize) -> bool {
-    s.len() == expected_len
-        && s.bytes()
-            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    s.len() == expected_len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 #[cfg(test)]
 mod tests {
+    // Tests are explicitly allowed to unwrap/expect — failing fast with a
+    // diagnostic is the whole point. Production code is governed by the
+    // `unwrap_used = deny` lint in Cargo.toml.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
 
     fn req_attrs() -> HashMap<String, String> {
@@ -400,7 +401,10 @@ mod tests {
             attributes: HashMap::new(),
             resource_attributes: req_attrs(),
         };
-        assert!(matches!(span.validate(), Err(ContractError::InvalidTraceId(_))));
+        assert!(matches!(
+            span.validate(),
+            Err(ContractError::InvalidTraceId(_))
+        ));
     }
 
     #[test]

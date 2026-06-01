@@ -1,0 +1,61 @@
+# Rust component task runner — invoked directly from services/collector-rust/
+# or via the root justfile (`just rust-ci`, `just rust-test`, etc.).
+# See ../../.claude/docs/RUST_PROJECT_STANDARDS.md for the full design.
+
+# Default: list available recipes
+default:
+    @just --list
+
+# One-time setup — install dev tooling on top of the rustup toolchain pin.
+# The toolchain itself comes from rust-toolchain.toml on first cargo invocation.
+setup:
+    rustup component add rustfmt clippy rust-analyzer
+    cargo install --locked cargo-nextest cargo-deny cargo-audit cargo-watch
+
+# ── Build ──
+build:
+    cargo build
+
+build-release:
+    cargo build --release
+
+# Run the binary (Day-1: parses the golden file and exits).
+run *args:
+    cargo run -- {{args}}
+
+# ── Test ──
+# Prefers nextest if installed (parallel, prettier); falls back to cargo test.
+test *args:
+    @if command -v cargo-nextest >/dev/null 2>&1; then cargo nextest run {{args}}; else cargo test {{args}}; fi
+
+# ── Format ──
+fmt:
+    cargo fmt --all
+
+fmt-check:
+    cargo fmt --all -- --check
+
+# ── Lint ──
+lint:
+    cargo clippy --all-targets --all-features -- -D warnings
+
+# ── Security / policy ──
+audit:
+    cargo audit
+
+deny:
+    cargo deny check
+
+# ── Docs ──
+doc:
+    cargo doc --no-deps --document-private-items
+
+# ── Full CI gate suite for this component ──
+ci: fmt-check lint test audit deny doc
+
+# ── Development helpers ──
+watch:
+    cargo watch -x check -x 'nextest run'
+
+clean:
+    cargo clean

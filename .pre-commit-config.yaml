@@ -1,0 +1,59 @@
+# Sentinel pre-commit hooks — multi-language, scoped per-component.
+# Hooks for each language fire only when files under that component's
+# subtree change. See .claude/docs/RUST_PROJECT_STANDARDS.md for the
+# polyglot scoping rule.
+#
+# Install:  pre-commit install
+# Run all:  pre-commit run --all-files
+
+repos:
+  # ── Cross-cutting hygiene ────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-merge-conflict
+
+  # ── Rust (scoped to services/collector-rust/) ───────────────────────────
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        files: ^services/collector-rust/
+        args:
+          - "--manifest-path"
+          - "services/collector-rust/Cargo.toml"
+          - "--all"
+          - "--"
+          - "--check"
+      - id: clippy
+        files: ^services/collector-rust/
+        args:
+          - "--manifest-path"
+          - "services/collector-rust/Cargo.toml"
+          - "--all-targets"
+          - "--all-features"
+          - "--"
+          - "-D"
+          - "warnings"
+
+  # ── Python (scoped to services/generator/) ─ uncomment when Pod 1 lands ─
+  # - repo: https://github.com/astral-sh/ruff-pre-commit
+  #   rev: v0.7.0
+  #   hooks:
+  #     - id: ruff
+  #       files: ^services/generator/
+  #     - id: ruff-format
+  #       files: ^services/generator/
+
+  # ── Markdown — repo-wide ─────────────────────────────────────────────────
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.42.0
+    hooks:
+      - id: markdownlint
+        exclude: ^(\.claude/kb/_templates/|target/|node_modules/)

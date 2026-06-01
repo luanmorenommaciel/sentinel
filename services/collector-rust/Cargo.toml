@@ -57,8 +57,35 @@ path = "src/main.rs"
 [dev-dependencies]
 tokio-test = "0.4"
 
+# Lint policy — `unsafe_code = forbid` and `unwrap_used = deny` are the
+# load-bearing rules per RUST_PROJECT_STANDARDS.md. Promote to
+# [workspace.lints] when a second Rust crate triggers the workspace
+# promotion.
+#
+# pedantic + nursery + missing_docs are *aspirational* — kept commented out
+# until a dedicated clippy cleanup PR addresses the ~50 existing warnings
+# on the Day-1 code. Enable in this order: missing_docs first (cheap),
+# then pedantic, then nursery.
+[lints.rust]
+unsafe_code = "forbid"
+# missing_docs = "warn"   # ← enable after Day-2 doc pass
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+# pedantic = { level = "warn", priority = -1 }   # ← enable after cleanup PR
+# nursery = { level = "warn", priority = -1 }    # ← enable after cleanup PR
+# missing_errors_doc = "warn"                    # ← enable with pedantic
+# must_use_candidate = "warn"                    # ← enable with pedantic
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = true
 panic = "abort"
+
+# Bench/perf builds — release optimizations + debug symbols for flamegraphs
+[profile.bench-release]
+inherits = "release"
+debug = true
+strip = false

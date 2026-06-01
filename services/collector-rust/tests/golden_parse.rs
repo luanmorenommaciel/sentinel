@@ -11,6 +11,10 @@
 //!   (b) Our `Signal` enum drifted from Pod 1's contract (fix `contract.rs`)
 //!   (c) Pod 1 bumped `contract_version` (open a contract-migration PR)
 
+// Tests are explicitly allowed to unwrap/expect — production code is governed
+// by `unwrap_used = deny` in Cargo.toml.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::PathBuf;
 
 /// Resolve the path to the golden file from the crate's manifest dir. Tests

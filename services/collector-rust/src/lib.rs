@@ -89,6 +89,10 @@ pub fn run(path: &Path) -> Result<Counts> {
 
 #[cfg(test)]
 mod tests {
+    // Tests are explicitly allowed to unwrap/expect — see contract.rs::tests
+    // for the rationale.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
 
     #[test]
