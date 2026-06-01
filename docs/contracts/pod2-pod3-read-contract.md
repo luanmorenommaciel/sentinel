@@ -203,10 +203,13 @@ This contract freezes to `v1.0.0` only after **all** of:
 
 1. ☐ **ADR-0005 accepted** — schema-as-contract (hand-rolled vs OTel-native).
 2. ☐ **ADR-0006 accepted** — optional-ID representation (`''` vs Nullable).
-3. ☐ **Day-4/5 round-trip verified** — golden file → ClickHouse yields the
-   expected `48 logs / 48 spans / 183 metrics` (proves the schema is real, not
-   just syntactically valid). Includes the **TTL-vs-fixture-age** handling (the
-   golden data is 2023-dated; see the schema note's Day-4 gotcha).
+3. ☑ **Day-4 round-trip verified** *(2026-06-01)* — golden file → ClickHouse
+   yields `48 logs / 48 spans / 183 metrics`, zero parse/validation errors; the
+   rolling-stats MV fires; hoisted columns populated with no key leakage into
+   `ResourceAttributes`; span `Duration` derived correctly. Proven live against
+   ClickHouse 25.4 via `tests/clickhouse_roundtrip.rs` (commit `973a1f0`),
+   including the TTL-vs-fixture-age handling (strip TTL on the 2023-dated
+   fixture). *(Day-5 follow-up: run this in CI with a service container.)*
 4. ☐ **Pod 3 review sign-off** — Pod 3 reviews this the way Pod 2 reviewed
    Pod 1's contract (`docs/research/contract-review-pod1-v1.0.0.md`), filing
    blockers if any.
