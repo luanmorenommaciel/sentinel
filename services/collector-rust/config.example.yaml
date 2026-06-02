@@ -21,6 +21,14 @@ clickhouse:
   url: http://localhost:8123
   database: default
 
+# OTLP gRPC server. Presence of this section switches the binary into SERVER
+# mode (serve until Ctrl-C) instead of FILE mode (read `input` once, then exit).
+# Day 8: the server accepts + logs OTLP requests; Day 9 wires them to ClickHouse.
+# Uncomment to run as a server:
+#
+# grpc:
+#   listen: "[::]:4317"   # OTLP convention: all interfaces, port 4317
+
 # Contract-version policy enforced at the receive boundary.
 contract:
   # Must equal the contract version this binary was built for, or it refuses to

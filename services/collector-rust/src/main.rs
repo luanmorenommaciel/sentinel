@@ -22,6 +22,7 @@
 //! parse/validation error aborts the run **before** export (all-or-nothing).
 
 use std::env;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -29,7 +30,7 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use sentinel_collector::clickhouse_exporter;
-use sentinel_collector::config::{Config, LogFormat, LoggingConfig};
+use sentinel_collector::config::{Config, GrpcConfig, LogFormat, LoggingConfig};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -49,7 +50,37 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    run(&config).await
+    // Server mode (gRPC section present) and file mode are mutually exclusive
+    // lifecycles: the server runs until Ctrl-C; file mode runs once and exits.
+    match &config.grpc {
+        Some(grpc) => serve_grpc(grpc).await,
+        None => run(&config).await,
+    }
+}
+
+/// Run the OTLP gRPC server until Ctrl-C.
+async fn serve_grpc(cfg: &GrpcConfig) -> ExitCode {
+    let addr: SocketAddr = match cfg.listen.parse() {
+        Ok(addr) => addr,
+        Err(err) => {
+            error!(listen = %cfg.listen, error = %err, "invalid grpc.listen address");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let shutdown = async {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            info!("shutdown signal received");
+        }
+    };
+
+    match sentinel_collector::grpc::serve(addr, shutdown).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            error!(error = %err, "gRPC server terminated with error");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Load config from an optional path argument, applying env overrides.

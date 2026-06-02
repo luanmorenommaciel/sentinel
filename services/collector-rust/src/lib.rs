@@ -28,6 +28,7 @@ use tracing::warn;
 pub mod clickhouse_exporter;
 pub mod config;
 pub mod contract;
+pub mod grpc;
 
 pub use contract::{ContractError, MetricType, Signal, StatusCode, CONTRACT_VERSION};
 

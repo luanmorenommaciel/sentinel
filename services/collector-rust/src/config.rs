@@ -45,10 +45,13 @@ const DEFAULT_INPUT_PATH: &str = "../../contract/golden/baseline_seed42.jsonl";
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// Where to read NDJSON signals from.
+    /// Where to read NDJSON signals from (file mode).
     pub input: InputConfig,
     /// ClickHouse target. `None` (section omitted) ⇒ count-only mode.
     pub clickhouse: Option<ClickHouseConfig>,
+    /// OTLP gRPC server. `Some` ⇒ server mode (serve `:4317`); `None` ⇒ file
+    /// mode (parse `input`, optionally export). Mutually exclusive lifecycles.
+    pub grpc: Option<GrpcConfig>,
     /// Contract-version policy enforced at the receive boundary.
     pub contract: ContractConfig,
     /// Structured-logging configuration.
@@ -86,6 +89,24 @@ pub struct ClickHouseConfig {
 
 fn default_database() -> String {
     "default".to_string()
+}
+
+/// OTLP gRPC server configuration. Presence of this section switches the binary
+/// into server mode.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GrpcConfig {
+    /// Listen address for the OTLP gRPC server. Defaults to the OTLP convention
+    /// `[::]:4317` (all interfaces, the standard OTLP gRPC port).
+    pub listen: String,
+}
+
+impl Default for GrpcConfig {
+    fn default() -> Self {
+        Self {
+            listen: "[::]:4317".to_string(),
+        }
+    }
 }
 
 /// Contract-version policy applied at the receive boundary.
@@ -293,6 +314,25 @@ logging:
         let yaml = "clickhouse:\n  url: http://ch:8123\n";
         let cfg: Config = serde_yaml::from_str(yaml).expect("parses");
         assert_eq!(cfg.clickhouse.expect("present").database, "default");
+    }
+
+    #[test]
+    fn grpc_absent_is_file_mode() {
+        assert!(Config::default().grpc.is_none());
+    }
+
+    #[test]
+    fn grpc_empty_section_defaults_to_otlp_port() {
+        // Presence of the section (even empty) → server mode on the default port.
+        let cfg: Config = serde_yaml::from_str("grpc: {}\n").expect("parses");
+        assert_eq!(cfg.grpc.expect("present").listen, "[::]:4317");
+    }
+
+    #[test]
+    fn grpc_explicit_listen_parses() {
+        let cfg: Config =
+            serde_yaml::from_str("grpc:\n  listen: 127.0.0.1:4317\n").expect("parses");
+        assert_eq!(cfg.grpc.expect("present").listen, "127.0.0.1:4317");
     }
 
     #[test]
