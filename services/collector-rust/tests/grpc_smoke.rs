@@ -35,7 +35,7 @@ async fn start_server() -> (
         let shutdown = async {
             let _ = rx.await;
         };
-        sentinel_collector::grpc::serve_with_listener(listener, shutdown)
+        sentinel_collector::grpc::serve_with_listener(listener, shutdown, None)
             .await
             .expect("server runs cleanly");
     });

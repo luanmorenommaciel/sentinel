@@ -29,6 +29,7 @@ pub mod clickhouse_exporter;
 pub mod config;
 pub mod contract;
 pub mod grpc;
+pub mod otlp;
 
 pub use contract::{ContractError, MetricType, Signal, StatusCode, CONTRACT_VERSION};
 

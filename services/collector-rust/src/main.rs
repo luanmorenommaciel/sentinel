@@ -30,7 +30,7 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use sentinel_collector::clickhouse_exporter;
-use sentinel_collector::config::{Config, GrpcConfig, LogFormat, LoggingConfig};
+use sentinel_collector::config::{Config, LogFormat, LoggingConfig};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -52,14 +52,27 @@ async fn main() -> ExitCode {
 
     // Server mode (gRPC section present) and file mode are mutually exclusive
     // lifecycles: the server runs until Ctrl-C; file mode runs once and exits.
-    match &config.grpc {
-        Some(grpc) => serve_grpc(grpc).await,
+    match config.grpc {
+        Some(_) => serve_grpc(&config).await,
         None => run(&config).await,
     }
 }
 
 /// Run the OTLP gRPC server until Ctrl-C.
-async fn serve_grpc(cfg: &GrpcConfig) -> ExitCode {
+///
+/// When `config.clickhouse` is present the server operates in **export mode**:
+/// each received OTLP request is transformed to [`sentinel_collector::Signal`]
+/// values and flushed to ClickHouse. When absent the server operates in
+/// **log-only mode**: signals are counted and logged but not persisted.
+async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
+    let cfg = match &config.grpc {
+        Some(g) => g,
+        None => {
+            error!("serve_grpc called without a grpc config section");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let addr: SocketAddr = match cfg.listen.parse() {
         Ok(addr) => addr,
         Err(err) => {
@@ -68,13 +81,23 @@ async fn serve_grpc(cfg: &GrpcConfig) -> ExitCode {
         }
     };
 
+    // Build the ClickHouse client when the clickhouse config section is present.
+    let client: Option<clickhouse::Client> = config.clickhouse.as_ref().map(|ch| {
+        info!(url = %ch.url, database = %ch.database, "export mode: ClickHouse target configured");
+        clickhouse_exporter::build_client_with_database(&ch.url, &ch.database)
+    });
+
+    if client.is_none() {
+        info!("log-only mode: no clickhouse section configured");
+    }
+
     let shutdown = async {
         if tokio::signal::ctrl_c().await.is_ok() {
             info!("shutdown signal received");
         }
     };
 
-    match sentinel_collector::grpc::serve(addr, shutdown).await {
+    match sentinel_collector::grpc::serve(addr, shutdown, client).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             error!(error = %err, "gRPC server terminated with error");
