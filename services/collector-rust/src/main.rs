@@ -97,7 +97,14 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
         }
     };
 
-    match sentinel_collector::grpc::serve(addr, shutdown, client).await {
+    info!(
+        validation = ?config.contract.grpc_validation,
+        "gRPC receive-boundary validation policy"
+    );
+
+    match sentinel_collector::grpc::serve(addr, shutdown, client, config.contract.grpc_validation)
+        .await
+    {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             error!(error = %err, "gRPC server terminated with error");

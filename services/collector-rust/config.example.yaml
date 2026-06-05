@@ -37,9 +37,19 @@ contract:
   # Must equal the contract version this binary was built for, or it refuses to
   # start (a 1.0.0 collector cannot validate a 2.0.0 pipeline).
   expected_version: "1.0.0"
+  # FILE MODE ONLY.
   # false → skip + count bad signals, export the good ones.
   # true  → any parse/validation error aborts the run BEFORE export (all-or-nothing).
   strict: false
+  # gRPC MODE ONLY — contract validation applied to each OTLP-derived signal
+  # before export:
+  #   off    → no validation (lowest overhead; no enforcement on the wire).
+  #   warn   → validate + log every violation, but export anyway (default).
+  #            Safe for mixed traffic: foreign OTLP lacking the five sentinel.*
+  #            resource keys is observed, not dropped.
+  #   strict → validate + DROP invalid signals per-signal; export only the
+  #            conformant ones. Use when the sender is guaranteed Sentinel-internal.
+  grpc_validation: warn
 
 # Structured logging.
 logging:

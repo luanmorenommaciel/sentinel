@@ -35,9 +35,14 @@ async fn start_server() -> (
         let shutdown = async {
             let _ = rx.await;
         };
-        sentinel_collector::grpc::serve_with_listener(listener, shutdown, None)
-            .await
-            .expect("server runs cleanly");
+        sentinel_collector::grpc::serve_with_listener(
+            listener,
+            shutdown,
+            None,
+            sentinel_collector::config::GrpcValidation::Off,
+        )
+        .await
+        .expect("server runs cleanly");
     });
     // The listener is already bound, but give the task a tick to enter serve().
     tokio::time::sleep(Duration::from_millis(50)).await;

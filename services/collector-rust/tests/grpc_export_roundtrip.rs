@@ -103,9 +103,17 @@ async fn start_export_server(
         let shutdown = async {
             let _ = rx.await;
         };
-        sentinel_collector::grpc::serve_with_listener(listener, shutdown, Some(ch_client))
-            .await
-            .expect("server runs cleanly");
+        sentinel_collector::grpc::serve_with_listener(
+            listener,
+            shutdown,
+            Some(ch_client),
+            // Transport test: pin to Off so row counts are deterministic and
+            // independent of the validation policy (the payload deliberately
+            // omits the sentinel.* resource keys).
+            sentinel_collector::config::GrpcValidation::Off,
+        )
+        .await
+        .expect("server runs cleanly");
     });
 
     // Give the spawned task a tick to enter serve().

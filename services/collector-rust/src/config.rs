@@ -117,11 +117,17 @@ pub struct ContractConfig {
     /// compiled-in [`CONTRACT_VERSION`] at startup (see
     /// [`Config::ensure_build_compatible`]).
     pub expected_version: String,
-    /// When `true`, any parse or validation error (including a mismatched
-    /// per-signal `contract_version`) aborts the run **before** anything is
-    /// exported — all-or-nothing. When `false`, bad signals are skipped and
-    /// counted, and the good ones still flow through.
+    /// **File mode only.** When `true`, any parse or validation error (including
+    /// a mismatched per-signal `contract_version`) aborts the run **before**
+    /// anything is exported — all-or-nothing. When `false`, bad signals are
+    /// skipped and counted, and the good ones still flow through.
     pub strict: bool,
+    /// **gRPC mode only.** Contract-validation policy applied to each signal
+    /// transformed from an OTLP request, *before* it is exported. See
+    /// [`GrpcValidation`]. Defaults to [`GrpcValidation::Warn`] — validate every
+    /// signal and log violations, but still export, so legitimate foreign OTLP
+    /// (which lacks the five `sentinel.*` resource keys) is never dropped.
+    pub grpc_validation: GrpcValidation,
 }
 
 impl Default for ContractConfig {
@@ -129,8 +135,37 @@ impl Default for ContractConfig {
         Self {
             expected_version: CONTRACT_VERSION.to_string(),
             strict: false,
+            grpc_validation: GrpcValidation::default(),
         }
     }
+}
+
+/// Receive-boundary validation policy for the OTLP **gRPC** path.
+///
+/// Unlike the file path — where every record is Sentinel-originated and must
+/// carry the full contract — the gRPC server may receive OTLP from arbitrary
+/// senders that legitimately lack the five `sentinel.*` resource keys. This
+/// enum chooses how strictly [`crate::contract::Signal::validate`] is enforced
+/// on that path:
+///
+/// - [`Off`](GrpcValidation::Off): skip validation entirely (the pre-policy
+///   behaviour). Lowest overhead; no contract enforcement on the wire.
+/// - [`Warn`](GrpcValidation::Warn) *(default)*: validate every signal, log a
+///   warning for each violation, but **export anyway**. Observability without
+///   rejecting foreign traffic.
+/// - [`Strict`](GrpcValidation::Strict): validate every signal and **drop**
+///   the invalid ones (per-signal, not all-or-nothing), exporting only the
+///   conformant remainder. Use when the sender is guaranteed Sentinel-internal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GrpcValidation {
+    /// Skip validation on the gRPC path.
+    Off,
+    /// Validate and log violations, but export every signal regardless.
+    #[default]
+    Warn,
+    /// Validate and drop invalid signals; export only the conformant ones.
+    Strict,
 }
 
 /// Structured-logging configuration.
@@ -357,6 +392,35 @@ logging:
         cfg.contract.expected_version = "2.0.0".to_string();
         let err = cfg.ensure_build_compatible().unwrap_err();
         assert!(matches!(err, ConfigError::ContractVersionMismatch { .. }));
+    }
+
+    #[test]
+    fn grpc_validation_defaults_to_warn() {
+        assert_eq!(
+            Config::default().contract.grpc_validation,
+            GrpcValidation::Warn
+        );
+    }
+
+    #[test]
+    fn grpc_validation_parses_each_variant() {
+        for (yaml_val, expected) in [
+            ("off", GrpcValidation::Off),
+            ("warn", GrpcValidation::Warn),
+            ("strict", GrpcValidation::Strict),
+        ] {
+            let yaml = format!("contract:\n  grpc_validation: {yaml_val}\n");
+            let cfg: Config = serde_yaml::from_str(&yaml).expect("parses");
+            assert_eq!(cfg.contract.grpc_validation, expected, "value {yaml_val}");
+        }
+    }
+
+    #[test]
+    fn grpc_validation_absent_falls_back_to_default() {
+        // A contract section that sets only `strict` still gets the Warn default.
+        let cfg: Config = serde_yaml::from_str("contract:\n  strict: true\n").expect("parses");
+        assert!(cfg.contract.strict);
+        assert_eq!(cfg.contract.grpc_validation, GrpcValidation::Warn);
     }
 
     #[test]
