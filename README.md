@@ -12,43 +12,48 @@ Sentinel is an open-source observability + remediation system for data pipelines
 Telemetry flows left-to-right through four Pods. Each arrow is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
 
 ```mermaid
-flowchart LR
-    subgraph POD1["POD 1 · B1 — Source + Arrival/Parse"]
+flowchart TB
+    subgraph POD1["POD 1 · B1 — Source + Arrival / Parse"]
+        direction LR
         GEN["Generator<br/>(Python)"]
         W12["Watchers W01–W02<br/>Arrival · Parse"]
     end
 
-    subgraph POD2["POD 2 · B2 — OTel Collector  (≥3 implementations)"]
-        direction TB
-        CRUST["collector-rust ✅<br/>(reference impl)"]
-        CGO["collector-go ⏳<br/>(bake-off)"]
-        C3["collector-&lt;lang&gt; ⏳<br/>(future)"]
+    subgraph POD2["POD 2 · B2 — OTel Collector  (≥3 interchangeable impls)"]
+        direction LR
+        CRUST["collector-rust ✅<br/>reference impl"]
+        CGO["collector-go ⏳<br/>bake-off"]
+        C3["collector-&lt;lang&gt; ⏳<br/>future"]
     end
 
     subgraph STORE["ClickStack · ClickHouse"]
-        RAW[("otel_logs<br/>otel_traces<br/>otel_metrics")]
+        direction LR
+        RAW[("otel_logs · otel_traces<br/>otel_metrics")]
         MV[("otel_metrics_1m<br/>rolling-stats MV")]
+        RAW --> MV
     end
 
     subgraph POD3["POD 3 · B3 — Watchers / Detection"]
+        direction LR
         W36["Watchers W03–W06<br/>Volume · Schema · Latency · Storage"]
         CASCADE["3-tier cascade<br/>z-score → pattern → LLM"]
     end
 
     subgraph POD4["POD 4 · B4 — Action Dispatcher"]
-        ACT["Remediate (self-heal)<br/>or Page"]
+        ACT["Remediate (self-heal) · or · Page"]
     end
 
-    GEN -->|"① INPUT contract<br/>otlp_output.schema.json v1.0.0<br/>(OTLP gRPC :4317 or NDJSON)"| POD2
-    POD2 -->|"② OUTPUT contract<br/>pod2→pod3 read schema v0.1.0-draft<br/>(ClickHouse rows)"| RAW
-    RAW --> MV
-    RAW --> CASCADE
-    MV --> CASCADE
-    CASCADE --> W36
-    W36 -->|"③ detections"| POD4
+    POD1 == "①  otlp_output.schema.json v1.0.0" ==> POD2
+    POD2 == "②  pod2→pod3 read v0.1.0-draft" ==> STORE
+    STORE ==> POD3
+    POD3 == "③  detections" ==> POD4
 
+    classDef pod fill:#fffbea,stroke:#d4a72c,color:#3a2f00;
+    classDef store fill:#eef6ff,stroke:#4a86c5,color:#0d2a45;
     classDef done fill:#1b4332,stroke:#2d6a4f,color:#fff;
     classDef wip fill:#3a3000,stroke:#7a6500,color:#fff;
+    class POD1,POD2,POD3,POD4 pod;
+    class STORE store;
     class CRUST done;
     class CGO,C3 wip;
 ```
