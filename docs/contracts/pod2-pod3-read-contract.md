@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed — DRAFT, not frozen** |
-| Version | `0.1.0-draft` |
-| Date | 2026-06-01 |
+| Status | **Proposed — authoritative for integration (release candidate)** |
+| Version | `1.0.0-rc.1` |
+| Date | 2026-06-05 (promoted from `0.1.0-draft`, published 2026-06-01) |
 | Producer | Pod 2 (OTel Collector) |
 | Consumer | Pod 3 (Volume · Schema · Latency · Storage Watchers) |
 | Transport | ClickHouse — HTTP `:8123` / native `:9000`, database `default` |
@@ -12,12 +12,17 @@
 | Decisions | [ADR-0005](../adr/0005-clickhouse-storage-schema.md) (schema) · [ADR-0006](../adr/0006-optional-id-representation.md) (optional IDs) |
 | Rationale | [`docs/research/clickhouse-schema-pod2.md`](../research/clickhouse-schema-pod2.md) |
 
-> **This contract is a DRAFT for Pod 3 to review — it is NOT frozen.** It is the
-> mirror, in the other direction, of Pod 1's `otlp_output.schema.json` v1.0.0
-> that Pod 2 consumes. Pod 2 publishes it now (before the exporter is written)
-> so Pod 3 can design Watchers in parallel and push back early. See
-> [Freeze gates](#freeze-gates-what-blocks-v100) for what must close before this
-> becomes `v1.0.0`.
+> **This contract is an authoritative release candidate (`1.0.0-rc.1`) — build
+> against it now.** It is the mirror, in the other direction, of Pod 1's
+> `otlp_output.schema.json` v1.0.0 that Pod 2 consumes. The exporter that
+> produces these tables is implemented and round-trip verified (see
+> [Freeze gates](#freeze-gates-what-blocks-v100)). Pod 3 should design and build
+> Watchers against this RC today: the table/column shape and the semantic
+> guarantees in §5 are stable. Any breaking change before the final `1.0.0` will
+> come via an RC bump (`-rc.2`, …) with notice — not silently. The two remaining
+> [freeze gates](#freeze-gates-what-blocks-v100) (ADR-0005/0006 acceptance and
+> Pod 3 sign-off) promote this RC to a frozen `1.0.0`; they do **not** block
+> Pod 3 from building.
 
 ---
 
@@ -193,9 +198,12 @@ real ID.
 
 ## 7. Versioning
 
-Semver, independent of Pod 1's contract version. This is `0.1.0-draft`.
-A `ContractVersion` column on every row carries **Pod 1's** version (not this
-contract's) — they version independently.
+Semver, independent of Pod 1's contract version. This is `1.0.0-rc.1`: an
+authoritative release candidate — stable enough to build against, with any
+breaking change gated behind an RC bump (`-rc.2`, …) until the
+[freeze gates](#freeze-gates-what-blocks-v100) close and it becomes a frozen
+`1.0.0`. A `ContractVersion` column on every row carries **Pod 1's** version
+(not this contract's) — they version independently.
 
 ## Freeze gates (what blocks `v1.0.0`)
 
