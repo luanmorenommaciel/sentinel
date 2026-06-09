@@ -1,6 +1,6 @@
 # Sentinel — Claude Code Project Context
 
-> Last updated: 2026-06-01
+> Last updated: 2026-06-09
 
 ## Mission
 
@@ -27,6 +27,16 @@ otel_core → rolling_stats → tiered_engine → cross_watcher → policy_engin
 
 **6 Watcher Crews:** Arrival · Parse · Volume · Schema · Latency · Storage.
 **3-tier detection cascade:** Statistical (z-scores) → Pattern (signature) → LLM (Haiku→Sonnet→Opus). *Cheapest tier wins. Opus only when Sonnet confidence is low AND blast radius is high.*
+
+## Current state (Pod 2 — `collector-rust`)
+
+> Source of truth: [README §8](../README.md) + the contract docs below. This block is the quick orientation; don't let it drift.
+
+- **Collector-rust is functional end-to-end** (verified live 2026-06-09): both ingest paths land in ClickHouse — file/NDJSON (golden `baseline_seed42.jsonl` → 48 logs / 48 spans / 183 metrics) and OTLP gRPC `:4317`.
+- **gRPC receive-boundary validation** is policy-gated via `contract.grpc_validation` (`off` / `warn` / `strict`, **default `warn`**). File mode still uses `contract.strict` (all-or-nothing). Foreign OTLP legitimately lacks the 5 `sentinel.*` keys → `strict` would drop it, hence `warn` default. Code: `src/grpc.rs` (`apply_validation`), `src/config.rs`.
+- **Pod 1 → Pod 2 input contract:** `v1.0.0` **frozen**; local `contract/schema/otlp_output.schema.json` verified byte-identical to upstream `001-otel-data-generator`.
+- **Pod 2 → Pod 3 read contract:** **`v1.0.0-rc.1`** — *authoritative release candidate* (build against it), not frozen. Freeze gates open: ADR-0005 + ADR-0006 acceptance, Pod 3 sign-off (Pod 3/B3 still unstaffed). Day-4 round-trip gate ✅. Doc: [`docs/contracts/pod2-pod3-read-contract.md`](../docs/contracts/pod2-pod3-read-contract.md).
+- **ADR-0004/0005/0006 all still `Proposed`.** ADR-0004 (language bake-off) does **not** block the read-contract freeze.
 
 ## Crew B layout (you are here)
 
