@@ -44,7 +44,7 @@ flowchart TB
     end
 
     POD1 == "①  otlp_output.schema.json v1.0.0" ==> POD2
-    POD2 == "②  pod2→pod3 read v0.1.0-draft" ==> STORE
+    POD2 == "②  pod2→pod3 read v1.0.0-rc.1" ==> STORE
     STORE ==> POD3
     POD3 == "③  detections" ==> POD4
 
@@ -110,11 +110,11 @@ Contracts are **language-agnostic, shared assets** — never duplicated inside a
 | Boundary | Artifact | Version | Status |
 |---|---|---|---|
 | **Pod 1 → Pod 2** (input) | [`contract/schema/otlp_output.schema.json`](contract/schema/otlp_output.schema.json) + [`contract/golden/`](contract/golden/) | **v1.0.0** | ✅ Frozen (vendored from Pod 1) |
-| **Pod 2 → Pod 3** (output) | [`docs/contracts/pod2-pod3-read-contract.md`](docs/contracts/pod2-pod3-read-contract.md) | **v0.1.0-draft** | ⏳ Proposed (Pod 3 review pending) |
+| **Pod 2 → Pod 3** (output) | [`docs/contracts/pod2-pod3-read-contract.md`](docs/contracts/pod2-pod3-read-contract.md) | **v1.0.0-rc.1** | 🔶 Authoritative RC — build against it now (Pod 3 sign-off pending) |
 
 **Input** — three signal types (`log` / `span` / `metric`) discriminated on `signal_type`, 5 guaranteed resource keys, contract-versioned. A golden fixture (`baseline_seed42.jsonl`, 48 logs + 48 spans + 183 metrics) is the conformance oracle.
 
-**Output** — four ClickHouse objects with per-column guarantees, the `''`-sentinel rule for optional IDs, and a mandatory re-aggregation read pattern for the rolling-stats MV. Freeze gates: [ADR-0005](docs/adr/0005-clickhouse-storage-schema.md) + [ADR-0006](docs/adr/0006-optional-id-representation.md) accepted, round-trip verified ✅, Pod 3 sign-off ⏳.
+**Output** — four ClickHouse objects with per-column guarantees, the `''`-sentinel rule for optional IDs, and a mandatory re-aggregation read pattern for the rolling-stats MV. Published as **v1.0.0-rc.1** — an *authoritative release candidate* Pod 3 should build against now; breaking changes only via an RC bump (`-rc.2`, …) with notice. Freeze gates to a frozen **v1.0.0**: [ADR-0005](docs/adr/0005-clickhouse-storage-schema.md) + [ADR-0006](docs/adr/0006-optional-id-representation.md) accepted, round-trip verified ✅, Pod 3 sign-off ⏳.
 
 **Decisions of record** — [`docs/adr/`](docs/adr/): 0004 (language), 0005 (CH schema), 0006 (optional-ID representation).
 
@@ -211,9 +211,10 @@ The N collector implementations cannot share *code* (different languages), but t
 | Distroless Docker image (10.7 MB) + full-stack compose | ✅ |
 | OTLP gRPC server on `:4317` (Trace/Logs/Metrics) | ✅ |
 | OTLP gRPC → ClickHouse (real payloads land) | ✅ verified live |
+| gRPC receive-boundary contract validation (`off`/`warn`/`strict`) | ✅ |
 | CI: fmt · clippy · tests · cargo-deny · docker-build | ✅ (7-gate WoW map) |
 
-**Remaining:** Day-10 polish + open the PR; freeze the Pod 2 → Pod 3 contract (gated on ADR-0005/0006 + Pod 3 review); siblings (Go, 3rd impl).
+**Remaining:** Day-10 polish + open the PR; promote the Pod 2 → Pod 3 contract from **v1.0.0-rc.1** to frozen **v1.0.0** (gated on ADR-0005/0006 + Pod 3 review); siblings (Go, 3rd impl).
 
 ---
 
@@ -222,10 +223,10 @@ The N collector implementations cannot share *code* (different languages), but t
 | # | Item | Type | Where |
 |---|---|---|---|
 | 1 | Collector language bake-off not formally accepted (Rust is working lead) | Open decision | [ADR-0004](docs/adr/0004-collector-implementation-language.md) |
-| 2 | Pod 2 → Pod 3 read contract not frozen (needs ADR-0005/0006 + Pod 3 sign-off) | Pending | [contract](docs/contracts/pod2-pod3-read-contract.md) |
+| 2 | Pod 2 → Pod 3 read contract at **v1.0.0-rc.1** (authoritative RC; not yet frozen — needs ADR-0005/0006 + Pod 3 sign-off) | Pending | [contract](docs/contracts/pod2-pod3-read-contract.md) |
 | 3 | Hand-rolled CH schema vs OTel-native ClickStack schema | Open decision | [ADR-0005](docs/adr/0005-clickhouse-storage-schema.md) |
 | 4 | Optional IDs as `''`-sentinel vs `Nullable` | Open decision | [ADR-0006](docs/adr/0006-optional-id-representation.md) |
-| 5 | gRPC path skips `validate()` + synthesizes `contract_version` (OTLP lacks `sentinel.*` keys) | Assumption | `services/collector-rust/src/otlp.rs` |
+| 5 | gRPC receive-boundary validation is policy-gated (`contract.grpc_validation`: `off`/`warn`/`strict`, default `warn`); `contract_version` synthesized since OTLP lacks it (and foreign OTLP lacks `sentinel.*` keys) | Assumption | `src/grpc.rs` · `src/otlp.rs` |
 | 6 | Histogram / Summary metrics dropped (no v1.0.0 type) | Known gap | `src/otlp.rs` |
 | 7 | No batching/backpressure yet — gRPC inserts per request | Risk (scale) | future |
 | 8 | TTL vs golden fixture age (2023-dated rows purge on merge) | Gotcha | [schema note](docs/research/clickhouse-schema-pod2.md) |
