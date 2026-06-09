@@ -37,6 +37,7 @@ otel_core → rolling_stats → tiered_engine → cross_watcher → policy_engin
 - **Pod 1 → Pod 2 input contract:** `v1.0.0` **frozen**; local `contract/schema/otlp_output.schema.json` verified byte-identical to upstream `001-otel-data-generator`.
 - **Pod 2 → Pod 3 read contract:** **`v1.0.0-rc.1`** — *authoritative release candidate* (build against it), not frozen. Freeze gates open: ADR-0005 + ADR-0006 acceptance, Pod 3 sign-off (Pod 3/B3 still unstaffed). Day-4 round-trip gate ✅. Doc: [`docs/contracts/pod2-pod3-read-contract.md`](../docs/contracts/pod2-pod3-read-contract.md).
 - **ADR-0004/0005/0006 all still `Proposed`.** ADR-0004 (language bake-off) does **not** block the read-contract freeze.
+- **README Phase-1 realignment in flight (uncommitted, 2026-06-09).** README §1/§2 were realigned to the original proposal (`victor_docs/Sentinel-Spec-diagram.png`): **Phase 1 = telemetry foundation** (POD1 generate → POD2 ingest/transform → POD3 storage / data-modelling / consumption); **Watchers · Detection · CrewAI · Remediation = future phase**. The diagram now draws **Contract ② *after* ClickHouse** (it *is* the CH schema, per ADR-0005). ⚠️ **Not yet ratified — do not propagate here:** the **Crew B layout below still lists B3 = Volume/Schema/Latency/Storage watchers**, which diverges from the README's POD3=storage/read-layer framing. Realign this file only after Captain/Commander sign off on the Pod↔layer mapping. ClickHouse operational ownership stays unassigned.
 
 ## Crew B layout (you are here)
 
@@ -65,20 +66,20 @@ sentinel/
 ├── infra/                         # ClickHouse, Docker compose, deployment configs
 ├── .claude/
 │   ├── CLAUDE.md                  # This file
-│   ├── agents/                    # Specialized subagents (15) + _schema.json + _template.md.example
-│   ├── skills/                    # Slash commands (9) + _template.md.example
-│   ├── kb/                        # Knowledge bases (10 seed KBs) + _templates/ + _index.yaml
+│   ├── agents/                    # Specialized subagents (16) + _schema.json + _template.md.example
+│   ├── skills/                    # Slash commands (10) + _template.md.example
+│   ├── kb/                        # Knowledge bases (11 seed KBs) + _templates/ + _index.yaml
 │   ├── docs/                      # Internal standards (5 — OCR, ingestion, roadmap, glossary, Rust standards)
 │   └── rules/                     # Path-scoped instruction files (1 — kb-enrichment)
 └── README.md
 ```
 
-## Agents (15 specialized)
+## Agents (16 specialized)
 
 | Category | Agents |
 |---|---|
 | Code Quality | code-reviewer · code-documenter · test-generator · shell-script-specialist |
-| Communication | adaptive-explainer · meeting-analyst |
+| Communication | adaptive-explainer · meeting-analyst · architecture-visualization-reviewer |
 | Workflow | the-planner |
 | Telemetry | otel-collector-specialist |
 | Storage | clickhouse-engineer |
@@ -89,10 +90,11 @@ sentinel/
 
 Each agent has its own `.md` under `.claude/agents/<category>/<name>.md`. All agents have a `Use PROACTIVELY when …` trigger line so auto-invocation fires consistently. The frontmatter schema is documented in [`.claude/agents/_schema.json`](agents/_schema.json) (recommended-not-required at bootstrap).
 
-## Skills (9 slash commands)
+## Skills (10 slash commands)
 
 | Skill | Purpose |
 |---|---|
+| `/arch-review` | Audit how a repo communicates its architecture (READMEs, ADRs, diagrams, contracts) against the 7 architecture-communication principles |
 | `/create-agent` | Author a new specialized subagent from the standard template |
 | `/create-kb` | Create a new knowledge-base section |
 | `/create-skill` | Create a new slash command from the standard skill template |
@@ -111,10 +113,11 @@ Skill frontmatter follows [`.claude/skills/_template.md.example`](skills/_templa
 |---|---|---|
 | [`kb-enrichment.md`](rules/kb-enrichment.md) | all | Policy: knowledge discovered during sessions must flow back into `.claude/kb/` via `/enrich-kb` or `/create-kb`. Defines the decision tree for KB vs. CLAUDE.md placement and the dating + confidence convention. |
 
-## Knowledge Base (10 seed KBs)
+## Knowledge Base (11 seed KBs)
 
 | Category | KB | What it covers |
 |---|---|---|
+| Communication | `kb/communication/architecture-diagramming/` | Architecture communication — visual hierarchy, contracts-as-nodes, ownership seams, storytelling, diagram-review framework, 7 anti-patterns |
 | Telemetry | `kb/telemetry/opentelemetry/` | OTel core concepts, OTLP `:4317`, three signal types |
 | Telemetry | `kb/telemetry/otel-collector/` | Collector architecture (receiver/processor/exporter), what we're building |
 | Storage | `kb/storage/clickhouse/` | Schema, native vs HTTP, ClickStack, OTel schema in CH |
@@ -151,6 +154,7 @@ KB routing:
 | Anomaly detection (z-scores, rolling windows) | `kb/detection/anomaly-detection/` |
 | Crew B WoW, ADRs, PR flow | `kb/process/crew-b-wow/` |
 | Agentic patterns (CrewAI, multi-agent design) | `kb/patterns/agentic-architecture/` |
+| Architecture communication, diagram review, contract/ownership visualization | `kb/communication/architecture-diagramming/` |
 
 ## Working agreement (WoW)
 
@@ -192,6 +196,7 @@ Full WoW: `kb/process/crew-b-wow/index.md`.
 | Analyze meeting transcripts | meeting-analyst agent |
 | Author / fix shell scripts | shell-script-specialist agent |
 | Map an unfamiliar codebase area | codebase-explorer agent |
+| Review how a diagram / README / ADR communicates architecture | architecture-visualization-reviewer agent · `/arch-review` |
 | Real GCP OTLP / Cloud Monitoring / Workload Identity | gcp-engineer agent |
 | Python (Pod 1's generator, contracts, pytest) | python-developer agent |
 | Design a new KB | kb-architect agent · `/create-kb` |

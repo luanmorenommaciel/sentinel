@@ -9,54 +9,76 @@ Sentinel is an open-source observability + remediation system for data pipelines
 
 ## 1. System architecture
 
-Telemetry flows left-to-right through four Pods. Each arrow is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
+Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling, analytical/read models, and infrastructure + consumption requirements. **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top of this path. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one. Implementations (e.g. POD 2's collectors) are interchangeable behind their contract.
 
 ```mermaid
 flowchart TB
-    subgraph POD1["POD 1 · B1 — Source + Arrival / Parse"]
+    subgraph PHASE1["PHASE 1 · the telemetry data path"]
+        direction TB
+        subgraph POD1["POD 1 · B1 — Generator + OTLP contract"]
+            GEN["Generator (Python)<br/>emits telemetry · defines the OTLP contract"]
+        end
+
+        C1{{"◆ CONTRACT ① ◆<br/>Pod 1 → Pod 2 · input<br/>otlp_output.schema.json<br/>v1.0.0 ✅ frozen<br/>3 signals · 5 sentinel.* keys"}}
+
+        subgraph POD2["POD 2 · B2 — OTel Collector · ≥3 interchangeable impls"]
+            direction LR
+            CRUST["collector-rust ✅<br/>reference impl"]
+            CGO["collector-go ⏳<br/>bake-off"]
+            C3["collector-&lt;lang&gt; ⏳<br/>future"]
+        end
+
+        subgraph STORE["ClickStack · ClickHouse"]
+            direction LR
+            RAW[("otel_logs · otel_traces<br/>otel_metrics")]
+            MV[("otel_metrics_1m<br/>rolling-stats MV")]
+            RAW --> MV
+        end
+
+        C2{{"◆ CONTRACT ② ◆<br/>Pod 2 → Pod 3 · read interface<br/>= the ClickHouse schema (infra/clickhouse/ddl)<br/>v1.0.0-rc.1 🔶 build-against<br/>''=absent · Duration ns"}}
+
+        subgraph POD3["POD 3 · B3 — Data modelling & read layer"]
+            direction LR
+            DM["Analytical / read models"]
+            REQ["Infra + consumption requirements"]
+        end
+
+        POD1 ==> C1 ==> POD2 ==> STORE ==> C2 ==> POD3
+    end
+
+    subgraph FUTURE["🔮 FUTURE PHASE · builds on the Phase 1 data path"]
         direction LR
-        GEN["Generator<br/>(Python)"]
-        W12["Watchers W01–W02<br/>Arrival · Parse"]
+        subgraph CREW["Watcher Crew · on CrewAI"]
+            direction LR
+            WATCH["Watchers W01–W06<br/>Arrival · Parse · Volume · Schema · Latency · Storage"]
+            XCORR["Cross-watcher correlator"]
+            WATCH --> XCORR
+        end
+        DETECT["Detection<br/>3-tier cascade · z-score → pattern → LLM"]
+        REMED["Remediation<br/>self-heal · or · page<br/>(Action Dispatcher · B4)"]
+        CREW --> DETECT --> REMED
     end
 
-    subgraph POD2["POD 2 · B2 — OTel Collector  (≥3 interchangeable impls)"]
-        direction LR
-        CRUST["collector-rust ✅<br/>reference impl"]
-        CGO["collector-go ⏳<br/>bake-off"]
-        C3["collector-&lt;lang&gt; ⏳<br/>future"]
-    end
+    POD3 -.->|"feeds future detection"| FUTURE
 
-    subgraph STORE["ClickStack · ClickHouse"]
-        direction LR
-        RAW[("otel_logs · otel_traces<br/>otel_metrics")]
-        MV[("otel_metrics_1m<br/>rolling-stats MV")]
-        RAW --> MV
-    end
-
-    subgraph POD3["POD 3 · B3 — Watchers / Detection"]
-        direction LR
-        W36["Watchers W03–W06<br/>Volume · Schema · Latency · Storage"]
-        CASCADE["3-tier cascade<br/>z-score → pattern → LLM"]
-    end
-
-    subgraph POD4["POD 4 · B4 — Action Dispatcher"]
-        ACT["Remediate (self-heal) · or · Page"]
-    end
-
-    POD1 == "①  otlp_output.schema.json v1.0.0" ==> POD2
-    POD2 == "②  pod2→pod3 read v1.0.0-rc.1" ==> STORE
-    STORE ==> POD3
-    POD3 == "③  detections" ==> POD4
-
-    classDef pod fill:#fffbea,stroke:#d4a72c,color:#3a2f00;
+    classDef contract fill:#fde68a,stroke:#b45309,stroke-width:4px,color:#3a2f00;
+    classDef zone fill:#f1f5f9,stroke:#94a3b8,color:#0f172a;
     classDef store fill:#eef6ff,stroke:#4a86c5,color:#0d2a45;
-    classDef done fill:#1b4332,stroke:#2d6a4f,color:#fff;
-    classDef wip fill:#3a3000,stroke:#7a6500,color:#fff;
-    class POD1,POD2,POD3,POD4 pod;
+    classDef impl fill:#ffffff,stroke:#cbd5e1,color:#334155;
+    classDef refimpl fill:#ffffff,stroke:#475569,stroke-width:2px,color:#1e293b;
+    classDef future fill:#f5f3ff,stroke:#7c3aed,stroke-width:2px,stroke-dasharray:6 4,color:#3b1d6e;
+    class C1,C2 contract;
+    class POD1,POD2,POD3 zone;
     class STORE store;
-    class CRUST done;
-    class CGO,C3 wip;
+    class CGO,C3 impl;
+    class CRUST refimpl;
+    class FUTURE,CREW,WATCH,XCORR,DETECT,REMED future;
+    linkStyle 0 stroke:#94a3b8,stroke-width:1px;
+    linkStyle 1,2,3,4,5 stroke:#b45309,stroke-width:3px;
+    linkStyle 6,7,8,9 stroke:#7c3aed,stroke-width:2px,stroke-dasharray:6 4;
 ```
+
+**Diagram key** — gold gate = contract boundary (versioned; the durable asset) · grey box = Pod / ownership zone (one owner each) · white box = interchangeable implementation · **purple dashed cluster = future phase** (builds on the Phase 1 data path) · status glyphs: ✅ frozen · 🔶 release candidate · ⏳ pending. The hierarchy is shape- and border-redundant, so it survives grayscale.
 
 **Reading the diagram — what Pod 2 (us) receives, processes, and delivers:**
 
@@ -72,14 +94,16 @@ The **8-stage vendor-agnostic spine** (`otel_core → rolling_stats → tiered_e
 
 ## 2. The Pods
 
-| Pod | Crew | Owns | Status |
-|---|---|---|---|
-| **Pod 1** | B1 | Telemetry **Generator** + Arrival/Parse watchers (W01–W02) | Input contract **v1.0.0 frozen** |
-| **Pod 2** | B2 | **OTel Collector** — the ingestion gateway (this README's focus) | Rust impl **functional**; Go + 3rd pending |
-| **Pod 3** | B3 | Volume/Schema/Latency/Storage watchers (W03–W06) + 3-tier detection | Reads the Pod 2 output contract |
-| **Pod 4** | B4 | Action Dispatcher — remediation + paging | Downstream of detection |
+**Phase 1** builds the telemetry **data path** (Pods 1 → 2 → 3). **Watchers, detection, CrewAI reasoning, and remediation are a future phase** layered on top of it.
 
-**3-tier detection cascade** (Pod 3): Statistical (z-score) → Pattern (signature) → LLM (Haiku → Sonnet → Opus). *Cheapest tier wins; Opus only when Sonnet confidence is low AND blast radius is high.*
+| Pod | Crew | Phase 1 role | Status |
+|---|---|---|---|
+| **Pod 1** | B1 | Telemetry **Generator** + defines the **OTLP input contract** | Input contract **v1.0.0 frozen** |
+| **Pod 2** | B2 | **OTel Collector** — ingest · validate · transform · export (this README's focus) | Rust impl **functional**; Go + 3rd pending |
+| **Pod 3** | B3 | Consumes the Pod 2 output contract — **data modelling, analytical/read models, infrastructure + consumption requirements** | Building on the Pod 2 read contract |
+| **Pod 4** | B4 | *(Future phase)* Action Dispatcher — remediation + paging | Future phase |
+
+**Future phase — detection & remediation.** Watchers (W01–W06: Arrival · Parse · Volume · Schema · Latency · Storage) feed a **3-tier detection cascade** — Statistical (z-score) → Pattern (signature) → LLM (Haiku → Sonnet → Opus), orchestrated with **CrewAI** — whose detections drive remediation. *Cheapest tier wins; Opus only when Sonnet confidence is low AND blast radius is high.*
 
 ---
 

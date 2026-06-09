@@ -234,9 +234,38 @@ domains:
     related_adrs: []
     external_source: ../../victor_docs/book-agentic-architectural-patterns-multi-agent-systems.pdf
 
+  architecture-diagramming:
+    name: Architecture Diagramming & Communication
+    description: How to communicate architecture so contracts, boundaries, and ownership outrank implementations — visual hierarchy, contract-first nodes, ownership seams, storytelling, the tells-vs-should-tell audit, and the seven visualization anti-patterns
+    path: communication/architecture-diagramming/
+    mcp_validated: "2026-06-09"
+    confidence: 0.90
+    sentinel_touch_points:
+      - README §1 architecture diagram (Pod 2 review origin case)
+      - ADR diagrams (0004 / 0005 / 0006)
+      - Pod 1→2 and Pod 2→3 contract docs
+      - Any project-review or architecture-review deck
+    entry_points:
+      index: index.md
+      quick_reference: quick-reference.md
+    concepts:
+      - diagram-type-rubrics
+      - boundary-types
+      - visual-hierarchy
+      - contract-first-visualization
+    patterns:
+      - contract-gate-diagram
+    related_agents:
+      - architecture-visualization-reviewer
+      - adaptive-explainer
+    related_adrs:
+      - ADR-0004
+      - ADR-0005
+      - ADR-0006
+
 # Stats (auto-derived; update on KB add/remove)
 stats:
-  domain_count: 10
-  agent_count: 15
-  total_files: 68     # bootstrap + agents/_schema + agents/_template + 3 new agents; concepts/patterns to grow
+  domain_count: 11
+  agent_count: 16
+  total_files: 76     # arch-diagramming v1: + diagram-type-rubrics + boundary-types concepts
   templates_count: 5

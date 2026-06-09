@@ -41,6 +41,11 @@
 |---|---|
 | [`process/crew-b-wow/`](process/crew-b-wow/index.md) | Crew B Way of Working — roles, sprints, ADRs, 8-step PR flow, 7 CI gates, attribution contract |
 
+### Communication
+| KB | What it covers |
+|---|---|
+| [`communication/architecture-diagramming/`](communication/architecture-diagramming/index.md) | Architecture *communication* — visual hierarchy, contracts-as-first-class-nodes, ownership seams, technical storytelling, the diagram-review framework, and the seven visualization anti-patterns |
+
 ### Patterns
 | KB | What it covers |
 |---|---|
