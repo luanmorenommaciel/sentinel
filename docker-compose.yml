@@ -36,11 +36,14 @@ services:
     build:
       context: ./services/collector-rust
     image: sentinel-collector-rust:dev
+    # Pass the runtime config (grpc + clickhouse sections) as argv[1] → SERVER mode.
+    command: ["/etc/sentinel/config.yaml"]
     environment:
       CONTRACTS_DIR: /contracts/v1
-      CH_URL: "http://clickhouse:8123"
+      CLICKHOUSE_URL: "http://clickhouse:8123"
     volumes:
       - ./contracts:/contracts:ro
+      - ./services/collector-rust/config.docker.yaml:/etc/sentinel/config.yaml:ro
     ports:
       - "4317:4317"
     networks:

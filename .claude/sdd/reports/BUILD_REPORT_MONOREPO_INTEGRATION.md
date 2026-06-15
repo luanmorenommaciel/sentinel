@@ -119,6 +119,21 @@ cargo test --locked -- --ignored
 
 **Status:** ✅ Pass — collectors compile and pass unit + live-ClickHouse integration tests.
 
+### Full root-compose end-to-end (`make e2e`) — both collectors
+
+Built the service images and ran the whole pipeline through `docker-compose.yml`
+(`make up/init/generate`), generating `--scenario baseline --seed 42 --window 5m`
+(233,100 signals) into each collector and counting rows in ClickHouse:
+
+```text
+COLLECTOR=rust  →  default.otel_logs=40200  otel_traces=40200  otel_metrics=152700  (otel_metrics_1m MV: 166)
+COLLECTOR=go    →  sentinel.otel_logs=40200 otel_spans=40200   otel_metrics=152700
+generator emitted: log=40200  span=40200  metric=152700  (delivery otlp, 0 failures)
+```
+
+**Exact row-count match for both collectors, zero loss, no export errors** — the
+configurable `COLLECTOR=rust|go` pipeline works end-to-end (AT-007 fully closed).
+
 ---
 
 ## Autonomous Decisions
@@ -134,18 +149,20 @@ cargo test --locked -- --ignored
 | 7 | Default collector | `COLLECTOR=rust` (per DESIGN) | Rust ships the most complete infra (3 DDL + golden/gRPC/roundtrip tests). Overridable. |
 | 8 | ClickHouse user setup (found during Docker testing) | Create `otelgen`/`sentinel` via init script, NOT `CLICKHOUSE_USER` env | `CLICKHOUSE_USER`/`PASSWORD` env breaks the passwordless `default` user that the Rust collector uses. Added `infra/clickhouse-init.sql`. |
 | 9 | ClickHouse `default` user is localhost-only (image default) | Mount `users.d` override widening `default` networks to `::/0` | The Rust collector connects as `default` over the Docker network; the image restricts it to `::1`/`127.0.0.1`. Added `infra/clickhouse-users.d/zz-default-network.xml`. |
+| 10 | Rust collector needs a `grpc` config section + reads `CLICKHOUSE_URL` (found during compose e2e) | Added `services/collector-rust/config.docker.yaml` (grpc + clickhouse), mounted it, pass as argv[1]; fixed compose env `CH_URL`→`CLICKHOUSE_URL` | The binary only enters OTLP server mode when its config file has a `grpc` section; env alone keeps it in file/count mode. |
 
 ---
 
 ## Verification Gaps (not blockers)
 
-| Gap | Why | How to close |
-|-----|-----|--------------|
-| Full `make e2e` via root compose not run end-to-end | Collectors were tested in standalone Docker containers (faster) rather than via `docker compose build` of the service images | Run `make e2e COLLECTOR=rust` and `COLLECTOR=go`; confirm rows at `:8123/play`. The two ClickHouse fixes (init user + network override) are now baked into the compose, so this should work. |
-| Generator live-ClickHouse integration tests (6) | Require a running ClickHouse | Covered by `make e2e` (or the same Docker pattern used for the collectors) |
+None remaining for the integration scope. Generator (176 unit), both collectors
+(unit + live-ClickHouse integration), and the full `make e2e` for both `COLLECTOR`
+values were all run and pass.
 
-> Collector compilation + unit + live-ClickHouse integration tests are **no longer gaps** —
-> all were run in Docker and pass (see Verification Results).
+**Operational note — stale ClickHouse volume:** `CREATE TABLE IF NOT EXISTS` will not
+update an existing table whose schema changed. When a collector's DDL changes, run
+`make reset` (drops the `clickhouse_data` volume) before `make init`, or inserts fail
+with `NO_SUCH_COLUMN`. Hit and resolved during this e2e.
 
 ---
 
