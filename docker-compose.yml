@@ -14,18 +14,17 @@
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.3
-    environment:
-      # Go collector connects as otelgen@9000/sentinel (its CLICKHOUSE_DSN default).
-      # The `default` user remains (no password) for the Rust collector over HTTP :8123.
-      CLICKHOUSE_DB: sentinel
-      CLICKHOUSE_USER: otelgen
-      CLICKHOUSE_PASSWORD: otelgen_secret
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    # The Go collector connects as otelgen@9000/sentinel; the Rust collector uses the
+    # passwordless `default` user over HTTP :8123. We create otelgen + sentinel via an
+    # init script rather than CLICKHOUSE_USER/PASSWORD env, which would break `default`
+    # auth over the network.
     ports:
       - "8123:8123"   # HTTP interface (+ /play UI) — Rust exporter
       - "9000:9000"   # native TCP — Go exporter
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+      - ./infra/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./infra/clickhouse-users.d/zz-default-network.xml:/etc/clickhouse-server/users.d/zz-default-network.xml:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/?query=SELECT+1"]
       interval: 5s

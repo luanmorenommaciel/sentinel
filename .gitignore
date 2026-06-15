@@ -17,6 +17,7 @@ venv/
 # Rust
 target/
 **/*.rs.bk
+.cargo-home/
 
 # Go
 # (build artifacts emitted by `go build` are named per-binary; ignore common ones)
