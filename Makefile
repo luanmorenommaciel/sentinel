@@ -16,7 +16,12 @@ export COMPOSE_PROFILES = $(COLLECTOR)
 
 VALID_COLLECTORS := rust go
 
-.PHONY: help guard up init generate e2e down reset logs ps
+.PHONY: help guard up init generate e2e down reset logs ps \
+        build test test-generator test-collector-rust test-collector-go \
+        lint lint-generator lint-collector-rust lint-collector-go
+
+# Docker runner for per-service build/test/lint — no host toolchains required.
+DK_RUN := docker run --rm --user $(shell id -u):$(shell id -g) -v "$(CURDIR)":/w
 
 help:                ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -57,3 +62,35 @@ down:                ## Stop all services (both profiles)
 
 reset:               ## Stop all services and drop volumes (fresh ClickHouse)
 	COMPOSE_PROFILES=rust,go docker compose down -v
+
+# ── build / test / lint (all run in Docker; no host cargo/go/python needed) ──
+
+build:               ## Build all service images (generator + both collectors)
+	COMPOSE_PROFILES=rust,go docker compose build
+
+test: test-generator test-collector-rust test-collector-go  ## Run all unit test suites
+
+test-generator:      ## Generator unit tests (pytest)
+	$(DK_RUN) -w /w/services/generator-python -e HOME=/tmp -e CONTRACTS_DIR=/w/contracts/v1 \
+		python:3.12-slim bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest jsonschema && /tmp/v/bin/python -m pytest tests/unit -q"
+
+test-collector-rust: ## Rust collector tests (cargo test; live-ClickHouse tests are #[ignore]d)
+	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \
+		rust:1.96 cargo test --locked
+
+test-collector-go:   ## Go collector unit tests (go test)
+	$(DK_RUN) -w /w/services/collector-go -e GOMODCACHE=/tmp/gomod -e GOCACHE=/tmp/gocache -e HOME=/tmp \
+		golang:1.21 go test ./...
+
+lint: lint-generator lint-collector-rust lint-collector-go  ## Lint all services
+
+lint-generator:      ## Python lint (ruff)
+	$(DK_RUN) -w /w/services/generator-python ghcr.io/astral-sh/ruff:latest check src
+
+lint-collector-rust: ## Rust fmt check + clippy
+	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \
+		rust:1.96 bash -c "cargo fmt --check && cargo clippy --locked"
+
+lint-collector-go:   ## Go vet
+	$(DK_RUN) -w /w/services/collector-go -e GOMODCACHE=/tmp/gomod -e GOCACHE=/tmp/gocache -e HOME=/tmp \
+		golang:1.21 go vet ./...
