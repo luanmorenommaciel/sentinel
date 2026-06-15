@@ -1,0 +1,9 @@
+version: "1.0.0"
+name: stalled_job
+extends: baseline
+phases:
+  - type: stalled_job
+    target: orchestration.daily_etl
+    start_offset: "12h"
+    duration: "45m"
+    magnitude: 1.0

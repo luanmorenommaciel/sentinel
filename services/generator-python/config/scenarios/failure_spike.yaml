@@ -1,0 +1,9 @@
+version: "1.0.0"
+name: failure_spike
+extends: baseline
+phases:
+  - type: failure_spike
+    target: orchestration.daily_etl
+    start_offset: "6h"
+    duration: "30m"
+    magnitude: 0.6

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel/contract/otlp_output.schema.json",
+  "title": "OTelGen OTLP Output Contract",
+  "description": "Published Pod 1 -> Pod 2 contract: the shape of each signal emitted by OTelGen. Serialized via otelgen.contract.output_schema.signal_to_contract_dict.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["signal_type", "contract_version", "service_name", "attributes", "resource_attributes"],
+  "properties": {
+    "signal_type": {"type": "string", "enum": ["log", "span", "metric"]},
+    "contract_version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$"},
+    "service_name": {"type": "string", "minLength": 1},
+    "attributes": {"type": "object", "additionalProperties": {"type": "string"}},
+    "resource_attributes": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "required": ["sentinel.synthetic", "sentinel.scenario", "sentinel.run_id", "cloud.provider", "service.name"]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"signal_type": {"const": "log"}}},
+      "then": {
+        "required": ["time_unix_nano", "severity_text", "severity_number", "body"],
+        "properties": {
+          "time_unix_nano": {"type": "integer", "minimum": 0},
+          "severity_text": {"type": "string"},
+          "severity_number": {"type": "integer"},
+          "body": {"type": "string"},
+          "trace_id": {"type": ["string", "null"]},
+          "span_id": {"type": ["string", "null"]}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"signal_type": {"const": "span"}}},
+      "then": {
+        "required": ["trace_id", "span_id", "name", "start_unix_nano", "end_unix_nano", "status_code"],
+        "properties": {
+          "trace_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+          "span_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+          "parent_span_id": {"type": ["string", "null"], "pattern": "^[0-9a-f]{16}$"},
+          "name": {"type": "string"},
+          "start_unix_nano": {"type": "integer", "minimum": 0},
+          "end_unix_nano": {"type": "integer", "minimum": 0},
+          "status_code": {"type": "string", "enum": ["OK", "ERROR"]}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"signal_type": {"const": "metric"}}},
+      "then": {
+        "required": ["time_unix_nano", "name", "type", "value"],
+        "properties": {
+          "time_unix_nano": {"type": "integer", "minimum": 0},
+          "name": {"type": "string", "minLength": 1},
+          "type": {"type": "string", "enum": ["gauge", "sum"]},
+          "value": {"type": "number"}
+        }
+      }
+    }
+  ]
+}

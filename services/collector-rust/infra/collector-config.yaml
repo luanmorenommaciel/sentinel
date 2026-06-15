@@ -1,0 +1,19 @@
+# Config for the containerized collector in the full-stack compose.
+# Paths + host names are container-relative (see docker-compose.collector.yml).
+
+input:
+  # Mounted from ../contract/golden → /data (read-only).
+  path: /data/baseline_seed42.jsonl
+
+clickhouse:
+  # Compose service DNS — the ClickHouse container is reachable as `clickhouse`.
+  url: http://clickhouse:8123
+  database: default
+
+contract:
+  expected_version: "1.0.0"
+  strict: false
+
+logging:
+  level: info
+  format: json

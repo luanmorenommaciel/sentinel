@@ -1,0 +1,270 @@
+version: "1.0.0"
+producer: sentinel/otel-collector
+consumer: clickstack
+description: >
+  Schema of OpenTelemetry signals ingested into ClickHouse by Sentinel Pod 2 (Go OTel Collector).
+  Consumers must reference this contract before querying the sentinel database.
+updated: "2026-06-07"
+database: sentinel
+input_contract: contract/schema/schema_output.json
+
+tables:
+  otel_spans:
+    description: "OpenTelemetry trace spans emitted by OTelGen (Pod 1)"
+    engine: MergeTree
+    partition_by: "toYYYYMM(toDateTime(ingested_at))"
+    order_by:
+      - service_name
+      - start_unix_nano
+      - trace_id
+    columns:
+      - name: trace_id
+        type: String
+        nullable: false
+        description: "32 lower-case hex chars — identifies the trace"
+        example: "0822e8f36c031199972a846916419f82"
+      - name: span_id
+        type: String
+        nullable: false
+        description: "16 lower-case hex chars — identifies the span"
+        example: "17fc695a07a0ca6e"
+      - name: parent_span_id
+        type: "Nullable(String)"
+        nullable: true
+        description: "16 hex chars if child span; NULL for root spans"
+        example: null
+      - name: service_name
+        type: "LowCardinality(String)"
+        nullable: false
+        description: "Originating service (from resource_attributes.service.name)"
+        example: "pubsub-ingestion-topic"
+      - name: name
+        type: String
+        nullable: false
+        description: "Span operation name"
+        example: "messaging.operation"
+      - name: start_unix_nano
+        type: Int64
+        nullable: false
+        description: "Start timestamp in nanoseconds since Unix epoch"
+        example: 1700000000000000000
+      - name: end_unix_nano
+        type: Int64
+        nullable: false
+        description: "End timestamp in nanoseconds since Unix epoch"
+        example: 1700000000030032131
+      - name: status_code
+        type: "LowCardinality(String)"
+        nullable: false
+        description: "Span status: OK or ERROR"
+        example: "OK"
+      - name: attributes
+        type: "Map(String, String)"
+        nullable: false
+        description: "Span-level attributes (component.name, component.type, etc.)"
+        example: {"component.name": "messaging.ingestion_topic", "component.type": "messaging"}
+      - name: resource_attributes
+        type: "Map(String, String)"
+        nullable: false
+        description: "Resource-level attributes (cloud.provider, sentinel.* fields, etc.)"
+        example: {"cloud.provider": "gcp", "cloud.region": "us-central1", "sentinel.scenario": "baseline"}
+      - name: contract_version
+        type: "LowCardinality(String)"
+        nullable: false
+        description: "Version of the input contract that produced this record"
+        example: "1.0.0"
+      - name: ingested_at
+        type: "DateTime64(9)"
+        nullable: false
+        description: "Timestamp when the collector received and persisted the span"
+
+  otel_logs:
+    description: "OpenTelemetry log records emitted by OTelGen (Pod 1)"
+    engine: MergeTree
+    partition_by: "toYYYYMM(toDateTime(ingested_at))"
+    order_by:
+      - service_name
+      - time_unix_nano
+    columns:
+      - name: time_unix_nano
+        type: Int64
+        nullable: false
+        description: "Log timestamp in nanoseconds since Unix epoch"
+        example: 1700000000000000000
+      - name: service_name
+        type: "LowCardinality(String)"
+        nullable: false
+        example: "pubsub-ingestion-topic"
+      - name: severity_text
+        type: "LowCardinality(String)"
+        nullable: false
+        description: "Human-readable severity (INFO, WARN, ERROR, DEBUG)"
+        example: "INFO"
+      - name: severity_number
+        type: Int32
+        nullable: false
+        description: "OTel numeric severity (9=INFO, 13=WARN, 17=ERROR)"
+        example: 9
+      - name: body
+        type: String
+        nullable: false
+        description: "Log message body"
+        example: "Request completed successfully."
+      - name: trace_id
+        type: "Nullable(String)"
+        nullable: true
+        description: "Trace correlation ID (32 hex chars); NULL if not in a trace context"
+        example: "0822e8f36c031199972a846916419f82"
+      - name: span_id
+        type: "Nullable(String)"
+        nullable: true
+        description: "Span correlation ID (16 hex chars); NULL if not in a span context"
+        example: "17fc695a07a0ca6e"
+      - name: attributes
+        type: "Map(String, String)"
+        nullable: false
+        example: {"component.name": "messaging.ingestion_topic"}
+      - name: resource_attributes
+        type: "Map(String, String)"
+        nullable: false
+        example: {"cloud.provider": "gcp", "sentinel.scenario": "baseline"}
+      - name: contract_version
+        type: "LowCardinality(String)"
+        nullable: false
+        example: "1.0.0"
+      - name: ingested_at
+        type: "DateTime64(9)"
+        nullable: false
+
+  otel_metrics:
+    description: "OpenTelemetry metrics (gauge and sum) emitted by OTelGen (Pod 1)"
+    engine: MergeTree
+    partition_by: "toYYYYMM(toDateTime(ingested_at))"
+    order_by:
+      - service_name
+      - name
+      - time_unix_nano
+    columns:
+      - name: time_unix_nano
+        type: Int64
+        nullable: false
+        description: "Metric timestamp in nanoseconds since Unix epoch"
+        example: 1700000000000000000
+      - name: service_name
+        type: "LowCardinality(String)"
+        nullable: false
+        example: "pubsub-ingestion-topic"
+      - name: name
+        type: String
+        nullable: false
+        description: "Metric instrument name"
+        example: "operation.latency_ms"
+      - name: type
+        type: "LowCardinality(String)"
+        nullable: false
+        description: "Metric kind: gauge (instantaneous) or sum (cumulative)"
+        example: "gauge"
+      - name: value
+        type: Float64
+        nullable: false
+        description: "Numeric metric value"
+        example: 30.032
+      - name: attributes
+        type: "Map(String, String)"
+        nullable: false
+        example: {"component.name": "messaging.ingestion_topic", "component.type": "messaging"}
+      - name: resource_attributes
+        type: "Map(String, String)"
+        nullable: false
+        example: {"cloud.provider": "gcp", "sentinel.scenario": "baseline"}
+      - name: contract_version
+        type: "LowCardinality(String)"
+        nullable: false
+        example: "1.0.0"
+      - name: ingested_at
+        type: "DateTime64(9)"
+        nullable: false
+
+examples:
+  otel_spans:
+    - trace_id: "0822e8f36c031199972a846916419f82"
+      span_id: "17fc695a07a0ca6e"
+      parent_span_id: null
+      service_name: "pubsub-ingestion-topic"
+      name: "messaging.operation"
+      start_unix_nano: 1700000000000000000
+      end_unix_nano: 1700000000030032131
+      status_code: "OK"
+      attributes:
+        component.name: "messaging.ingestion_topic"
+        component.type: "messaging"
+      resource_attributes:
+        cloud.provider: "gcp"
+        cloud.region: "us-central1"
+        cloud.platform: "gcp_pubsub"
+        sentinel.synthetic: "true"
+        sentinel.scenario: "baseline"
+        sentinel.run_id: "golden-fixed-run"
+        service.name: "pubsub-ingestion-topic"
+      contract_version: "1.0.0"
+
+  otel_logs:
+    - time_unix_nano: 1700000000000000000
+      service_name: "pubsub-ingestion-topic"
+      severity_text: "INFO"
+      severity_number: 9
+      body: "Request completed successfully."
+      trace_id: "0822e8f36c031199972a846916419f82"
+      span_id: "17fc695a07a0ca6e"
+      attributes:
+        component.name: "messaging.ingestion_topic"
+      resource_attributes:
+        cloud.provider: "gcp"
+        sentinel.scenario: "baseline"
+      contract_version: "1.0.0"
+
+  otel_metrics:
+    - time_unix_nano: 1700000000000000000
+      service_name: "pubsub-ingestion-topic"
+      name: "operation.latency_ms"
+      type: "gauge"
+      value: 30.032
+      attributes:
+        component.name: "messaging.ingestion_topic"
+        component.type: "messaging"
+      resource_attributes:
+        cloud.provider: "gcp"
+        sentinel.scenario: "baseline"
+      contract_version: "1.0.0"
+    - time_unix_nano: 1700000000000000000
+      service_name: "pubsub-ingestion-topic"
+      name: "operation.request_count"
+      type: "sum"
+      value: 1.0
+      attributes:
+        component.name: "messaging.ingestion_topic"
+        status: "ok"
+      resource_attributes:
+        cloud.provider: "gcp"
+        sentinel.scenario: "baseline"
+      contract_version: "1.0.0"
+
+known_metric_names:
+  - operation.latency_ms
+  - operation.request_count
+  - operation.error_count
+  - pubsub.googleapis.com/topic/send_message_operation_count
+  - pubsub.googleapis.com/subscription/oldest_unacked_message_age
+  - kubernetes.io/container/cpu/core_usage_time
+  - kubernetes.io/container/memory/used_bytes
+  - dataproc.googleapis.com/cluster/yarn/allocated_memory_percentage
+  - dataproc.googleapis.com/cluster/yarn/pending_memory_percentage
+  - storage.googleapis.com/api/request_count
+
+known_services:
+  - pubsub-ingestion-topic
+  - gcs-raw-bucket
+  - gcs-processed-bucket
+  - k8s-api-gateway
+  - dataproc-spark-streaming
+  - dataproc-spark-batch

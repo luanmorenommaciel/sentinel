@@ -1,0 +1,32 @@
+# Black Friday surge — Luan's canonical scenario: traffic spikes and the API gateway
+# autoscales from 30 to 200 replicas, then settles. Highest-value outlier for the Crew.
+version: "1.0.0"
+name: black_friday
+extends: baseline
+phases:
+  - type: traffic_surge
+    target: messaging.ingestion_topic
+    start_offset: "6h"
+    duration: "1h"
+    magnitude: 6.0
+
+  - type: traffic_surge
+    target: kubernetes.api_gateway
+    start_offset: "6h"
+    duration: "1h"
+    magnitude: 5.0
+
+  - type: pod_autoscale
+    target: kubernetes.api_gateway
+    start_offset: "6h"
+    duration: "1h"
+    magnitude: 1.0
+    params:
+      baseline_replicas: 30
+      peak_replicas: 200
+
+  - type: latency_degradation
+    target: compute.spark_batch
+    start_offset: "6h15m"
+    duration: "30m"
+    magnitude: 2.5

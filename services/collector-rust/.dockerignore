@@ -1,0 +1,8 @@
+# Keep the build context small + reproducible.
+target/
+tests/
+benches/
+*.md
+config.example.yaml
+.dockerignore
+Dockerfile

@@ -1,0 +1,98 @@
+services:
+
+  # ---------------------------------------------------------------------------
+  # Standalone ClickHouse — target for the DIRECT-WRITE path (--delivery direct).
+  # Uses the config-driven schema from contract/clickhouse_schema.yaml.
+  # Inspect data via the built-in Play UI at http://localhost:8123/play
+  # (user: otelgen / password: otelgen_secret / database: sentinel).
+  # ---------------------------------------------------------------------------
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    ports:
+      - "8123:8123"   # HTTP interface (+ /play UI)
+      - "9000:9000"   # Native TCP interface
+    environment:
+      CLICKHOUSE_DB: sentinel
+      CLICKHOUSE_USER: otelgen
+      CLICKHOUSE_PASSWORD: otelgen_secret
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    volumes:
+      # Bind mount — data is visible in ./clickhouse_data (git-ignored).
+      - ./clickhouse_data:/var/lib/clickhouse
+
+  # ---------------------------------------------------------------------------
+  # ClickStack (HyperDX all-in-one) — bundles its OWN ClickHouse + OTel Collector
+  # + HyperDX UI. Target for the OTLP path (--delivery otlp): the generator sends
+  # OTLP to :4318 and HyperDX auto-creates data sources and visualises it.
+  # UI: http://localhost:8080  (create a user on first visit).
+  # NOTE: this is a separate ClickHouse from the `clickhouse` service above.
+  # On a small host you may prefer to run only ONE of the two stacks at a time
+  # (e.g. `docker compose up -d clickstack`).
+  # ---------------------------------------------------------------------------
+  clickstack:
+    image: clickhouse/clickstack-all-in-one:latest
+    ports:
+      - "8080:8080"   # HyperDX web UI
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+    volumes:
+      - clickstack_db:/data/db                       # MongoDB (HyperDX metadata)
+      - clickstack_ch:/var/lib/clickhouse            # bundled ClickHouse data
+      - clickstack_logs:/var/log/clickhouse-server   # bundled ClickHouse logs
+
+  # ---------------------------------------------------------------------------
+  # The generator. Build locally; mount the contract dir so YAML edits apply
+  # without a rebuild.
+  # ---------------------------------------------------------------------------
+  otelgen:
+    build: .
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      # Direct-write ClickHouse connection (used with --delivery direct)
+      CH_HOST: clickhouse
+      CH_PORT: "8123"
+      CH_USER: otelgen
+      CH_PASSWORD: otelgen_secret
+      CH_DATABASE: sentinel
+      # OTLP endpoint (used with --delivery otlp) — point at the ClickStack
+      # all-in-one collector by its compose service name.
+      OTELGEN_OTLP_ENDPOINT: "http://clickstack:4318"
+      # ClickStack/HyperDX requires an ingestion API key (sent as the
+      # 'authorization' header). Create a user/team at http://localhost:8080,
+      # copy the Ingestion API Key, and provide it via the ENVIRONMENT — never
+      # hardcode it here. Put it in a gitignored .env file at the repo root:
+      #     OTELGEN_OTLP_API_KEY=<your-hyperdx-ingestion-api-key>
+      # Compose substitutes it below (empty if unset).
+      OTELGEN_OTLP_API_KEY: ${OTELGEN_OTLP_API_KEY:-}
+    volumes:
+      # Mount the host contract directory (read-only) so YAML edits take effect
+      # without rebuilding the image. Remove this mount to use the baked default.
+      - ./contract:/app/contract:ro
+    # Default CMD is --help; override command to actually run a scenario.
+    #
+    # Example — initialise the ClickHouse schema for the DIRECT path (run once):
+    #   docker compose run --rm otelgen --delivery direct --init-schema
+    #   (pipe the printed DDL into clickhouse-client to create the tables)
+    #
+    # Example — direct-write a failure_spike backfill into the standalone CH:
+    #   docker compose run --rm otelgen \
+    #     --delivery direct --scenario failure_spike --mode backfill --window 24h --step 5m
+    #
+    # Example — send via OTLP to HyperDX (view at http://localhost:8080).
+    # First create a user/team at :8080 and copy the Ingestion API Key:
+    #   docker compose run --rm otelgen \
+    #     --delivery otlp --otlp-api-key <ingestion-key> \
+    #     --scenario failure_spike --mode backfill --window 24h --step 5m
+
+volumes:
+  clickstack_db:
+  clickstack_ch:
+  clickstack_logs:
