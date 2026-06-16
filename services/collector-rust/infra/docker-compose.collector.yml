@@ -17,7 +17,8 @@
 services:
   collector:
     build:
-      context: ../services/collector-rust
+      # Build context is the crate dir (this file lives in services/collector-rust/infra/).
+      context: ..
       dockerfile: Dockerfile
     image: sentinel-collector:dev
     container_name: sentinel-collector
@@ -26,7 +27,8 @@ services:
         condition: service_healthy
     volumes:
       # Golden fixture (read-only) + the container's config.
-      - ../contract/golden:/data:ro
+      # Golden now lives at the monorepo-root contracts/v1/golden (was contract/golden pre-monorepo).
+      - ../../../contracts/v1/golden:/data:ro
       - ./collector-config.yaml:/etc/sentinel/config.yaml:ro
     command: ["/etc/sentinel/config.yaml"]
     # Runs once and exits; do not restart.

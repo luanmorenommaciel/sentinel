@@ -1,0 +1,132 @@
+# Rust CI for the OTel Collector (Pod 2).
+#
+# Scoped to the Rust subtree per the polyglot-monorepo rule in
+# .claude/docs/RUST_PROJECT_STANDARDS.md: a Python-only or docs-only PR does not
+# trigger Rust builds, and vice versa. The Rust toolchain version is pinned by
+# services/collector-rust/rust-toolchain.toml (1.96.0) — every cargo invocation
+# in that directory auto-installs it.
+#
+# Maps to the Crew B 7-gate WoW:
+#   linter      → cargo clippy -D warnings        (job: gates)
+#   type check  → cargo build                     (job: gates, implicit)
+#   tests       → cargo test + the CH round-trip   (jobs: gates, integration)
+#   security    → cargo deny check                 (job: supply-chain)
+#   build       → cargo build --release             (job: gates)
+#   docker build→ docker build (distroless image)   (job: docker-build)
+# (markdownlint and CodeRabbit are separate, language-agnostic gates.)
+
+name: rust-ci
+
+on:
+  pull_request:
+    paths:
+      - "services/collector-rust/**"
+      - "infra/**"
+      - ".github/workflows/rust-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/collector-rust/**"
+      - "infra/**"
+      - ".github/workflows/rust-ci.yml"
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: rust-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── fmt · clippy · unit/golden tests · release build ──────────────────────
+  gates:
+    name: gates (fmt · clippy · test · build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/collector-rust
+
+      # Triggers rustup to install the rust-toolchain.toml pin + components.
+      - name: Install pinned toolchain
+        working-directory: services/collector-rust
+        run: rustup show
+
+      - name: Format check
+        working-directory: services/collector-rust
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        working-directory: services/collector-rust
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # Runs unit + golden-parse + doc tests. The ClickHouse round-trip is
+      # #[ignore]d here (no DB in this job) and runs in the `integration` job.
+      - name: Tests (non-ignored)
+        working-directory: services/collector-rust
+        run: cargo test --locked
+
+      - name: Release build
+        working-directory: services/collector-rust
+        run: cargo build --release --locked
+
+  # ── live round-trip against a real ClickHouse ─────────────────────────────
+  integration:
+    name: integration (ClickHouse round-trip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/collector-rust
+
+      - name: Install pinned toolchain
+        working-directory: services/collector-rust
+        run: rustup show
+
+      # Reuses the same compose the team runs locally — the DDL auto-applies via
+      # the initdb volume mount, and --wait blocks on the healthcheck.
+      - name: Start ClickHouse
+        run: docker compose -f services/collector-rust/infra/docker-compose.yml up -d --wait
+
+      - name: Round-trip test (golden file → ClickHouse)
+        working-directory: services/collector-rust
+        env:
+          CLICKHOUSE_URL: http://localhost:8123
+        run: cargo test --test clickhouse_roundtrip --locked -- --ignored
+
+      - name: Tear down ClickHouse
+        if: always()
+        run: docker compose -f services/collector-rust/infra/docker-compose.yml down -v
+
+  # ── advisories + licenses + bans (cargo-deny) ─────────────────────────────
+  supply-chain:
+    name: supply-chain (cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: services/collector-rust/Cargo.toml
+          command: check
+          arguments: --all-features
+
+  # ── distroless image builds (WoW "Docker build" gate) ─────────────────────
+  docker-build:
+    name: docker-build (distroless image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the collector image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/collector-rust
+          push: false
+          tags: sentinel-collector:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

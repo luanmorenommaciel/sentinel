@@ -7,6 +7,7 @@
 //!    — no manual `clickhouse-client < …` steps needed:
 //!
 //!    ```sh
+//!    # from services/collector-rust/ (the collector's own ClickHouse stack)
 //!    docker compose -f infra/docker-compose.yml up -d
 //!    # wait for the healthcheck to pass (~10 s)
 //!    ```

@@ -9,7 +9,7 @@
 //!
 //! ```sh
 //! # From services/collector-rust/
-//! docker compose -f ../../infra/docker-compose.yml up -d clickhouse
+//! docker compose -f infra/docker-compose.yml up -d clickhouse
 //! cargo test --test grpc_export_roundtrip -- --ignored
 //! ```
 //!
