@@ -3,16 +3,19 @@ package model
 import "time"
 
 type Span struct {
-	TraceID            string
-	SpanID             string
-	ParentSpanID       *string
+	Timestamp          time.Time
+	TraceId            string
+	SpanId             string
+	ParentSpanId       string // empty string for root spans
+	SpanName           string
 	ServiceName        string
-	Name               string
-	StartUnixNano      int64
-	EndUnixNano        int64
+	SentinelScenario   string
+	SentinelRunId      string
+	CloudProvider      string
+	SentinelSynthetic  uint8 // 1=true, 0=false
+	Duration           int64 // end_unix_nano - start_unix_nano in nanoseconds
 	StatusCode         string
-	Attributes         map[string]string
-	ResourceAttributes map[string]string
 	ContractVersion    string
-	IngestedAt         time.Time
+	SpanAttributes     map[string]string
+	ResourceAttributes map[string]string // non-hoisted remainder
 }

@@ -3,13 +3,16 @@ package model
 import "time"
 
 type Metric struct {
-	TimeUnixNano       int64
-	ServiceName        string
-	Name               string
-	Type               string
+	Timestamp          time.Time
+	MetricName         string
+	MetricType         string
 	Value              float64
-	Attributes         map[string]string
-	ResourceAttributes map[string]string
+	ServiceName        string
+	SentinelScenario   string
+	SentinelRunId      string
+	CloudProvider      string
+	SentinelSynthetic  uint8 // 1=true, 0=false
 	ContractVersion    string
-	IngestedAt         time.Time
+	Attributes         map[string]string
+	ResourceAttributes map[string]string // non-hoisted remainder
 }

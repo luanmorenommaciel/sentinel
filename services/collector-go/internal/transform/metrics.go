@@ -11,7 +11,6 @@ import (
 )
 
 func MetricsRequest(req *collectormetrics.ExportMetricsServiceRequest) []model.Metric {
-	now := time.Now().UTC()
 	var metrics []model.Metric
 
 	for _, rm := range req.GetResourceMetrics() {
@@ -21,7 +20,7 @@ func MetricsRequest(req *collectormetrics.ExportMetricsServiceRequest) []model.M
 
 		for _, sm := range rm.GetScopeMetrics() {
 			for _, m := range sm.GetMetrics() {
-				metrics = append(metrics, extractDataPoints(m, svcName, contractVer, resAttrs, now)...)
+				metrics = append(metrics, extractDataPoints(m, svcName, contractVer, resAttrs)...)
 			}
 		}
 	}
@@ -32,42 +31,51 @@ func extractDataPoints(
 	m *metricsv1.Metric,
 	svcName, contractVer string,
 	resAttrs map[string]string,
-	now time.Time,
 ) []model.Metric {
 	var out []model.Metric
+
+	remAttrs := remainingResourceAttrs(resAttrs)
+	scenario := sentinelScenario(resAttrs)
+	runID := sentinelRunId(resAttrs)
+	cloud := cloudProvider(resAttrs)
+	synthetic := sentinelSynthetic(resAttrs)
 
 	switch d := m.GetData().(type) {
 	case *metricsv1.Metric_Gauge:
 		for _, dp := range d.Gauge.GetDataPoints() {
 			out = append(out, model.Metric{
-				TimeUnixNano:       int64(dp.GetTimeUnixNano()),
-				ServiceName:        svcName,
-				Name:               m.GetName(),
-				Type:               "gauge",
+				Timestamp:          time.Unix(0, int64(dp.GetTimeUnixNano())).UTC(),
+				MetricName:         m.GetName(),
+				MetricType:         "gauge",
 				Value:              dp.GetAsDouble(),
-				Attributes:         kvToMap(dp.GetAttributes()),
-				ResourceAttributes: resAttrs,
+				ServiceName:        svcName,
+				SentinelScenario:   scenario,
+				SentinelRunId:      runID,
+				CloudProvider:      cloud,
+				SentinelSynthetic:  synthetic,
 				ContractVersion:    contractVer,
-				IngestedAt:         now,
+				Attributes:         kvToMap(dp.GetAttributes()),
+				ResourceAttributes: remAttrs,
 			})
 		}
 	case *metricsv1.Metric_Sum:
 		for _, dp := range d.Sum.GetDataPoints() {
 			out = append(out, model.Metric{
-				TimeUnixNano:       int64(dp.GetTimeUnixNano()),
-				ServiceName:        svcName,
-				Name:               m.GetName(),
-				Type:               "sum",
+				Timestamp:          time.Unix(0, int64(dp.GetTimeUnixNano())).UTC(),
+				MetricName:         m.GetName(),
+				MetricType:         "sum",
 				Value:              dp.GetAsDouble(),
-				Attributes:         kvToMap(dp.GetAttributes()),
-				ResourceAttributes: resAttrs,
+				ServiceName:        svcName,
+				SentinelScenario:   scenario,
+				SentinelRunId:      runID,
+				CloudProvider:      cloud,
+				SentinelSynthetic:  synthetic,
 				ContractVersion:    contractVer,
-				IngestedAt:         now,
+				Attributes:         kvToMap(dp.GetAttributes()),
+				ResourceAttributes: remAttrs,
 			})
 		}
 	case *metricsv1.Metric_Histogram:
-		// Each histogram data point is stored as one row per bucket boundary.
-		// bucket_le attribute holds the upper bound; value holds the cumulative count.
 		for _, dp := range d.Histogram.GetDataPoints() {
 			dpAttrs := kvToMap(dp.GetAttributes())
 			bounds := dp.GetExplicitBounds()
@@ -83,15 +91,18 @@ func extractDataPoints(
 					count = float64(counts[i])
 				}
 				out = append(out, model.Metric{
-					TimeUnixNano:       int64(dp.GetTimeUnixNano()),
-					ServiceName:        svcName,
-					Name:               m.GetName(),
-					Type:               "histogram",
+					Timestamp:          time.Unix(0, int64(dp.GetTimeUnixNano())).UTC(),
+					MetricName:         m.GetName(),
+					MetricType:         "histogram",
 					Value:              count,
-					Attributes:         attrs,
-					ResourceAttributes: resAttrs,
+					ServiceName:        svcName,
+					SentinelScenario:   scenario,
+					SentinelRunId:      runID,
+					CloudProvider:      cloud,
+					SentinelSynthetic:  synthetic,
 					ContractVersion:    contractVer,
-					IngestedAt:         now,
+					Attributes:         attrs,
+					ResourceAttributes: remAttrs,
 				})
 			}
 			// +Inf bucket (total count)
@@ -105,15 +116,18 @@ func extractDataPoints(
 				infCount = float64(counts[len(counts)-1])
 			}
 			out = append(out, model.Metric{
-				TimeUnixNano:       int64(dp.GetTimeUnixNano()),
-				ServiceName:        svcName,
-				Name:               m.GetName(),
-				Type:               "histogram",
+				Timestamp:          time.Unix(0, int64(dp.GetTimeUnixNano())).UTC(),
+				MetricName:         m.GetName(),
+				MetricType:         "histogram",
 				Value:              infCount,
-				Attributes:         infAttrs,
-				ResourceAttributes: resAttrs,
+				ServiceName:        svcName,
+				SentinelScenario:   scenario,
+				SentinelRunId:      runID,
+				CloudProvider:      cloud,
+				SentinelSynthetic:  synthetic,
 				ContractVersion:    contractVer,
-				IngestedAt:         now,
+				Attributes:         infAttrs,
+				ResourceAttributes: remAttrs,
 			})
 		}
 	}

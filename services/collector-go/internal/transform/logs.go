@@ -10,7 +10,6 @@ import (
 )
 
 func LogsRequest(req *collectorlogs.ExportLogsServiceRequest) []model.Log {
-	now := time.Now().UTC()
 	var logs []model.Log
 
 	for _, rl := range req.GetResourceLogs() {
@@ -21,17 +20,20 @@ func LogsRequest(req *collectorlogs.ExportLogsServiceRequest) []model.Log {
 		for _, sl := range rl.GetScopeLogs() {
 			for _, lr := range sl.GetLogRecords() {
 				logs = append(logs, model.Log{
-					TimeUnixNano:       int64(lr.GetTimeUnixNano()),
+					Timestamp:          time.Unix(0, int64(lr.GetTimeUnixNano())).UTC(),
 					ServiceName:        svcName,
+					SentinelScenario:   sentinelScenario(resAttrs),
+					SentinelRunId:      sentinelRunId(resAttrs),
+					CloudProvider:      cloudProvider(resAttrs),
+					SentinelSynthetic:  sentinelSynthetic(resAttrs),
 					SeverityText:       lr.GetSeverityText(),
 					SeverityNumber:     int32(lr.GetSeverityNumber()),
 					Body:               anyValueToString(lr.GetBody()),
-					TraceID:            nullableHex(lr.GetTraceId()),
-					SpanID:             nullableHex(lr.GetSpanId()),
-					Attributes:         kvToMap(lr.GetAttributes()),
-					ResourceAttributes: resAttrs,
+					TraceId:            emptyHex(lr.GetTraceId()),
+					SpanId:             emptyHex(lr.GetSpanId()),
 					ContractVersion:    contractVer,
-					IngestedAt:         now,
+					LogAttributes:      kvToMap(lr.GetAttributes()),
+					ResourceAttributes: remainingResourceAttrs(resAttrs),
 				})
 			}
 		}

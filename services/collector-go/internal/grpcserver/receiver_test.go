@@ -101,24 +101,21 @@ func TestTraceReceiver_NonZeroIDs(t *testing.T) {
 	}
 	s := capture.spans[0]
 
-	if got, want := s.TraceID, "0102030405060708090a0b0c0d0e0f10"; got != want {
-		t.Errorf("TraceID: got %q, want %q", got, want)
+	if got, want := s.TraceId, "0102030405060708090a0b0c0d0e0f10"; got != want {
+		t.Errorf("TraceId: got %q, want %q", got, want)
 	}
-	if got, want := s.SpanID, "1112131415161718"; got != want {
-		t.Errorf("SpanID: got %q, want %q", got, want)
+	if got, want := s.SpanId, "1112131415161718"; got != want {
+		t.Errorf("SpanId: got %q, want %q", got, want)
 	}
-	if s.ParentSpanID == nil {
-		t.Fatalf("ParentSpanID: got nil, want 2122232425262728")
-	}
-	if got, want := *s.ParentSpanID, "2122232425262728"; got != want {
-		t.Errorf("ParentSpanID: got %q, want %q", got, want)
+	if got, want := s.ParentSpanId, "2122232425262728"; got != want {
+		t.Errorf("ParentSpanId: got %q, want %q", got, want)
 	}
 	if s.ServiceName != "test-svc" {
 		t.Errorf("ServiceName: got %q, want test-svc", s.ServiceName)
 	}
 }
 
-func TestTraceReceiver_RootSpan_NilParent(t *testing.T) {
+func TestTraceReceiver_RootSpan_EmptyParent(t *testing.T) {
 	capture := &captureSender{}
 	conn := dialTestServer(t, startTestServer(t, capture))
 
@@ -147,8 +144,8 @@ func TestTraceReceiver_RootSpan_NilParent(t *testing.T) {
 	if len(capture.spans) != 1 {
 		t.Fatalf("expected 1 span, got %d", len(capture.spans))
 	}
-	if capture.spans[0].ParentSpanID != nil {
-		t.Errorf("root span ParentSpanID should be nil, got %q", *capture.spans[0].ParentSpanID)
+	if capture.spans[0].ParentSpanId != "" {
+		t.Errorf("root span ParentSpanId should be empty, got %q", capture.spans[0].ParentSpanId)
 	}
 }
 
@@ -181,8 +178,8 @@ func TestTraceReceiver_AllZeroParent_TreatedAsRoot(t *testing.T) {
 	if len(capture.spans) != 1 {
 		t.Fatalf("expected 1 span, got %d", len(capture.spans))
 	}
-	if capture.spans[0].ParentSpanID != nil {
-		t.Errorf("all-zero ParentSpanId should be nil in store, got %q", *capture.spans[0].ParentSpanID)
+	if capture.spans[0].ParentSpanId != "" {
+		t.Errorf("all-zero ParentSpanId should be empty in store, got %q", capture.spans[0].ParentSpanId)
 	}
 }
 
@@ -224,17 +221,11 @@ func TestLogsReceiver_TraceAndSpanIDs(t *testing.T) {
 	}
 	l := capture.logs[0]
 
-	if l.TraceID == nil {
-		t.Fatal("TraceID should not be nil")
+	if got, want := l.TraceId, "deadbeefcafebabe0123456789abcdef"; got != want {
+		t.Errorf("TraceId: got %q, want %q", got, want)
 	}
-	if got, want := *l.TraceID, "deadbeefcafebabe0123456789abcdef"; got != want {
-		t.Errorf("TraceID: got %q, want %q", got, want)
-	}
-	if l.SpanID == nil {
-		t.Fatal("SpanID should not be nil")
-	}
-	if got, want := *l.SpanID, "1122334455667788"; got != want {
-		t.Errorf("SpanID: got %q, want %q", got, want)
+	if got, want := l.SpanId, "1122334455667788"; got != want {
+		t.Errorf("SpanId: got %q, want %q", got, want)
 	}
 	if l.Body != "test log message" {
 		t.Errorf("Body: got %q, want test log message", l.Body)
@@ -279,14 +270,14 @@ func TestMetricsReceiver_GaugeValue(t *testing.T) {
 	}
 	m := capture.metrics[0]
 
-	if m.Name != "latency.ms" {
-		t.Errorf("Name: got %q, want latency.ms", m.Name)
+	if m.MetricName != "latency.ms" {
+		t.Errorf("MetricName: got %q, want latency.ms", m.MetricName)
 	}
 	if m.Value != 99.9 {
 		t.Errorf("Value: got %f, want 99.9", m.Value)
 	}
-	if m.Type != "gauge" {
-		t.Errorf("Type: got %q, want gauge", m.Type)
+	if m.MetricType != "gauge" {
+		t.Errorf("MetricType: got %q, want gauge", m.MetricType)
 	}
 	if m.ServiceName != "metric-svc" {
 		t.Errorf("ServiceName: got %q, want metric-svc", m.ServiceName)

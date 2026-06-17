@@ -10,7 +10,6 @@ import (
 )
 
 func TraceRequest(req *collectortrace.ExportTraceServiceRequest) []model.Span {
-	now := time.Now().UTC()
 	var spans []model.Span
 
 	for _, rs := range req.GetResourceSpans() {
@@ -20,19 +19,24 @@ func TraceRequest(req *collectortrace.ExportTraceServiceRequest) []model.Span {
 
 		for _, ss := range rs.GetScopeSpans() {
 			for _, s := range ss.GetSpans() {
+				startNano := int64(s.GetStartTimeUnixNano())
+				endNano := int64(s.GetEndTimeUnixNano())
 				spans = append(spans, model.Span{
-					TraceID:            hexBytes(s.GetTraceId()),
-					SpanID:             hexBytes(s.GetSpanId()),
-					ParentSpanID:       nullableHex(s.GetParentSpanId()),
+					Timestamp:          time.Unix(0, startNano).UTC(),
+					TraceId:            hexBytes(s.GetTraceId()),
+					SpanId:             hexBytes(s.GetSpanId()),
+					ParentSpanId:       emptyHex(s.GetParentSpanId()),
+					SpanName:           s.GetName(),
 					ServiceName:        svcName,
-					Name:               s.GetName(),
-					StartUnixNano:      int64(s.GetStartTimeUnixNano()),
-					EndUnixNano:        int64(s.GetEndTimeUnixNano()),
+					SentinelScenario:   sentinelScenario(resAttrs),
+					SentinelRunId:      sentinelRunId(resAttrs),
+					CloudProvider:      cloudProvider(resAttrs),
+					SentinelSynthetic:  sentinelSynthetic(resAttrs),
+					Duration:           endNano - startNano,
 					StatusCode:         spanStatus(s.GetStatus()),
-					Attributes:         kvToMap(s.GetAttributes()),
-					ResourceAttributes: resAttrs,
 					ContractVersion:    contractVer,
-					IngestedAt:         now,
+					SpanAttributes:     kvToMap(s.GetAttributes()),
+					ResourceAttributes: remainingResourceAttrs(resAttrs),
 				})
 			}
 		}

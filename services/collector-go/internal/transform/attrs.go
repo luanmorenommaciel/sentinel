@@ -9,6 +9,17 @@ import (
 	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
 )
 
+// hoistedKeys are the resource-attribute keys promoted to first-class columns.
+// They are extracted individually and removed from the ResourceAttributes map,
+// mirroring the Rust collector's schema design.
+var hoistedKeys = map[string]bool{
+	"service.name":        true,
+	"sentinel.scenario":   true,
+	"sentinel.run_id":     true,
+	"cloud.provider":      true,
+	"sentinel.synthetic":  true,
+}
+
 func kvToMap(kvs []*commonv1.KeyValue) map[string]string {
 	m := make(map[string]string, len(kvs))
 	for _, kv := range kvs {
@@ -42,6 +53,17 @@ func resourceToMap(r *resourcev1.Resource) map[string]string {
 	return kvToMap(r.Attributes)
 }
 
+// remainingResourceAttrs returns resource attributes with hoisted keys removed.
+func remainingResourceAttrs(res map[string]string) map[string]string {
+	m := make(map[string]string, len(res))
+	for k, v := range res {
+		if !hoistedKeys[k] {
+			m[k] = v
+		}
+	}
+	return m
+}
+
 func hexBytes(b []byte) string {
 	if len(b) == 0 {
 		return ""
@@ -49,24 +71,18 @@ func hexBytes(b []byte) string {
 	return hex.EncodeToString(b)
 }
 
-// nullableHex returns nil for empty bytes (root span has no parent).
-func nullableHex(b []byte) *string {
+// emptyHex returns "" for empty or all-zero bytes (root span / absent correlation IDs).
+func emptyHex(b []byte) string {
 	s := hexBytes(b)
 	if s == "" {
-		return nil
+		return ""
 	}
-	// all-zero bytes means no parent span
-	allZero := true
 	for _, c := range b {
 		if c != 0 {
-			allZero = false
-			break
+			return s
 		}
 	}
-	if allZero {
-		return nil
-	}
-	return &s
+	return ""
 }
 
 func serviceNameFromResource(res map[string]string) string {
@@ -74,6 +90,17 @@ func serviceNameFromResource(res map[string]string) string {
 		return v
 	}
 	return "unknown"
+}
+
+func sentinelScenario(res map[string]string) string  { return res["sentinel.scenario"] }
+func sentinelRunId(res map[string]string) string     { return res["sentinel.run_id"] }
+func cloudProvider(res map[string]string) string     { return res["cloud.provider"] }
+
+func sentinelSynthetic(res map[string]string) uint8 {
+	if res["sentinel.synthetic"] == "true" {
+		return 1
+	}
+	return 0
 }
 
 func contractVersionFromResource(res map[string]string) string {

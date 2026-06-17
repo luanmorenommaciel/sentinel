@@ -9,26 +9,31 @@ import (
 
 func (s *Store) insertLogs(ctx context.Context, logs []model.Log) error {
 	batch, err := s.conn.PrepareBatch(ctx, `INSERT INTO otel_logs (
-		time_unix_nano, service_name, severity_text, severity_number, body,
-		trace_id, span_id,
-		attributes, resource_attributes, contract_version, ingested_at
+		Timestamp,
+		ServiceName, SentinelScenario, SentinelRunId, CloudProvider, SentinelSynthetic,
+		SeverityText, SeverityNumber, Body,
+		TraceId, SpanId, ContractVersion,
+		LogAttributes, ResourceAttributes
 	)`)
 	if err != nil {
 		return fmt.Errorf("insertLogs prepare: %w", err)
 	}
 	for _, l := range logs {
 		if err := batch.Append(
-			l.TimeUnixNano,
+			l.Timestamp,
 			l.ServiceName,
+			l.SentinelScenario,
+			l.SentinelRunId,
+			l.CloudProvider,
+			l.SentinelSynthetic,
 			l.SeverityText,
 			l.SeverityNumber,
 			l.Body,
-			l.TraceID,
-			l.SpanID,
-			l.Attributes,
-			l.ResourceAttributes,
+			l.TraceId,
+			l.SpanId,
 			l.ContractVersion,
-			l.IngestedAt,
+			l.LogAttributes,
+			l.ResourceAttributes,
 		); err != nil {
 			return fmt.Errorf("insertLogs append: %w", err)
 		}

@@ -9,23 +9,27 @@ import (
 
 func (s *Store) insertMetrics(ctx context.Context, metrics []model.Metric) error {
 	batch, err := s.conn.PrepareBatch(ctx, `INSERT INTO otel_metrics (
-		time_unix_nano, service_name, name, type, value,
-		attributes, resource_attributes, contract_version, ingested_at
+		Timestamp, MetricName, MetricType, Value,
+		ServiceName, SentinelScenario, SentinelRunId, CloudProvider, SentinelSynthetic,
+		ContractVersion, Attributes, ResourceAttributes
 	)`)
 	if err != nil {
 		return fmt.Errorf("insertMetrics prepare: %w", err)
 	}
 	for _, m := range metrics {
 		if err := batch.Append(
-			m.TimeUnixNano,
-			m.ServiceName,
-			m.Name,
-			m.Type,
+			m.Timestamp,
+			m.MetricName,
+			m.MetricType,
 			m.Value,
+			m.ServiceName,
+			m.SentinelScenario,
+			m.SentinelRunId,
+			m.CloudProvider,
+			m.SentinelSynthetic,
+			m.ContractVersion,
 			m.Attributes,
 			m.ResourceAttributes,
-			m.ContractVersion,
-			m.IngestedAt,
 		); err != nil {
 			return fmt.Errorf("insertMetrics append: %w", err)
 		}

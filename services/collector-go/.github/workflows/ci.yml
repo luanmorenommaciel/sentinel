@@ -44,7 +44,7 @@ jobs:
           - 9000:9000
           - 8123:8123
         env:
-          CLICKHOUSE_DB: sentinel
+          CLICKHOUSE_DB: default
           CLICKHOUSE_USER: otelgen
           CLICKHOUSE_PASSWORD: otelgen_secret
           CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
@@ -70,7 +70,7 @@ jobs:
 
       - name: Run integration tests
         env:
-          CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@localhost:9000/sentinel"
+          CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@localhost:9000/default"
         run: CGO_ENABLED=0 go test ./internal/chstore/... -tags integration -v -timeout 60s
 
   docker:

@@ -11,39 +11,35 @@ import (
 	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
 )
 
+func sentinelResourceAttrs() []*commonv1.KeyValue {
+	return []*commonv1.KeyValue{
+		kv("service.name", "pubsub-ingestion-topic"),
+		kv("cloud.provider", "gcp"),
+		kv("sentinel.scenario", "baseline"),
+		kv("sentinel.run_id", "golden-fixed-run"),
+		kv("sentinel.synthetic", "true"),
+	}
+}
+
 func TestMetricsRequest_Gauge(t *testing.T) {
 	req := &collectormetrics.ExportMetricsServiceRequest{
-		ResourceMetrics: []*metricsv1.ResourceMetrics{
-			{
-				Resource: &resourcev1.Resource{
-					Attributes: []*commonv1.KeyValue{
-						kv("service.name", "pubsub-ingestion-topic"),
-					},
-				},
-				ScopeMetrics: []*metricsv1.ScopeMetrics{
-					{
-						Metrics: []*metricsv1.Metric{
-							{
-								Name: "operation.latency_ms",
-								Data: &metricsv1.Metric_Gauge{
-									Gauge: &metricsv1.Gauge{
-										DataPoints: []*metricsv1.NumberDataPoint{
-											{
-												TimeUnixNano: 1700000000000000000,
-												Value:        &metricsv1.NumberDataPoint_AsDouble{AsDouble: 30.032},
-												Attributes: []*commonv1.KeyValue{
-													kv("component.name", "messaging.ingestion_topic"),
-												},
-											},
-										},
-									},
-								},
-							},
+		ResourceMetrics: []*metricsv1.ResourceMetrics{{
+			Resource: &resourcev1.Resource{Attributes: sentinelResourceAttrs()},
+			ScopeMetrics: []*metricsv1.ScopeMetrics{{
+				Metrics: []*metricsv1.Metric{{
+					Name: "operation.latency_ms",
+					Data: &metricsv1.Metric_Gauge{
+						Gauge: &metricsv1.Gauge{
+							DataPoints: []*metricsv1.NumberDataPoint{{
+								TimeUnixNano: 1700000000000000000,
+								Value:        &metricsv1.NumberDataPoint_AsDouble{AsDouble: 30.032},
+								Attributes:   []*commonv1.KeyValue{kv("component.name", "messaging.ingestion_topic")},
+							}},
 						},
 					},
-				},
-			},
-		},
+				}},
+			}},
+		}},
 	}
 
 	metrics := transform.MetricsRequest(req)
@@ -53,88 +49,88 @@ func TestMetricsRequest_Gauge(t *testing.T) {
 	}
 	m := metrics[0]
 
-	if m.Name != "operation.latency_ms" {
-		t.Errorf("name: got %q", m.Name)
+	if m.MetricName != "operation.latency_ms" {
+		t.Errorf("MetricName: got %q", m.MetricName)
 	}
-	if m.Type != "gauge" {
-		t.Errorf("type: got %q", m.Type)
+	if m.MetricType != "gauge" {
+		t.Errorf("MetricType: got %q", m.MetricType)
 	}
 	if m.Value != 30.032 {
-		t.Errorf("value: got %f", m.Value)
+		t.Errorf("Value: got %f", m.Value)
 	}
 	if m.ServiceName != "pubsub-ingestion-topic" {
-		t.Errorf("service_name: got %q", m.ServiceName)
+		t.Errorf("ServiceName: got %q", m.ServiceName)
+	}
+	if m.SentinelScenario != "baseline" {
+		t.Errorf("SentinelScenario: got %q", m.SentinelScenario)
+	}
+	if m.SentinelRunId != "golden-fixed-run" {
+		t.Errorf("SentinelRunId: got %q", m.SentinelRunId)
+	}
+	if m.CloudProvider != "gcp" {
+		t.Errorf("CloudProvider: got %q", m.CloudProvider)
+	}
+	if m.SentinelSynthetic != 1 {
+		t.Errorf("SentinelSynthetic: got %d, want 1", m.SentinelSynthetic)
+	}
+	// hoisted keys must NOT appear in ResourceAttributes
+	if _, ok := m.ResourceAttributes["sentinel.scenario"]; ok {
+		t.Errorf("ResourceAttributes should not contain hoisted key sentinel.scenario")
 	}
 }
 
 func TestMetricsRequest_Sum(t *testing.T) {
 	req := &collectormetrics.ExportMetricsServiceRequest{
-		ResourceMetrics: []*metricsv1.ResourceMetrics{
-			{
-				Resource: &resourcev1.Resource{
-					Attributes: []*commonv1.KeyValue{kv("service.name", "svc")},
-				},
-				ScopeMetrics: []*metricsv1.ScopeMetrics{
-					{
-						Metrics: []*metricsv1.Metric{
-							{
-								Name: "operation.request_count",
-								Data: &metricsv1.Metric_Sum{
-									Sum: &metricsv1.Sum{
-										DataPoints: []*metricsv1.NumberDataPoint{
-											{
-												TimeUnixNano: 1700000000000000000,
-												Value:        &metricsv1.NumberDataPoint_AsDouble{AsDouble: 1.0},
-											},
-										},
-									},
-								},
-							},
+		ResourceMetrics: []*metricsv1.ResourceMetrics{{
+			Resource: &resourcev1.Resource{
+				Attributes: []*commonv1.KeyValue{kv("service.name", "svc")},
+			},
+			ScopeMetrics: []*metricsv1.ScopeMetrics{{
+				Metrics: []*metricsv1.Metric{{
+					Name: "operation.request_count",
+					Data: &metricsv1.Metric_Sum{
+						Sum: &metricsv1.Sum{
+							DataPoints: []*metricsv1.NumberDataPoint{{
+								TimeUnixNano: 1700000000000000000,
+								Value:        &metricsv1.NumberDataPoint_AsDouble{AsDouble: 1.0},
+							}},
 						},
 					},
-				},
-			},
-		},
+				}},
+			}},
+		}},
 	}
 
 	metrics := transform.MetricsRequest(req)
 	if len(metrics) != 1 {
 		t.Fatalf("expected 1 metric, got %d", len(metrics))
 	}
-	if metrics[0].Type != "sum" {
-		t.Errorf("type: expected sum, got %q", metrics[0].Type)
+	if metrics[0].MetricType != "sum" {
+		t.Errorf("MetricType: expected sum, got %q", metrics[0].MetricType)
 	}
 }
 
 func TestMetricsRequest_Histogram(t *testing.T) {
 	req := &collectormetrics.ExportMetricsServiceRequest{
-		ResourceMetrics: []*metricsv1.ResourceMetrics{
-			{
-				Resource: &resourcev1.Resource{
-					Attributes: []*commonv1.KeyValue{kv("service.name", "svc")},
-				},
-				ScopeMetrics: []*metricsv1.ScopeMetrics{
-					{
-						Metrics: []*metricsv1.Metric{
-							{
-								Name: "request.duration",
-								Data: &metricsv1.Metric_Histogram{
-									Histogram: &metricsv1.Histogram{
-										DataPoints: []*metricsv1.HistogramDataPoint{
-											{
-												TimeUnixNano:   1700000000000000000,
-												ExplicitBounds: []float64{10, 50, 100},
-												BucketCounts:   []uint64{2, 5, 8, 12},
-											},
-										},
-									},
-								},
-							},
+		ResourceMetrics: []*metricsv1.ResourceMetrics{{
+			Resource: &resourcev1.Resource{
+				Attributes: []*commonv1.KeyValue{kv("service.name", "svc")},
+			},
+			ScopeMetrics: []*metricsv1.ScopeMetrics{{
+				Metrics: []*metricsv1.Metric{{
+					Name: "request.duration",
+					Data: &metricsv1.Metric_Histogram{
+						Histogram: &metricsv1.Histogram{
+							DataPoints: []*metricsv1.HistogramDataPoint{{
+								TimeUnixNano:   1700000000000000000,
+								ExplicitBounds: []float64{10, 50, 100},
+								BucketCounts:   []uint64{2, 5, 8, 12},
+							}},
 						},
 					},
-				},
-			},
-		},
+				}},
+			}},
+		}},
 	}
 
 	metrics := transform.MetricsRequest(req)
@@ -144,11 +140,11 @@ func TestMetricsRequest_Histogram(t *testing.T) {
 		t.Fatalf("expected 4 histogram rows, got %d", len(metrics))
 	}
 	for _, m := range metrics {
-		if m.Type != "histogram" {
-			t.Errorf("type: expected histogram, got %q", m.Type)
+		if m.MetricType != "histogram" {
+			t.Errorf("MetricType: expected histogram, got %q", m.MetricType)
 		}
-		if m.Name != "request.duration" {
-			t.Errorf("name: expected request.duration, got %q", m.Name)
+		if m.MetricName != "request.duration" {
+			t.Errorf("MetricName: expected request.duration, got %q", m.MetricName)
 		}
 		if _, ok := m.Attributes["bucket_le"]; !ok {
 			t.Errorf("bucket_le attribute missing")

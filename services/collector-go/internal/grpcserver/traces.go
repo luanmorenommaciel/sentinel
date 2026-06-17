@@ -29,10 +29,10 @@ func (r *traceReceiver) Export(
 			)
 		}
 		slog.Default().Debug("span received",
-			"trace_id", s.TraceID,
-			"span_id", s.SpanID,
+			"trace_id", s.TraceId,
+			"span_id", s.SpanId,
 			"service", s.ServiceName,
-			"name", s.Name,
+			"name", s.SpanName,
 		)
 		r.sender.SendSpan(s)
 	}

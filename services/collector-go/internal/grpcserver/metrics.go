@@ -30,8 +30,8 @@ func (r *metricsReceiver) Export(
 		}
 		slog.Default().Debug("metric received",
 			"service", m.ServiceName,
-			"name", m.Name,
-			"type", m.Type,
+			"name", m.MetricName,
+			"type", m.MetricType,
 			"value", m.Value,
 		)
 		r.sender.SendMetric(m)

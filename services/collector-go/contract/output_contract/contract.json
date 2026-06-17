@@ -2,9 +2,9 @@
   "version": "1.0.0",
   "producer": "sentinel/otel-collector",
   "consumer": "clickstack",
-  "description": "Schema of OpenTelemetry signals ingested into ClickHouse by Sentinel Pod 2 (Go OTel Collector). Consumers must reference this contract before querying the sentinel database.",
-  "updated": "2026-06-07",
-  "database": "sentinel",
+  "description": "Schema of OpenTelemetry signals ingested into ClickHouse by Sentinel Pod 2 (Go OTel Collector). Consumers must reference this contract before querying the default database.",
+  "updated": "2026-06-16",
+  "database": "default",
   "input_contract": "contract/schema/schema_output.json",
   "tables": {
     "otel_spans": {
