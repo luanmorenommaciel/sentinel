@@ -1,0 +1,45 @@
+# {{DOMAIN_NAME}} Quick Reference
+
+> Fast lookup tables. For code examples and deeper context, see linked concepts/patterns.
+
+## {{SECTION_1_NAME}}
+
+| {{COL1_HEADER}} | {{COL2_HEADER}} | {{COL3_HEADER}} |
+|-----------------|-----------------|-----------------|
+| {{ROW1_COL1}} | {{ROW1_COL2}} | {{ROW1_COL3}} |
+| {{ROW2_COL1}} | {{ROW2_COL2}} | {{ROW2_COL3}} |
+
+## {{SECTION_2_NAME}}
+
+| {{COL1_HEADER}} | {{COL2_HEADER}} |
+|-----------------|-----------------|
+| {{ROW1_COL1}} | {{ROW1_COL2}} |
+| {{ROW2_COL1}} | {{ROW2_COL2}} |
+
+## Decision Matrix
+
+| Use Case | Choose | Why |
+|----------|--------|-----|
+| {{USE_CASE_1}} | {{CHOICE_1}} | {{REASON_1}} |
+| {{USE_CASE_2}} | {{CHOICE_2}} | {{REASON_2}} |
+
+## Common Pitfalls
+
+| Don't | Do | Why |
+|-------|-----|-----|
+| {{DONT_1}} | {{DO_1}} | {{WHY_1}} |
+| {{DONT_2}} | {{DO_2}} | {{WHY_2}} |
+
+## Sentinel-Specific Gotchas
+
+| Context | Gotcha | Workaround |
+|---------|--------|------------|
+| {{CONTEXT_1}} | {{GOTCHA_1}} | {{WORKAROUND_1}} |
+
+## Related Documentation
+
+| Topic | Path |
+|-------|------|
+| Full Index | `index.md` |
+| Getting Started | `concepts/{{GETTING_STARTED}}.md` |
+| Production Pattern | `patterns/{{KEY_PATTERN}}.md` |
