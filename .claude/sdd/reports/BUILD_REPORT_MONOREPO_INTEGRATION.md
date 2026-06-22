@@ -188,9 +188,43 @@ verifications that cannot run in this environment (logged as gaps, not blockers)
 
 ---
 
+## Addendum — POD 2 / POD 3 integration (2026-06-22, post-pull)
+
+Pulled commits `660920d` (POD 3 bronze DDL), `4c60245` (POD-2 foundation), `de5cc24`
+(schema standardization). Verified the merged state and aligned the orchestrator:
+
+**What POD 2/3 delivered**
+- **POD 2 normalized both collectors** to write an *identical* schema (`otel_logs /
+  otel_traces / otel_metrics` + `otel_metrics_1m` MV) to the **`default`** db.
+- **POD 3 added a canonical bronze DDL** at `infra/clickhouse/init.d/01-bronze-otel.sql`
+  (`sentinel.*`, OTel-contrib style, metrics split into 5 type tables).
+
+**Compliance check (answering "are the collectors compliant with the canonical DDL?")**
+- ✅ The two collectors are compliant **with each other** (normalized, identical columns).
+- ✅ The canonical bronze DDL is **valid** — applies cleanly on boot; all 9 `sentinel.*`
+  tables created, no errors.
+- ❌ The collectors do **NOT** write to the canonical bronze. They write the normalized
+  schema to `default.*`; the bronze `sentinel.*` tables stay empty. This is the
+  **documented gap** (`docs/research/pod3-bronze-gap.md`) — bridging collector output to
+  the bronze landing is the remaining POD 2→3 work.
+
+**Orchestrator fixes applied**
+1. `collector-go` DSN `…/sentinel` → `…/default` — Go now writes the normalized schema to
+   `default` (its migration header: "Database: default (matches Rust)"); the old DSN would
+   have written to the wrong db.
+2. Mounted the bronze DDL into `/docker-entrypoint-initdb.d/02-bronze-otel.sql` so the
+   canonical schema is present + validated at runtime.
+
+**Re-verified end-to-end (full `make e2e`, baseline seed 42, window 5m → 233,100 signals)**
+```text
+COLLECTOR=rust  →  default.{otel_logs=40200, otel_traces=40200, otel_metrics=152700}   (0 errors)
+COLLECTOR=go    →  default.{otel_logs=40200, otel_traces=40200, otel_metrics=152700}   (0 errors)
+sentinel.* bronze present, valid, empty (collectors don't feed it yet — the gap)
+```
+All test suites green post-pull: generator 176; Go grpcserver + transform; Rust 88 (CH tests `#[ignore]`d).
+
 ## Next Step
 
-1. On a machine with `cargo`/`go` (or via Docker), run `make e2e COLLECTOR=rust` and
-   `make e2e COLLECTOR=go` to close AT-003/004/007.
-2. Tag the `0.0.x` baseline once the e2e passes.
-3. `/ship .claude/sdd/features/DEFINE_MONOREPO_INTEGRATION.md` when ready.
+1. **Bridge collectors → bronze** (the open gap): make the collectors write to POD 3's
+   `sentinel.*` bronze (per `pod3-bronze-gap.md`, an export-layer-only change).
+2. `/ship` when the team is ready to archive the baseline.

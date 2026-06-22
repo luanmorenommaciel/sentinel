@@ -44,7 +44,8 @@ Variables: `COLLECTOR` (rust\|go, default rust), `SCENARIO`, `SEED`, `WINDOW`.
 - **Each service keeps its native toolchain** (`pyproject`/`otelgen`, `cargo`/`just`, `go`/`make`). Don't impose a shared build system.
 - **`contracts/v1/` is the single source of truth** for the generator→collector handoff. The producer (generator) owns it; consumers reference it via `CONTRACTS_DIR` (`/contracts/v1` in containers). Bump versions by directory (`contracts/v2/`) for breaking changes.
 - **Only one collector runs at a time** — both bind OTLP `:4317`. The generator targets the `collector` network alias, so it works regardless of which is active.
-- **ClickHouse storage schema is per-collector and intentionally NOT reconciled** — `default.*` (Rust) vs `sentinel.*` (Go). A canonical model is POD 3's job; see [docs/clickhouse-schema-divergence.md](docs/clickhouse-schema-divergence.md). Until then, schema init is collector-scoped (`make init`).
+- **Both collectors now write an identical *normalized* schema to `default.*`** (POD 2 normalization — `otel_logs / otel_traces / otel_metrics` + `otel_metrics_1m` MV, Sentinel-enriched). `make init` applies each collector's own DDL to `default.*`; they are structurally identical (see [docs/clickhouse-schema-divergence-solved.md](docs/clickhouse-schema-divergence-solved.md)).
+- **POD 3's canonical bronze** (`sentinel.*`, OTel-contrib style, metrics split by type) is auto-applied on ClickHouse boot from `infra/clickhouse/init.d/01-bronze-otel.sql`. **The collectors do NOT write to it yet** — bridging the normalized `default.*` output to the bronze `sentinel.*` landing is the open gap ([docs/research/pod3-bronze-gap.md](docs/research/pod3-bronze-gap.md)).
 - **No comments-as-noise**; match each service's existing style. Keep the repo clean for the agentic phase that follows this baseline.
 
 ## Gotchas
@@ -57,4 +58,6 @@ Variables: `COLLECTOR` (rust\|go, default rust), `SCENARIO`, `SEED`, `WINDOW`.
 
 `v0.0.1` baseline is verified end-to-end (generator 176 unit tests; both collectors unit + live-ClickHouse integration; full `make e2e` for both). Not yet on `main`.
 
-Deferred to the post-baseline phase (not yet present): POD 3 data-modeling service + canonical schema, contract *enforcement* in the Go collector, CI/CD + branch protection + pre-commit gates, and the agentic layer (agent fleet, KBs, routines). See [.claude/sdd/reports/BUILD_REPORT_MONOREPO_INTEGRATION.md](.claude/sdd/reports/BUILD_REPORT_MONOREPO_INTEGRATION.md).
+POD 2 (collector normalization) and POD 3 (canonical bronze DDL) have landed: both collectors write an identical `default.*` schema, and the `sentinel.*` bronze is present and valid. **Open gap:** the collectors don't yet write to the bronze landing (`docs/research/pod3-bronze-gap.md`).
+
+Still deferred: contract *enforcement* in the Go collector, the collector→bronze bridge, CI/CD + branch protection + pre-commit gates, and the agentic layer (agent fleet, KBs, routines). See [.claude/sdd/reports/BUILD_REPORT_MONOREPO_INTEGRATION.md](.claude/sdd/reports/BUILD_REPORT_MONOREPO_INTEGRATION.md).

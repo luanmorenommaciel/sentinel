@@ -25,6 +25,10 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - ./infra/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./infra/clickhouse-users.d/zz-default-network.xml:/etc/clickhouse-server/users.d/zz-default-network.xml:ro
+      # POD 3 canonical bronze schema (sentinel.* contrib-style) — auto-applied on first boot.
+      # The collectors currently write the POD-2 normalized schema to default.* (see
+      # docs/research/pod3-bronze-gap.md); the bronze tables land here ready for that bridge.
+      - ./infra/clickhouse/init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/02-bronze-otel.sql:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/?query=SELECT+1"]
       interval: 5s
@@ -61,7 +65,9 @@ services:
     environment:
       CONTRACTS_DIR: /contracts/v1
       GRPC_PORT: "4317"
-      CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@clickhouse:9000/sentinel"
+      # POD 2 normalization: the Go collector now writes the same schema as Rust to the
+      # `default` db (migrations header: "Database: default (matches Rust)").
+      CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@clickhouse:9000/default"
     volumes:
       - ./contracts:/contracts:ro
     ports:
