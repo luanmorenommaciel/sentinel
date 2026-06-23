@@ -2,12 +2,20 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Superseded by [ADR-0007](0007-bronze-canonical-contract.md) |
 | Date | 2026-06-01 |
 | Owners | Pod 2 (OTel Collector) |
 | Proposer | Victor Urquiola |
 | Supersedes | — |
 | Related | ADR-0004 (Collector language) · [schema design note](../research/clickhouse-schema-pod2.md) · [Pod 2→Pod 3 read contract](../contracts/pod2-pod3-read-contract.md) · ADR-0006 (optional-ID representation) |
+
+> **Superseded by [ADR-0007](0007-bronze-canonical-contract.md) (2026-06-23).** Pod 3
+> adopted the otel-collector-contrib v0.105.0 bronze schema (`sentinel.*`) as the canonical
+> Pod 2 → Pod 3 contract, and the Rust collector was aligned to write into it — reversing
+> this ADR's "hand-roll for the MVP" decision (its Option B is now chosen). The hand-rolled
+> `default.*` schema, resource-key hoisting, and the `otel_metrics_1m` MV are retired. Kept
+> for history. **Note:** this ADR's PascalCase choice was *vindicated* — it made the
+> migration to contrib rename-light rather than a rewrite (see ADR-0007 §Consequences).
 
 ## Context
 

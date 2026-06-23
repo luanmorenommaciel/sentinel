@@ -1,5 +1,11 @@
 # Proposal — Canonical ClickHouse Read Schema (Pod 2 → Pod 3)
 
+> **RESOLVED / CLOSED (2026-06-23).** This proposal weighed options A/B/C for reconciling the
+> Rust and Go schemas. Outcome: Pod 3's **bronze** schema (contrib v0.105.0, `sentinel.*`)
+> was adopted as canonical and the Rust collector aligned to write into it — recorded in
+> [ADR-0007](../adr/0007-bronze-canonical-contract.md) and the
+> [v1.0.0.1 read contract](../contracts/pod2-pod3-read-contract.md). Kept for history.
+
 | Field | Value |
 |---|---|
 | Status | **Proposed — for Crew B sync sign-off** |

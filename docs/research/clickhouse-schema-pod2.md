@@ -1,5 +1,11 @@
 # ClickHouse Schema Design — Pod 2 Day-3 Note
 
+> **SUPERSEDED (2026-06-23) by [ADR-0007](../adr/0007-bronze-canonical-contract.md).** This
+> note is the design rationale for the *hand-rolled* `default.*` schema (ADR-0005, now
+> superseded). The canonical schema is now Pod 3's bronze (contrib v0.105.0, `sentinel.*`).
+> Kept for history — the ClickHouse reasoning (codecs, TTL-vs-fixture-age, MergeTree choices)
+> remains a useful reference.
+
 > Author: Pod 2 (clickhouse-engineer agent, 2026-06-01)
 > Status: Design draft — pending ADR and Pod 3 review
 > Source of truth: `services/collector-rust/src/contract.rs` (v1.0.0)

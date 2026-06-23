@@ -7,7 +7,15 @@
 | Owners | Pod 2 (OTel Collector) |
 | Proposer | Victor Urquiola |
 | Supersedes | — |
-| Related | ADR-0005 (storage schema) · [schema design note](../research/clickhouse-schema-pod2.md) · [Pod 2→Pod 3 read contract](../contracts/pod2-pod3-read-contract.md) |
+| Related | ADR-0005 (storage schema) · ADR-0007 (bronze canonical contract — refines this) · [schema design note](../research/clickhouse-schema-pod2.md) · [Pod 2→Pod 3 read contract](../contracts/pod2-pod3-read-contract.md) |
+
+> **Refined by [ADR-0007](0007-bronze-canonical-contract.md) (2026-06-23), not superseded.**
+> The `''`=absent decision still holds on the bronze schema: bronze stores `TraceId` /
+> `SpanId` / `ParentSpanId` as plain `String`, and its own `otel_traces_trace_id_ts_mv`
+> treats `WHERE TraceId != ''` as "present". One change under bronze — the hex-validity
+> invariant below is now enforced **collector-side at insert** (bronze is a generic contrib
+> schema that does not validate IDs), rather than being implied by the table. Pod 3 readers
+> still use `WHERE Column = ''` / `!= ''` exactly as stated here.
 
 ## Context
 
@@ -83,4 +91,4 @@ it cannot collide with a legitimate value. Pod 3 readers treat `Column = ''` as
 
 - [`services/collector-rust/src/contract.rs`](../../services/collector-rust/src/contract.rs) — `Option<String>` ID fields + hex validation (`is_hex_32` / `is_hex_16`)
 - [`docs/research/clickhouse-schema-pod2.md`](../research/clickhouse-schema-pod2.md) — open question ADR-Q2
-- [`infra/clickhouse/ddl/001_otel_logs.sql`](../../infra/clickhouse/ddl/001_otel_logs.sql), [`002_otel_traces.sql`](../../infra/clickhouse/ddl/002_otel_traces.sql) — `''`-sentinel column comments
+- [`infra/clickhouse/init.d/01-bronze-otel.sql`](../../infra/clickhouse/init.d/01-bronze-otel.sql) — bronze `String` ID columns + the `otel_traces_trace_id_ts_mv` `TraceId != ''` filter (the hand-rolled `infra/clickhouse/ddl/00{1,2}_*.sql` originally referenced here are superseded by ADR-0007)
