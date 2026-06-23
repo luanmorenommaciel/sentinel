@@ -9,13 +9,15 @@ integrated monorepo baseline (`v0.0.1`) gluing the POD branches together.
 ```
 generator (otelgen) ──OTLP gRPC :4317──▶ collector (rust | go) ──▶ ClickHouse :8123/:9000 ──▶ Play UI :8123/play
                        │                  (selected via COLLECTOR)
-                       └── validates against contracts/v1 (single source of truth)
+                       └── validates against contracts/generator/v1 (single source of truth)
 ```
 
 ## Layout
 
 ```
-contracts/v1/              # SSOT: OTLP output schema + golden fixture (producer = generator)
+contracts/                 # SSOT contract registry, namespaced by producing Pod
+  generator/v1/            #   POD 1 → POD 2 input contract (OTLP output schema + golden fixture)
+  collector/v1/            #   POD 2 → POD 3 read contract (bronze sentinel.* semantic layer)
 services/
   generator-python/        # POD 1 — synthetic OTLP generator (otelgen CLI); config/ holds scenarios/topology/provider_profiles
   collector-rust/          # POD 2 — OTLP→ClickHouse collector (Rust); own DDL in infra/clickhouse/ddl/
@@ -42,7 +44,7 @@ Variables: `COLLECTOR` (rust\|go, default rust), `SCENARIO`, `SEED`, `WINDOW`.
 ## Conventions
 
 - **Each service keeps its native toolchain** (`pyproject`/`otelgen`, `cargo`/`just`, `go`/`make`). Don't impose a shared build system.
-- **`contracts/v1/` is the single source of truth** for the generator→collector handoff. The producer (generator) owns it; consumers reference it via `CONTRACTS_DIR` (`/contracts/v1` in containers). Bump versions by directory (`contracts/v2/`) for breaking changes.
+- **`contracts/` is the contract registry, namespaced by producing Pod.** `generator/v1/` is the POD 1 → POD 2 input contract — the producer (generator) owns it and consumers reference it via `CONTRACTS_DIR` (`/contracts/generator/v1` in containers). `collector/v1/` is the POD 2 → POD 3 read contract (the bronze `sentinel.*` semantic layer) — one shared, implementation-agnostic contract every collector writes into. Bump versions per boundary by directory (`generator/v2/`, `collector/v2/`) for breaking changes.
 - **Only one collector runs at a time** — both bind OTLP `:4317`. The generator targets the `collector` network alias, so it works regardless of which is active.
 - **Both collectors now write an identical *normalized* schema to `default.*`** (POD 2 normalization — `otel_logs / otel_traces / otel_metrics` + `otel_metrics_1m` MV, Sentinel-enriched). `make init` applies each collector's own DDL to `default.*`; they are structurally identical (see [docs/clickhouse-schema-divergence-solved.md](docs/clickhouse-schema-divergence-solved.md)).
 - **POD 3's canonical bronze** (`sentinel.*`, OTel-contrib style, metrics split by type) is auto-applied on ClickHouse boot from `infra/clickhouse/init.d/01-bronze-otel.sql`. **The collectors do NOT write to it yet** — bridging the normalized `default.*` output to the bronze `sentinel.*` landing is the open gap ([docs/research/pod3-bronze-gap.md](docs/research/pod3-bronze-gap.md)).

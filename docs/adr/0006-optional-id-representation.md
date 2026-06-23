@@ -7,7 +7,7 @@
 | Owners | Pod 2 (OTel Collector) |
 | Proposer | Victor Urquiola |
 | Supersedes | — |
-| Related | ADR-0005 (storage schema) · ADR-0007 (bronze canonical contract — refines this) · [schema design note](../research/clickhouse-schema-pod2.md) · [Pod 2→Pod 3 read contract](../../contracts/pod2-pod3-read-contract.md) |
+| Related | ADR-0005 (storage schema) · ADR-0007 (bronze canonical contract — refines this) · [schema design note](../research/clickhouse-schema-pod2.md) · [Pod 2→Pod 3 read contract](../../contracts/collector/v1/pod2-pod3-read-contract.md) |
 
 > **Refined by [ADR-0007](0007-bronze-canonical-contract.md) (2026-06-23), not superseded.**
 > The `''`=absent decision still holds on the bronze schema: bronze stores `TraceId` /

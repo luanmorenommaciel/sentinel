@@ -20,7 +20,7 @@ GOLDEN_STEP_SECONDS = 1.0
 GOLDEN_RATE = 20
 
 _contracts_dir = os.environ.get("CONTRACTS_DIR")
-_contracts_root = Path(_contracts_dir) if _contracts_dir else Path(__file__).resolve().parents[4] / "contracts" / "v1"
+_contracts_root = Path(_contracts_dir) if _contracts_dir else Path(__file__).resolve().parents[4] / "contracts" / "generator" / "v1"
 GOLDEN_FILE = _contracts_root / "golden" / "baseline_seed42.jsonl"
 
 

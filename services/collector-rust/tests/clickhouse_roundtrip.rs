@@ -55,6 +55,7 @@ fn golden_path() -> PathBuf {
     p.push("..");
     p.push("..");
     p.push("contracts");
+    p.push("generator");
     p.push("v1");
     p.push("golden");
     p.push("baseline_seed42.jsonl");

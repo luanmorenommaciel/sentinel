@@ -7,7 +7,7 @@
 | Owners | Pod 2 (OTel Collector) · Pod 3 (Data modelling) |
 | Proposer | Victor Urquiola |
 | Supersedes | ADR-0005 (hand-rolled ClickHouse storage schema) |
-| Related | ADR-0006 (optional-ID representation — refined, not superseded) · ADR-0004 (Collector language) · [Pod 2→Pod 3 read contract](../../contracts/pod2-pod3-read-contract.md) · [bronze gap analysis](../research/pod3-bronze-gap.md) · [schema-divergence note](../clickhouse-schema-divergence.md) · bronze DDL `infra/clickhouse/init.d/01-bronze-otel.sql` |
+| Related | ADR-0006 (optional-ID representation — refined, not superseded) · ADR-0004 (Collector language) · [Pod 2→Pod 3 read contract](../../contracts/collector/v1/pod2-pod3-read-contract.md) · [bronze gap analysis](../research/pod3-bronze-gap.md) · [schema-divergence note](../clickhouse-schema-divergence.md) · bronze DDL `infra/clickhouse/init.d/01-bronze-otel.sql` |
 
 ## Context
 
@@ -131,6 +131,6 @@ moves to silver and must be rebuilt there.
 
 - [`infra/clickhouse/init.d/01-bronze-otel.sql`](../../infra/clickhouse/init.d/01-bronze-otel.sql) — the canonical bronze DDL (Pod 3, contrib v0.105.0)
 - [`docs/research/pod3-bronze-gap.md`](../research/pod3-bronze-gap.md) — gap analysis, minimum-change set, and the live evidence
-- [`contracts/pod2-pod3-read-contract.md`](../../contracts/pod2-pod3-read-contract.md) — the read contract (rewritten to v1.0.0.1)
+- [`contracts/collector/v1/pod2-pod3-read-contract.md`](../../contracts/collector/v1/pod2-pod3-read-contract.md) — the read contract (rewritten to v1.0.0.1)
 - [ADR-0005](0005-clickhouse-storage-schema.md) (superseded) · [ADR-0006](0006-optional-id-representation.md) (refined)
 - [`services/collector-rust/src/clickhouse_exporter.rs`](../../services/collector-rust/src/clickhouse_exporter.rs) — the aligned exporter

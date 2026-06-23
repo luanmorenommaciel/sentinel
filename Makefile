@@ -71,7 +71,7 @@ build:               ## Build all service images (generator + both collectors)
 test: test-generator test-collector-rust test-collector-go  ## Run all unit test suites
 
 test-generator:      ## Generator unit tests (pytest)
-	$(DK_RUN) -w /w/services/generator-python -e HOME=/tmp -e CONTRACTS_DIR=/w/contracts/v1 \
+	$(DK_RUN) -w /w/services/generator-python -e HOME=/tmp -e CONTRACTS_DIR=/w/contracts/generator/v1 \
 		python:3.12-slim bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest jsonschema && /tmp/v/bin/python -m pytest tests/unit -q"
 
 test-collector-rust: ## Rust collector tests (cargo test; live-ClickHouse tests are #[ignore]d)

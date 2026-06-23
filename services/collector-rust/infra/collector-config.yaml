@@ -2,7 +2,7 @@
 # Paths + host names are container-relative (see docker-compose.collector.yml).
 
 input:
-  # Mounted from the monorepo-root contracts/v1/golden → /data (read-only).
+  # Mounted from the monorepo-root contracts/generator/v1/golden → /data (read-only).
   path: /data/baseline_seed42.jsonl
 
 clickhouse:

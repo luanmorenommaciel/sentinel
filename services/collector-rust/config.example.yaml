@@ -9,7 +9,7 @@
 
 # Where to read NDJSON-encoded signals from.
 input:
-  path: ../../contracts/v1/golden/baseline_seed42.jsonl
+  path: ../../contracts/generator/v1/golden/baseline_seed42.jsonl
 
 # ClickHouse target. Omit this WHOLE section for count-only mode (parse + tally,
 # no database). The `clickhouse` 0.13 crate speaks RowBinary over HTTP — use the

@@ -17,9 +17,9 @@ RUN pip install --no-cache-dir .
 # image at /app/contract; can be overridden by mounting a host directory at runtime.
 COPY config/ ./contract/
 
-# The canonical OTLP output contract (contracts/v1) is the cross-service SSOT and is
+# The canonical OTLP output contract (contracts/generator/v1) is the cross-service SSOT and is
 # mounted read-only at runtime (see root docker-compose.yml). CONTRACTS_DIR points at it.
-ENV CONTRACTS_DIR=/contracts/v1
+ENV CONTRACTS_DIR=/contracts/generator/v1
 
 # Drop privileges
 USER appuser

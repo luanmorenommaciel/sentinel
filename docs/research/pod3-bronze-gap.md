@@ -6,7 +6,7 @@
 | Date | 2026-06-16 |
 | Author | Victor Urquiola (Pod 2) |
 | Purpose | Capture the exact schema gap between the validated Rust collector's ClickHouse output and POD3's bronze landing schema, and scope the minimum change to make them compatible **without** altering the OTLP ingest path. |
-| Related | [ADR-0005](../adr/0005-clickhouse-storage-schema.md) · [ADR-0006](../adr/0006-optional-id-representation.md) · [pod2→pod3 read contract](../../contracts/pod2-pod3-read-contract.md) · [canonical-read-schema proposal](../proposals/canonical-read-schema.md) · POD3 bronze DDL (`01-bronze-layer.sql`, provided 2026-06-16) |
+| Related | [ADR-0005](../adr/0005-clickhouse-storage-schema.md) · [ADR-0006](../adr/0006-optional-id-representation.md) · [pod2→pod3 read contract](../../contracts/collector/v1/pod2-pod3-read-contract.md) · [canonical-read-schema proposal](../proposals/canonical-read-schema.md) · POD3 bronze DDL (`01-bronze-layer.sql`, provided 2026-06-16) |
 | Constraint | Rust collector remains the Phase-1 reference implementation. No contrib-collector switch. |
 
 ---

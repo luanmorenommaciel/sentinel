@@ -14,15 +14,15 @@ CONTRACT_VERSION = "1.0.0"
 def schema_path() -> Path:
     """Absolute path to the published JSON Schema for the OTLP output contract.
 
-    The canonical contract is the monorepo SSOT at contracts/v1. It is resolved via
-    the CONTRACTS_DIR env var (set to /contracts/v1 in containers). For local dev we
+    The canonical contract is the monorepo SSOT at contracts/generator/v1. It is resolved via
+    the CONTRACTS_DIR env var (set to /contracts/generator/v1 in containers). For local dev we
     fall back to the repo root, walking up from
     services/generator-python/src/otelgen/contract/output_schema.py.
     """
     contracts_dir = os.environ.get("CONTRACTS_DIR")
     if contracts_dir:
         return Path(contracts_dir) / "schema" / "otlp_output.schema.json"
-    return Path(__file__).resolve().parents[5] / "contracts" / "v1" / "schema" / "otlp_output.schema.json"
+    return Path(__file__).resolve().parents[5] / "contracts" / "generator" / "v1" / "schema" / "otlp_output.schema.json"
 
 
 def signal_to_contract_dict(signal: Signal) -> dict:

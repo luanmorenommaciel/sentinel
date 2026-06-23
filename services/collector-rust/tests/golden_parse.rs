@@ -19,12 +19,13 @@ use std::path::PathBuf;
 
 /// Resolve the path to the golden file from the crate's manifest dir. Tests
 /// run from `services/collector-rust/`, the golden lives at the repo
-/// root under `contracts/v1/golden/` (the monorepo contract SSOT).
+/// root under `contracts/generator/v1/golden/` (the monorepo contract SSOT).
 fn golden_path() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("..");
     p.push("..");
     p.push("contracts");
+    p.push("generator");
     p.push("v1");
     p.push("golden");
     p.push("baseline_seed42.jsonl");

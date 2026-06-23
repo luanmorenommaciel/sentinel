@@ -27,8 +27,8 @@ services:
         condition: service_healthy
     volumes:
       # Golden fixture (read-only) + the container's config.
-      # Golden now lives at the monorepo-root contracts/v1/golden (was contract/golden pre-monorepo).
-      - ../../../contracts/v1/golden:/data:ro
+      # Golden now lives at the monorepo-root contracts/generator/v1/golden (was contract/golden pre-monorepo).
+      - ../../../contracts/generator/v1/golden:/data:ro
       - ./collector-config.yaml:/etc/sentinel/config.yaml:ro
     command: ["/etc/sentinel/config.yaml"]
     # Runs once and exits; do not restart.

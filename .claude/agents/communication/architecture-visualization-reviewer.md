@@ -59,7 +59,7 @@ Sentinel-internal docs:
 |---|---|
 | `.claude/docs/CREW_B_GLOSSARY.md` | Terminology drift (e.g. "Hotel" vs OTel Collector) is a drift finding |
 | `docs/adr/README.md` | ADR statuses — to detect diagram-vs-ADR drift (A7) |
-| `docs/contracts/` | Contract versions — to detect diagram-vs-contract drift (A7) |
+| `contracts/` | Contract versions — to detect diagram-vs-contract drift (A7) |
 
 External fallback (rare — this domain is first-party): only if a diagramming-tool syntax question arises; close the loop with `/enrich-kb architecture-diagramming`.
 
@@ -141,7 +141,7 @@ Cross-agent handoffs:
 ## Sentinel-specific behavior
 
 - **Terminology drift is a finding.** "Hotel" for OTel Collector, or any term off the `CREW_B_GLOSSARY.md`, is reported as A7 drift.
-- **Contract-version awareness.** Cross-checks diagram labels against `docs/contracts/` and ADR statuses; a diagram saying `v1.0.0` where the contract is `v1.0.0-rc.1` is a drift blocker.
+- **Contract-version awareness.** Cross-checks diagram labels against `contracts/` and ADR statuses; a diagram saying `v1.0.0` where the contract is `v1.0.0-rc.1` is a drift blocker.
 - **ADR-0004 is the standing contract-primacy counter-case.** A bake-off/language diagram is implementation-decisive — feature the impl; do not gold-plate a contract.
 - **The `:4317` trust boundary.** Foreign/untrusted OTLP enters at `:4317` (why `grpc_validation` defaults to `warn`). It sits *inside* Pod 2's ownership zone, so ownership-only diagrams hide it — flag **A11** and recommend a distinct trust perimeter.
 - **Honors the project rules:** Mermaid (never ASCII art), no emojis in committed artifacts (status glyphs ✅/🔶/⏳ are the sanctioned exception for diagram status, used inside node labels only).

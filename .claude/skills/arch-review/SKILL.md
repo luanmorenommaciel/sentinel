@@ -27,7 +27,7 @@ Examples:
 
 ## What it does
 
-1. **Gather** — locate the architecture surface: READMEs, `docs/adr/**`, `docs/contracts/**`, architecture docs, and every fenced `mermaid` block.
+1. **Gather** — locate the architecture surface: READMEs, `docs/adr/**`, `contracts/**`, architecture docs, and every fenced `mermaid` block.
 2. **Classify (P0)** — for each artifact the agent first establishes diagram type · audience · intended claim · what's decisive, and picks the matching rubric (prevents false positives on non-boundary or implementation-decisive diagrams).
 3. **Analyze** — apply the P0→P7 framework + anti-pattern catalogue through the rubric P0 selected.
 4. **Report** — emit findings across six lenses (classification · hierarchy+accessibility · contract · ownership+trust boundaries · storytelling · recommendations), each traced to a principle and a `file:line`, severity-rated.
@@ -41,7 +41,7 @@ Examples:
 Resolve scope (arg or repo root), then collect the inputs the report is built from.
 
 ```text
-Glob("**/README.md"); Glob("docs/adr/**/*.md"); Glob("docs/contracts/**/*.md")
+Glob("**/README.md"); Glob("docs/adr/**/*.md"); Glob("contracts/**/*.md")
 Grep("```mermaid", output_mode="files_with_matches")   # every diagram block
 Read(<each candidate>)                                  # READMEs, ADRs, contract docs
 ```

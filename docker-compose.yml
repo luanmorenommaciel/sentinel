@@ -43,7 +43,7 @@ services:
     # Pass the runtime config (grpc + clickhouse sections) as argv[1] → SERVER mode.
     command: ["/etc/sentinel/config.yaml"]
     environment:
-      CONTRACTS_DIR: /contracts/v1
+      CONTRACTS_DIR: /contracts/generator/v1
       CLICKHOUSE_URL: "http://clickhouse:8123"
     volumes:
       - ./contracts:/contracts:ro
@@ -63,7 +63,7 @@ services:
       context: ./services/collector-go
     image: sentinel-collector-go:dev
     environment:
-      CONTRACTS_DIR: /contracts/v1
+      CONTRACTS_DIR: /contracts/generator/v1
       GRPC_PORT: "4317"
       # POD 2 normalization: the Go collector now writes the same schema as Rust to the
       # `default` db (migrations header: "Database: default (matches Rust)").
@@ -85,7 +85,7 @@ services:
       context: ./services/generator-python
     image: sentinel-generator:dev
     environment:
-      CONTRACTS_DIR: /contracts/v1
+      CONTRACTS_DIR: /contracts/generator/v1
     volumes:
       - ./contracts:/contracts:ro
     # No long-running command — driven on demand by `make generate`

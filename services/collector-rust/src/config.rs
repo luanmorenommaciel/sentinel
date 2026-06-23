@@ -6,7 +6,7 @@
 //!
 //! ```yaml
 //! input:
-//!   path: ../../contracts/v1/golden/baseline_seed42.jsonl
+//!   path: ../../contracts/generator/v1/golden/baseline_seed42.jsonl
 //! clickhouse:                 # omit this whole section for count-only mode
 //!   url: http://localhost:8123
 //!   database: default
@@ -35,7 +35,7 @@ use thiserror::Error;
 use crate::contract::CONTRACT_VERSION;
 
 /// Default golden fixture path, relative to the crate's run directory.
-const DEFAULT_INPUT_PATH: &str = "../../contracts/v1/golden/baseline_seed42.jsonl";
+const DEFAULT_INPUT_PATH: &str = "../../contracts/generator/v1/golden/baseline_seed42.jsonl";
 
 /// Top-level collector configuration.
 ///
