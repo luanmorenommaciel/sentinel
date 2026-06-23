@@ -125,7 +125,7 @@ Contracts are **language-agnostic shared assets** — never duplicated inside an
 | Boundary | Artifact | Version | Status |
 |---|---|---|---|
 | **Pod 1 → Pod 2** (input) | [`contracts/v1/`](contracts/v1/) (`schema/otlp_output.schema.json` + `golden/`) | **v1.0.0** | ✅ Frozen |
-| **Pod 2 → Pod 3** (output) | [`docs/contracts/pod2-pod3-read-contract.md`](docs/contracts/pod2-pod3-read-contract.md) → the **bronze DDL** ([`infra/clickhouse/init.d/01-bronze-otel.sql`](infra/clickhouse/init.d/01-bronze-otel.sql)) | **v1.0.0.1** | ✅ Agreed contract boundary (Pod 3 sign-off pending) |
+| **Pod 2 → Pod 3** (output) | [`contracts/pod2-pod3-read-contract.md`](contracts/pod2-pod3-read-contract.md) → the **bronze DDL** ([`infra/clickhouse/init.d/01-bronze-otel.sql`](infra/clickhouse/init.d/01-bronze-otel.sql)) | **v1.0.0.1** | ✅ Agreed contract boundary (Pod 3 sign-off pending) |
 
 **Input** — three signal types (`log` / `span` / `metric`), 5 guaranteed `sentinel.*`/`cloud.provider` resource keys, contract-versioned. A golden fixture (`baseline_seed42.jsonl`, 48 logs + 48 spans + 183 metrics) is the conformance oracle.
 
@@ -231,9 +231,9 @@ Run `make help` for all targets and the active `COLLECTOR / SCENARIO / SEED / WI
 | # | Item | Type | Where |
 |---|---|---|---|
 | 1 | Collector language bake-off not formally accepted (Rust is the reference) | Open | [ADR-0004](docs/adr/0004-collector-implementation-language.md) |
-| 2 | Bronze = canonical Pod 2 → Pod 3 contract (`Proposed`; Pod 3 sign-off pending) | Pending | [ADR-0007](docs/adr/0007-bronze-canonical-contract.md) · [read contract](docs/contracts/pod2-pod3-read-contract.md) |
+| 2 | Bronze = canonical Pod 2 → Pod 3 contract (`Proposed`; Pod 3 sign-off pending) | Pending | [ADR-0007](docs/adr/0007-bronze-canonical-contract.md) · [read contract](contracts/pod2-pod3-read-contract.md) |
 | 3 | Sentinel keys are `Map` probes under bronze (no typed columns) — materialize in silver? | Open | [ADR-0007 §Trade-offs](docs/adr/0007-bronze-canonical-contract.md) |
-| 4 | `otel_metrics_1m` rolling-stats moved to Pod 3 silver (Tier-1 input) | Handoff | [read contract §2.3](docs/contracts/pod2-pod3-read-contract.md) |
+| 4 | `otel_metrics_1m` rolling-stats moved to Pod 3 silver (Tier-1 input) | Handoff | [read contract §2.3](contracts/pod2-pod3-read-contract.md) |
 | 5 | Histogram / Summary metrics not emitted (no v1.0.0 type) | Known gap | `services/collector-rust/src/otlp.rs` |
 | 6 | Go collector still writes `default.*` — needs the same bronze alignment | Pending | `services/collector-go/` |
 
@@ -241,7 +241,7 @@ Run `make help` for all targets and the active `COLLECTOR / SCENARIO / SEED / WI
 
 ## 10. Pointers
 
-[Rust collector](services/collector-rust/) · [ADRs](docs/adr/README.md) · [Pod 2 → Pod 3 read contract](docs/contracts/pod2-pod3-read-contract.md) · [bronze gap analysis](docs/research/pod3-bronze-gap.md) · [bronze DDL](infra/clickhouse/init.d/01-bronze-otel.sql) · [Crew B standards](.claude/docs/)
+[Rust collector](services/collector-rust/) · [ADRs](docs/adr/README.md) · [Pod 2 → Pod 3 read contract](contracts/pod2-pod3-read-contract.md) · [bronze gap analysis](docs/research/pod3-bronze-gap.md) · [bronze DDL](infra/clickhouse/init.d/01-bronze-otel.sql) · [Crew B standards](.claude/docs/)
 
 ---
 

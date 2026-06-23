@@ -4,7 +4,7 @@
 > Rust and Go schemas. Outcome: Pod 3's **bronze** schema (contrib v0.105.0, `sentinel.*`)
 > was adopted as canonical and the Rust collector aligned to write into it — recorded in
 > [ADR-0007](../adr/0007-bronze-canonical-contract.md) and the
-> [v1.0.0.1 read contract](../contracts/pod2-pod3-read-contract.md). Kept for history.
+> [v1.0.0.1 read contract](../../contracts/pod2-pod3-read-contract.md). Kept for history.
 
 | Field | Value |
 |---|---|
@@ -14,7 +14,7 @@
 | Decision owners | Captain + Pod 2 leads (Alex Botelho · Victor Urquiola · Ruan Pomponet) |
 | Affects | Pod 2 (both collectors) · Pod 3 (Watchers / data modeling) |
 | Supersedes question | "DEFINE v1.1: do not reconcile schemas — POD 3 decides later" |
-| Related | [ADR-0004](../adr/0004-collector-implementation-language.md) · [ADR-0005](../adr/0005-clickhouse-storage-schema.md) · [ADR-0006](../adr/0006-optional-id-representation.md) · [read contract](../contracts/pod2-pod3-read-contract.md) · [divergence doc](../clickhouse-schema-divergence.md) |
+| Related | [ADR-0004](../adr/0004-collector-implementation-language.md) · [ADR-0005](../adr/0005-clickhouse-storage-schema.md) · [ADR-0006](../adr/0006-optional-id-representation.md) · [read contract](../../contracts/pod2-pod3-read-contract.md) · [divergence doc](../clickhouse-schema-divergence.md) |
 
 ---
 

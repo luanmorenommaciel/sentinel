@@ -70,4 +70,4 @@ In those cases the implementation is legitimately the hero, and flagging "Implem
 ## Sources
 
 - First-party: Sentinel Pod 2 README diagram review, 2026-06-09
-- `docs/contracts/pod2-pod3-read-contract.md` — the worked read-contract
+- `contracts/pod2-pod3-read-contract.md` — the worked read-contract

@@ -7,7 +7,7 @@
 | Owners | Pod 2 (OTel Collector) |
 | Proposer | Victor Urquiola |
 | Supersedes | — |
-| Related | ADR-0004 (Collector language) · [schema design note](../research/clickhouse-schema-pod2.md) · [Pod 2→Pod 3 read contract](../contracts/pod2-pod3-read-contract.md) · ADR-0006 (optional-ID representation) |
+| Related | ADR-0004 (Collector language) · [schema design note](../research/clickhouse-schema-pod2.md) · [Pod 2→Pod 3 read contract](../../contracts/pod2-pod3-read-contract.md) · ADR-0006 (optional-ID representation) |
 
 > **Superseded by [ADR-0007](0007-bronze-canonical-contract.md) (2026-06-23).** Pod 3
 > adopted the otel-collector-contrib v0.105.0 bronze schema (`sentinel.*`) as the canonical
@@ -96,7 +96,7 @@ to the standard schema is real work (shadow table + dual-write + cutover, since
 1. Day-4/5: write the Rust exporter; prove golden file → ClickHouse round-trips
    to the expected 48/48/183 counts (verifies the schema is real, not just valid).
 2. Resolve ADR-0006 (optional-ID representation) — it changes column types.
-3. Freeze the [Pod 2 → Pod 3 read contract](../contracts/pod2-pod3-read-contract.md)
+3. Freeze the [Pod 2 → Pod 3 read contract](../../contracts/pod2-pod3-read-contract.md)
    to v1.0.0 after (1) + (2) + Pod 3 review.
 
 ## References

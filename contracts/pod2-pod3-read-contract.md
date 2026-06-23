@@ -8,9 +8,9 @@
 | Producer | Pod 2 (OTel Collector) |
 | Consumer | Pod 3 (Volume · Schema · Latency · Storage Watchers) |
 | Transport | ClickHouse — HTTP `:8123` / native `:9000`, database **`sentinel`** |
-| Source of truth | [`infra/clickhouse/init.d/01-bronze-otel.sql`](../../infra/clickhouse/init.d/01-bronze-otel.sql) — the bronze DDL (Pod-3-owned, otel-collector-contrib v0.105.0) |
-| Decisions | [ADR-0007](../adr/0007-bronze-canonical-contract.md) (bronze = canonical) · [ADR-0006](../adr/0006-optional-id-representation.md) (optional IDs, refined) · ~~ADR-0005~~ (superseded) |
-| Rationale | [`docs/research/pod3-bronze-gap.md`](../research/pod3-bronze-gap.md) (gap analysis + live evidence) |
+| Source of truth | [`infra/clickhouse/init.d/01-bronze-otel.sql`](../infra/clickhouse/init.d/01-bronze-otel.sql) — the bronze DDL (Pod-3-owned, otel-collector-contrib v0.105.0) |
+| Decisions | [ADR-0007](../docs/adr/0007-bronze-canonical-contract.md) (bronze = canonical) · [ADR-0006](../docs/adr/0006-optional-id-representation.md) (optional IDs, refined) · ~~ADR-0005~~ (superseded) |
+| Rationale | [`docs/research/pod3-bronze-gap.md`](../docs/research/pod3-bronze-gap.md) (gap analysis + live evidence) |
 
 > **What changed in 1.0.0.1 (consumers must update reads).** This contract previously documented Pod 2's
 > *hand-rolled* `default.*` schema (ADR-0005). Per **ADR-0007**, the canonical read
@@ -187,7 +187,7 @@ re-dumping the bronze DDL — see its header).
 ## Acceptance (Pod 3 sign-off)
 
 The bronze schema is already the agreed contract boundary (`1.0.0.1`); full ratification
-(flipping [ADR-0007](../adr/0007-bronze-canonical-contract.md) → Accepted) needs **all** of:
+(flipping [ADR-0007](../docs/adr/0007-bronze-canonical-contract.md) → Accepted) needs **all** of:
 
 1. ☑ **Round-trip into bronze verified** *(2026-06-23)* — generator → Rust collector →
    `sentinel.*` lands `40,200 logs / 40,200 traces / 152,700 metrics` (gauge 83,400 + sum
@@ -234,8 +234,8 @@ floor your baselines need.
 
 ## See also
 
-- [`infra/clickhouse/init.d/01-bronze-otel.sql`](../../infra/clickhouse/init.d/01-bronze-otel.sql) — bronze DDL (structural source of truth)
-- [`docs/research/pod3-bronze-gap.md`](../research/pod3-bronze-gap.md) — gap analysis + live evidence
-- [ADR-0007](../adr/0007-bronze-canonical-contract.md) (canonical) · [ADR-0006](../adr/0006-optional-id-representation.md) (optional IDs) · [ADR-0005](../adr/0005-clickhouse-storage-schema.md) (superseded)
-- [`services/collector-rust/src/clickhouse_exporter.rs`](../../services/collector-rust/src/clickhouse_exporter.rs) — the aligned exporter
-- [`services/collector-rust/src/contract.rs`](../../services/collector-rust/src/contract.rs) — Pod 1 → Pod 2 contract mirror (the upstream side)
+- [`infra/clickhouse/init.d/01-bronze-otel.sql`](../infra/clickhouse/init.d/01-bronze-otel.sql) — bronze DDL (structural source of truth)
+- [`docs/research/pod3-bronze-gap.md`](../docs/research/pod3-bronze-gap.md) — gap analysis + live evidence
+- [ADR-0007](../docs/adr/0007-bronze-canonical-contract.md) (canonical) · [ADR-0006](../docs/adr/0006-optional-id-representation.md) (optional IDs) · [ADR-0005](../docs/adr/0005-clickhouse-storage-schema.md) (superseded)
+- [`services/collector-rust/src/clickhouse_exporter.rs`](../services/collector-rust/src/clickhouse_exporter.rs) — the aligned exporter
+- [`services/collector-rust/src/contract.rs`](../services/collector-rust/src/contract.rs) — Pod 1 → Pod 2 contract mirror (the upstream side)
