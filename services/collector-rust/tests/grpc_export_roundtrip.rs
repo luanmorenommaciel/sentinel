@@ -14,8 +14,8 @@
 //! ```
 //!
 //! `CLICKHOUSE_URL` (default `http://localhost:8123`) and
-//! `CLICKHOUSE_DATABASE` (default `default`) may be overridden via
-//! environment variables.
+//! `CLICKHOUSE_DATABASE` (default `sentinel`, the bronze database) may be
+//! overridden via environment variables.
 //!
 //! # Timestamp note
 //!
@@ -62,13 +62,13 @@ const TIMESTAMP_NANOS: u64 = 1_900_000_000_000_000_000;
 /// Build a ClickHouse client from the environment.
 ///
 /// Uses `CLICKHOUSE_URL` (defaults to `http://localhost:8123`) and
-/// `CLICKHOUSE_DATABASE` (defaults to `default`).
+/// `CLICKHOUSE_DATABASE` (defaults to `sentinel`, the bronze database).
 fn client_from_env() -> clickhouse::Client {
     #[allow(clippy::disallowed_methods)]
     let url =
         std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
     #[allow(clippy::disallowed_methods)]
-    let database = std::env::var("CLICKHOUSE_DATABASE").unwrap_or_else(|_| "default".to_string());
+    let database = std::env::var("CLICKHOUSE_DATABASE").unwrap_or_else(|_| "sentinel".to_string());
     clickhouse_exporter::build_client_with_database(&url, &database)
 }
 
@@ -134,7 +134,12 @@ async fn otlp_grpc_payload_lands_in_clickhouse() {
 
     // ── 2. TRUNCATE the three tables so we start from a clean slate ────────
     // Using raw SQL queries via the execute() API.
-    for table in ["otel_logs", "otel_traces", "otel_metrics"] {
+    for table in [
+        "otel_logs",
+        "otel_traces",
+        "otel_metrics_gauge",
+        "otel_metrics_sum",
+    ] {
         verify_ch
             .query(&format!("TRUNCATE TABLE {table}"))
             .execute()
@@ -280,11 +285,12 @@ async fn otlp_grpc_payload_lands_in_clickhouse() {
         .await
         .expect("SELECT count() FROM otel_logs");
 
+    // The single gauge data point routes to the bronze gauge table.
     let metric_count: u64 = verify_ch
-        .query("SELECT count() FROM otel_metrics")
+        .query("SELECT count() FROM otel_metrics_gauge")
         .fetch_one()
         .await
-        .expect("SELECT count() FROM otel_metrics");
+        .expect("SELECT count() FROM otel_metrics_gauge");
 
     // ── 8. Shut down the server ────────────────────────────────────────────
     let _ = shutdown_tx.send(());
@@ -293,5 +299,8 @@ async fn otlp_grpc_payload_lands_in_clickhouse() {
     // ── 9. Assert ─────────────────────────────────────────────────────────
     assert_eq!(trace_count, 2, "expected 2 spans in otel_traces");
     assert_eq!(log_count, 1, "expected 1 log in otel_logs");
-    assert_eq!(metric_count, 1, "expected 1 metric in otel_metrics");
+    assert_eq!(
+        metric_count, 1,
+        "expected 1 gauge metric in otel_metrics_gauge"
+    );
 }

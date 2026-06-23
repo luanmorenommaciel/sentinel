@@ -19,7 +19,7 @@ input:
 # section if absent).
 clickhouse:
   url: http://localhost:8123
-  database: default
+  database: sentinel
 
 # OTLP gRPC server. Presence of this section switches the binary into SERVER
 # mode (serve until Ctrl-C) instead of FILE mode (read `input` once, then exit).

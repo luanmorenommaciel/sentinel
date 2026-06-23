@@ -1,13 +1,14 @@
-//! ClickHouse round-trip integration test — requires a running ClickHouse instance.
+//! ClickHouse round-trip integration test — file-mode golden fixture → bronze.
+//!
+//! Proves the Rust collector parses Pod 1's golden fixture and lands it in the
+//! official POD 3 bronze schema (`sentinel.*`).
 //!
 //! # How to run
 //!
-//! 1. Start ClickHouse. The compose file mounts `infra/clickhouse/ddl/` into
-//!    `/docker-entrypoint-initdb.d`, so the schema is auto-applied on first boot
-//!    — no manual `clickhouse-client < …` steps needed:
+//! 1. Start ClickHouse with the bronze schema auto-applied. From
+//!    `services/collector-rust/`:
 //!
 //!    ```sh
-//!    # from services/collector-rust/ (the collector's own ClickHouse stack)
 //!    docker compose -f infra/docker-compose.yml up -d
 //!    # wait for the healthcheck to pass (~10 s)
 //!    ```
@@ -21,28 +22,31 @@
 //!
 //! # Environment variables
 //!
-//! - `CLICKHOUSE_URL` — defaults to `http://localhost:8123` if unset.
+//! - `CLICKHOUSE_URL` — defaults to `http://localhost:8123` if unset. The database
+//!   is fixed to `sentinel` (the bronze database).
 //!
 //! # Why one combined test (not several)
 //!
-//! All scenarios share the same external resource (the live ClickHouse tables)
-//! and each starts by truncating. `cargo test` runs test fns in PARALLEL by
-//! default, so multiple tests truncating + inserting into the same tables would
-//! race (48 + 48 = 96 logs, etc.). Rather than depend on `--test-threads=1`
-//! being remembered, the scenarios are folded into a single sequential test.
+//! All scenarios share the same external resource (the live ClickHouse tables) and
+//! each starts by truncating. `cargo test` runs test fns in PARALLEL by default, so
+//! multiple tests truncating + inserting into the same tables would race. The
+//! scenarios are folded into a single sequential test.
 //!
 //! # Why tests are `#[ignore]`d
 //!
-//! This test requires a live ClickHouse instance. Running it in CI without
-//! Docker Compose available would cause spurious failures. The `#[ignore]`
-//! attribute excludes it from `cargo test` (the gate the parent checks) while
-//! keeping it runnable on demand via `-- --ignored`.
+//! This test requires a live ClickHouse instance. The `#[ignore]` attribute
+//! excludes it from `cargo test` (the gate the parent checks) while keeping it
+//! runnable on demand via `-- --ignored`.
 
 // Tests are allowed to unwrap/expect — failing fast with a diagnostic is the
 // whole point. Production code is governed by `unwrap_used = deny` in Cargo.toml.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
+
+use sentinel_collector::clickhouse_exporter::{
+    build_client_with_database, url_from_env, DEFAULT_CLICKHOUSE_URL,
+};
 
 /// Resolve the path to the golden fixture from the crate's manifest directory.
 /// Tests run from `services/collector-rust/`; the fixture lives two levels up.
@@ -57,61 +61,54 @@ fn golden_path() -> PathBuf {
     p
 }
 
-/// Strip TTL on all three tables so the 2023-11-14-dated golden fixture is not
-/// purged on the first background merge.
-///
-/// # Why this is necessary
-///
-/// The golden fixture (`baseline_seed42.jsonl`) is timestamped **2023-11-14**
-/// — roughly 2.5 years before the current date. ClickHouse evaluates TTL
-/// against *event time* (the `Timestamp` column), so any row with a timestamp
-/// older than `NOW() - INTERVAL 30/90 DAY` is eligible for purging immediately
-/// after the next background merge or `OPTIMIZE`. Inserting expired data makes
-/// `count()` return the right number for a moment, then drop to 0 after the
-/// first merge.
-///
-/// We extend the TTL to 100 years in the test session so we can `OPTIMIZE
-/// FINAL` (to fire the materialized view) without losing the rows. The
-/// production TTL is NOT changed — this only modifies the tables within the
-/// test ClickHouse instance.
-///
-/// See `docs/research/clickhouse-schema-pod2.md` § "Day-4 gotcha: TTL vs. the
-/// golden fixture's timestamp" for the full analysis.
-async fn strip_ttl(client: &clickhouse::Client) {
-    for table in &["otel_logs", "otel_traces", "otel_metrics"] {
-        client
-            .query(&format!(
-                "ALTER TABLE {table} MODIFY TTL toDate(Timestamp) + INTERVAL 100 YEAR"
-            ))
-            .execute()
-            .await
-            .unwrap_or_else(|e| panic!("failed to strip TTL on {table}: {e}"));
-    }
-    // otel_metrics_1m inherits TTL via its own DDL — strip it too so OPTIMIZE
-    // doesn't purge the MV rollup.
-    client
-        .query("ALTER TABLE otel_metrics_1m MODIFY TTL toDate(window_start) + INTERVAL 100 YEAR")
-        .execute()
-        .await
-        .unwrap_or_else(|e| panic!("failed to strip TTL on otel_metrics_1m: {e}"));
+/// A ClickHouse client targeting the bronze `sentinel` database.
+fn bronze_client() -> clickhouse::Client {
+    let url = url_from_env().unwrap_or_else(|| DEFAULT_CLICKHOUSE_URL.to_string());
+    build_client_with_database(&url, "sentinel")
 }
 
-/// Truncate all three signal tables and the rollup table.
-///
-/// Called at the start of each test for idempotency — re-running the test
-/// suite on a live ClickHouse does not accumulate stale rows.
+/// Truncate the bronze tables the collector writes, for idempotent re-runs.
 async fn truncate_tables(client: &clickhouse::Client) {
     for table in &[
         "otel_logs",
         "otel_traces",
-        "otel_metrics",
-        "otel_metrics_1m",
+        "otel_metrics_gauge",
+        "otel_metrics_sum",
     ] {
         client
             .query(&format!("TRUNCATE TABLE IF EXISTS {table}"))
             .execute()
             .await
             .unwrap_or_else(|e| panic!("failed to truncate {table}: {e}"));
+    }
+}
+
+/// Relax the 30-day TTL on the bronze tables so the 2023-dated golden rows are not
+/// purged before we count them.
+///
+/// The golden fixture (`baseline_seed42.jsonl`) is timestamped 2023-11-14 — ~2.5
+/// years before now — so under the bronze 30-day TTL the rows are eligible for
+/// purging on the next background merge (the tables set `ttl_only_drop_parts = 1`).
+/// We push the TTL out ~100 years for the test session; production TTL is
+/// unaffected. `MODIFY TTL` is idempotent, so re-running the suite is safe.
+async fn relax_ttl(client: &clickhouse::Client) {
+    for (table, ttl) in [
+        ("otel_logs", "TimestampTime + INTERVAL 100 YEAR"),
+        ("otel_traces", "toDateTime(Timestamp) + INTERVAL 100 YEAR"),
+        (
+            "otel_metrics_gauge",
+            "toDateTime(TimeUnix) + INTERVAL 100 YEAR",
+        ),
+        (
+            "otel_metrics_sum",
+            "toDateTime(TimeUnix) + INTERVAL 100 YEAR",
+        ),
+    ] {
+        client
+            .query(&format!("ALTER TABLE {table} MODIFY TTL {ttl}"))
+            .execute()
+            .await
+            .unwrap_or_else(|e| panic!("failed to relax TTL on {table}: {e}"));
     }
 }
 
@@ -126,29 +123,31 @@ async fn count_rows(client: &clickhouse::Client, table: &str) -> u64 {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// End-to-end round-trip, run as a single sequential scenario (see the
-/// module-level note on why this is one test, not several).
+/// End-to-end round-trip into the bronze schema, run as a single sequential
+/// scenario (see the module-level note on why this is one test, not several).
 ///
-/// Phase A — parse the golden fixture, export to ClickHouse, verify per-table
-/// row counts and that the materialized view fired.
-/// Phase B — export a second time and verify the append-only MergeTree doubles
-/// the row count (documents the no-deduplication semantics).
+/// Phase A — parse the golden fixture, export to bronze, verify per-table counts.
+/// Phase B — export a second time and verify the append-only MergeTree doubles the
+/// row count (documents the no-deduplication semantics).
 ///
 /// Expected counts from Pod 1's published golden distribution (2026-06-01):
-///   - `otel_logs`:    48 rows
-///   - `otel_traces`:  48 rows
-///   - `otel_metrics`: 183 rows
+///   - `otel_logs`:   48 rows
+///   - `otel_traces`: 48 rows
+///   - metrics:       183 rows, split across `otel_metrics_gauge` + `otel_metrics_sum`
+///
+/// Note: the 2023-dated golden rows are not purged during the test window — bronze
+/// TTL only fires on background merges, which this test does not trigger.
 #[ignore]
 #[tokio::test]
 async fn golden_fixture_round_trip() {
-    let client = sentinel_collector::clickhouse_exporter::client_from_env();
+    let client = bronze_client();
 
-    // Start from a clean slate, then strip TTL so the 2023-dated golden rows
-    // survive the OPTIMIZE FINAL below (see strip_ttl docs for the why).
+    // Start from a clean slate so re-running the suite does not accumulate rows,
+    // then relax the 30-day TTL so the 2023-dated golden rows survive (see relax_ttl).
     truncate_tables(&client).await;
-    strip_ttl(&client).await;
+    relax_ttl(&client).await;
 
-    // ── Phase A: single export → exact counts + MV fired ─────────────────────
+    // ── Phase A: single export → exact counts ────────────────────────────────
 
     let counts = sentinel_collector::run_and_export(&golden_path(), &client)
         .await
@@ -165,27 +164,15 @@ async fn golden_fixture_round_trip() {
 
     let log_count = count_rows(&client, "otel_logs").await;
     let trace_count = count_rows(&client, "otel_traces").await;
-    let metric_count = count_rows(&client, "otel_metrics").await;
+    let gauge_count = count_rows(&client, "otel_metrics_gauge").await;
+    let sum_count = count_rows(&client, "otel_metrics_sum").await;
 
     assert_eq!(log_count, 48, "otel_logs must contain exactly 48 rows");
     assert_eq!(trace_count, 48, "otel_traces must contain exactly 48 rows");
     assert_eq!(
-        metric_count, 183,
-        "otel_metrics must contain exactly 183 rows"
-    );
-
-    // Force merge so the MV blocks are committed to otel_metrics_1m.
-    // OPTIMIZE TABLE FINAL is safe in tests — we never call it in production.
-    client
-        .query("OPTIMIZE TABLE otel_metrics_1m FINAL")
-        .execute()
-        .await
-        .expect("OPTIMIZE otel_metrics_1m must succeed");
-
-    let mv_count = count_rows(&client, "otel_metrics_1m").await;
-    assert!(
-        mv_count > 0,
-        "otel_metrics_1m must have at least one row after OPTIMIZE (MV must have fired on INSERT)"
+        gauge_count + sum_count,
+        183,
+        "gauge + sum metrics must total exactly 183 rows"
     );
 
     // ── Phase B: second export doubles the rows (append-only, no dedup) ───────

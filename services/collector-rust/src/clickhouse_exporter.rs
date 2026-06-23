@@ -1,7 +1,8 @@
 //! ClickHouse exporter for Sentinel OTel Collector — Day 4.
 //!
-//! Converts parsed [`Signal`] values into typed Row structs and batches them
-//! into three ClickHouse tables: `otel_logs`, `otel_traces`, `otel_metrics`.
+//! Converts parsed [`Signal`] values into typed Row structs and writes them to the
+//! bronze `sentinel.*` tables: `otel_logs`, `otel_traces`, and the per-type
+//! `otel_metrics_gauge` / `otel_metrics_sum`.
 //!
 //! # Connection model
 //!
@@ -24,12 +25,13 @@
 //! `OffsetDateTime::from_unix_timestamp_nanos(nanos as i128)`.
 //! Note the **`i128`** cast — the function signature requires `i128`, not `i64`.
 //!
-//! # Resource-key hoisting
+//! # Resource attributes (bronze)
 //!
-//! The five keys guaranteed on every signal by [`REQUIRED_RESOURCE_KEYS`] are
-//! promoted to typed columns (`ServiceName`, `SentinelScenario`, etc.) for
-//! indexed filtering. The remaining resource attributes are kept in
-//! `ResourceAttributes Map(String, String)`. See [`hoist`].
+//! For the bronze tables, only `service.name` is copied into the typed `ServiceName`
+//! column; ALL resource attributes (incl. the
+//! `sentinel.*` / `cloud.provider` keys and the synthesized `contract_version`) are
+//! retained in `ResourceAttributes`, matching the contrib/bronze convention — bronze
+//! has no typed columns for them. See [`service_name_and_resource`].
 
 use std::collections::HashMap;
 
@@ -139,61 +141,6 @@ pub fn url_from_env() -> Option<String> {
     std::env::var("CLICKHOUSE_URL").ok()
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Resource-key hoisting helper
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// The five keys Pod 1 guarantees on every signal, extracted into typed fields.
-///
-/// The `clickhouse` 0.13 crate does not accept `HashMap<K, V>` for
-/// `Map(String, String)` columns. Both `LogAttributes`/`SpanAttributes`/
-/// `Attributes` and `ResourceAttributes` must be supplied as sorted
-/// `Vec<(String, String)>`.
-struct HoistedKeys {
-    service_name: String,
-    sentinel_scenario: String,
-    sentinel_run_id: String,
-    cloud_provider: String,
-    /// `"true"` → 1, anything else → 0.
-    sentinel_synthetic: u8,
-}
-
-/// Extract the five guaranteed resource keys into typed fields and return the
-/// **remaining** keys as a sorted `Vec<(String, String)>`.
-///
-/// The hoisted keys are **not** duplicated into the remainder Vec — each key
-/// appears in exactly one place (typed column OR the Map, never both).
-///
-/// # Panics
-///
-/// Will not panic in practice: contract validation enforces that all five keys
-/// are present before we reach the export stage. If a key is somehow absent
-/// (e.g., the caller bypassed validation), the hoisted field defaults to an
-/// empty string / 0. This is a deliberate defence-in-depth choice: the exporter
-/// should not crash on bad input that passed the receiver.
-fn hoist(mut resource: HashMap<String, String>) -> (HoistedKeys, Vec<(String, String)>) {
-    // Remove returns the value so we can consume the map without cloning.
-    let service_name = resource.remove("service.name").unwrap_or_default();
-    let sentinel_scenario = resource.remove("sentinel.scenario").unwrap_or_default();
-    let sentinel_run_id = resource.remove("sentinel.run_id").unwrap_or_default();
-    let cloud_provider = resource.remove("cloud.provider").unwrap_or_default();
-    let synthetic_str = resource.remove("sentinel.synthetic").unwrap_or_default();
-    let sentinel_synthetic: u8 = if synthetic_str == "true" { 1 } else { 0 };
-
-    // Whatever is left (cloud.account.id, cloud.region, etc.) goes into the Map.
-    let mut remainder: Vec<(String, String)> = resource.into_iter().collect();
-    remainder.sort_by(|a, b| a.0.cmp(&b.0)); // deterministic order
-
-    let keys = HoistedKeys {
-        service_name,
-        sentinel_scenario,
-        sentinel_run_id,
-        cloud_provider,
-        sentinel_synthetic,
-    };
-    (keys, remainder)
-}
-
 /// Convert a `HashMap<String, String>` to a sorted `Vec<(String, String)>`.
 ///
 /// ClickHouse `Map(String, String)` columns require `Vec<(K, V)>` — the
@@ -203,6 +150,21 @@ fn map_to_sorted_vec(map: HashMap<String, String>) -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = map.into_iter().collect();
     v.sort_by(|a, b| a.0.cmp(&b.0));
     v
+}
+
+/// Copy `service.name` into the typed `ServiceName` bronze column and return the
+/// FULL resource map — every key retained, matching the contrib/bronze convention —
+/// as a sorted `Vec`, with the synthesized `contract_version` folded in.
+///
+/// The `sentinel.*` / `cloud.provider` keys are NOT stripped: the bronze tables have
+/// no typed columns for them, so they are preserved inside `ResourceAttributes`.
+fn service_name_and_resource(
+    mut resource: HashMap<String, String>,
+    contract_version: String,
+) -> (String, Vec<(String, String)>) {
+    let service_name = resource.get("service.name").cloned().unwrap_or_default();
+    resource.insert("contract_version".to_string(), contract_version);
+    (service_name, map_to_sorted_vec(resource))
 }
 
 /// Convert `i64` nanoseconds to `time::OffsetDateTime`.
@@ -227,151 +189,95 @@ fn nanos_to_offset_dt(nanos: i64) -> Result<OffsetDateTime, ExporterError> {
 // Field names use `#[serde(rename = "...")]` to map from Rust's snake_case
 // convention to the DDL's PascalCase column names.
 
-/// One row in `otel_logs` (14 columns, matching `infra/clickhouse/ddl/001_otel_logs.sql`).
+/// One row in the bronze `otel_logs` table (`sentinel.*`, OTel-contrib v0.105.0 shape).
+///
+/// Named-column INSERT: bronze columns this collector does not produce (TraceFlags,
+/// Scope*, schema URLs, TimestampDate/Time) take their ClickHouse defaults. Sentinel
+/// metadata (`sentinel.*`, `cloud.provider`, `contract_version`) is carried inside
+/// `ResourceAttributes`, not as typed columns (bronze has none).
 #[derive(clickhouse::Row, Serialize, Debug)]
 pub struct OtelLogRow {
-    // col 1 — DateTime64(9, 'UTC')
     #[serde(
         rename = "Timestamp",
         with = "clickhouse::serde::time::datetime64::nanos"
     )]
     pub timestamp: OffsetDateTime,
-
-    // col 2–6 — hoisted resource keys
     #[serde(rename = "ServiceName")]
     pub service_name: String,
-    #[serde(rename = "SentinelScenario")]
-    pub sentinel_scenario: String,
-    #[serde(rename = "SentinelRunId")]
-    pub sentinel_run_id: String,
-    #[serde(rename = "CloudProvider")]
-    pub cloud_provider: String,
-    /// `"true"` → 1, else → 0. Stored as UInt8.
-    #[serde(rename = "SentinelSynthetic")]
-    pub sentinel_synthetic: u8,
-
-    // col 7–9 — log-specific
     #[serde(rename = "SeverityText")]
     pub severity_text: String,
+    /// Bronze `SeverityNumber` is `UInt8` (OTLP severity is 0..=24).
     #[serde(rename = "SeverityNumber")]
-    pub severity_number: i32,
+    pub severity_number: u8,
     #[serde(rename = "Body")]
     pub body: String,
-
-    // col 10–11 — trace correlation ('' when absent)
+    /// `''` when absent (ADR-0006); consistent with bronze's plain-`String` ID columns.
     #[serde(rename = "TraceId")]
     pub trace_id: String,
     #[serde(rename = "SpanId")]
     pub span_id: String,
-
-    // col 12 — contract metadata
-    #[serde(rename = "ContractVersion")]
-    pub contract_version: String,
-
-    // col 13 — log-level attributes (Map(String, String) → Vec<(String, String)>)
     #[serde(rename = "LogAttributes")]
     pub log_attributes: Vec<(String, String)>,
-
-    // col 14 — remaining resource attributes
     #[serde(rename = "ResourceAttributes")]
     pub resource_attributes: Vec<(String, String)>,
 }
 
-/// One row in `otel_traces` (15 columns, matching `infra/clickhouse/ddl/002_otel_traces.sql`).
+/// One row in the bronze `otel_traces` table (`sentinel.*`, OTel-contrib v0.105.0 shape).
+///
+/// Named-column INSERT: bronze columns this collector does not produce (TraceState,
+/// SpanKind, Scope*, StatusMessage, Events.*, Links.*) take their ClickHouse defaults.
+/// Sentinel metadata + `contract_version` live in `ResourceAttributes`.
 #[derive(clickhouse::Row, Serialize, Debug)]
 pub struct OtelTraceRow {
-    // col 1 — Timestamp (= start_unix_nano)
     #[serde(
         rename = "Timestamp",
         with = "clickhouse::serde::time::datetime64::nanos"
     )]
     pub timestamp: OffsetDateTime,
-
-    // col 2–4 — span identity
     #[serde(rename = "TraceId")]
     pub trace_id: String,
     #[serde(rename = "SpanId")]
     pub span_id: String,
-    /// `None` (root span) → `""`. Non-root spans carry a 16-char lowercase hex string.
+    /// `''` for root spans (ADR-0006).
     #[serde(rename = "ParentSpanId")]
     pub parent_span_id: String,
-
-    // col 5 — span descriptor
     #[serde(rename = "SpanName")]
     pub span_name: String,
-
-    // col 6–10 — hoisted resource keys
     #[serde(rename = "ServiceName")]
     pub service_name: String,
-    #[serde(rename = "SentinelScenario")]
-    pub sentinel_scenario: String,
-    #[serde(rename = "SentinelRunId")]
-    pub sentinel_run_id: String,
-    #[serde(rename = "CloudProvider")]
-    pub cloud_provider: String,
-    #[serde(rename = "SentinelSynthetic")]
-    pub sentinel_synthetic: u8,
-
-    // col 11 — duration = end_unix_nano - start_unix_nano (nanos, Int64)
+    /// `end_unix_nano - start_unix_nano` (nanoseconds).
     #[serde(rename = "Duration")]
     pub duration: i64,
-
-    // col 12 — status
     #[serde(rename = "StatusCode")]
     pub status_code: String,
-
-    // col 13 — contract metadata
-    #[serde(rename = "ContractVersion")]
-    pub contract_version: String,
-
-    // col 14 — span-level attributes
     #[serde(rename = "SpanAttributes")]
     pub span_attributes: Vec<(String, String)>,
-
-    // col 15 — remaining resource attributes
     #[serde(rename = "ResourceAttributes")]
     pub resource_attributes: Vec<(String, String)>,
 }
 
-/// One row in `otel_metrics` (12 columns, matching `infra/clickhouse/ddl/003_otel_metrics.sql`).
+/// One row in the bronze metric tables `otel_metrics_gauge` / `otel_metrics_sum`
+/// (`sentinel.*`, OTel-contrib v0.105.0 shape). The datapoint type selects the table
+/// (see [`export`]) — there is no `MetricType` column. Named-column INSERT, so bronze
+/// columns this collector does not produce (Scope*, MetricDescription/Unit,
+/// StartTimeUnix, Flags, Exemplars.*, AggregationTemporality, IsMonotonic) take
+/// ClickHouse defaults. Sentinel metadata + `contract_version` live in
+/// `ResourceAttributes`.
 #[derive(clickhouse::Row, Serialize, Debug)]
 pub struct OtelMetricRow {
-    // col 1 — Timestamp
-    #[serde(
-        rename = "Timestamp",
-        with = "clickhouse::serde::time::datetime64::nanos"
-    )]
-    pub timestamp: OffsetDateTime,
-
-    // col 2–4 — metric identity
-    #[serde(rename = "MetricName")]
-    pub metric_name: String,
-    #[serde(rename = "MetricType")]
-    pub metric_type: String,
-    #[serde(rename = "Value")]
-    pub value: f64,
-
-    // col 5–9 — hoisted resource keys
     #[serde(rename = "ServiceName")]
     pub service_name: String,
-    #[serde(rename = "SentinelScenario")]
-    pub sentinel_scenario: String,
-    #[serde(rename = "SentinelRunId")]
-    pub sentinel_run_id: String,
-    #[serde(rename = "CloudProvider")]
-    pub cloud_provider: String,
-    #[serde(rename = "SentinelSynthetic")]
-    pub sentinel_synthetic: u8,
-
-    // col 10 — contract metadata
-    #[serde(rename = "ContractVersion")]
-    pub contract_version: String,
-
-    // col 11 — metric-level attributes (note: column is named "Attributes" in metrics DDL)
+    #[serde(rename = "MetricName")]
+    pub metric_name: String,
+    #[serde(
+        rename = "TimeUnix",
+        with = "clickhouse::serde::time::datetime64::nanos"
+    )]
+    pub time_unix: OffsetDateTime,
+    #[serde(rename = "Value")]
+    pub value: f64,
     #[serde(rename = "Attributes")]
     pub attributes: Vec<(String, String)>,
-
-    // col 12 — remaining resource attributes
     #[serde(rename = "ResourceAttributes")]
     pub resource_attributes: Vec<(String, String)>,
 }
@@ -388,23 +294,20 @@ impl OtelLogRow {
     /// real telemetry but required for correctness.
     pub fn try_from_signal(signal: LogSignal) -> Result<Self, ExporterError> {
         let timestamp = nanos_to_offset_dt(signal.time_unix_nano)?;
-        let (hoisted, resource_attributes) = hoist(signal.resource_attributes);
+        let (service_name, resource_attributes) =
+            service_name_and_resource(signal.resource_attributes, signal.contract_version);
         let log_attributes = map_to_sorted_vec(signal.attributes);
 
         Ok(Self {
             timestamp,
-            service_name: hoisted.service_name,
-            sentinel_scenario: hoisted.sentinel_scenario,
-            sentinel_run_id: hoisted.sentinel_run_id,
-            cloud_provider: hoisted.cloud_provider,
-            sentinel_synthetic: hoisted.sentinel_synthetic,
+            service_name,
             severity_text: signal.severity_text,
-            severity_number: signal.severity_number,
+            // Bronze SeverityNumber is UInt8; OTLP severity is 0..=24.
+            severity_number: u8::try_from(signal.severity_number).unwrap_or(0),
             body: signal.body,
-            // None → empty string, per ADR-0006 (empty-string sentinel for optional IDs)
+            // None → '' per ADR-0006 (empty-string sentinel for optional IDs).
             trace_id: signal.trace_id.unwrap_or_default(),
             span_id: signal.span_id.unwrap_or_default(),
-            contract_version: signal.contract_version,
             log_attributes,
             resource_attributes,
         })
@@ -420,12 +323,15 @@ impl OtelTraceRow {
     pub fn try_from_signal(signal: SpanSignal) -> Result<Self, ExporterError> {
         let timestamp = nanos_to_offset_dt(signal.start_unix_nano)?;
         let duration = signal.end_unix_nano - signal.start_unix_nano;
-        let (hoisted, resource_attributes) = hoist(signal.resource_attributes);
+        let (service_name, resource_attributes) =
+            service_name_and_resource(signal.resource_attributes, signal.contract_version);
         let span_attributes = map_to_sorted_vec(signal.attributes);
 
+        // "Ok"/"Error" matches the contrib bronze StatusCode convention (R3). OTLP "Unset"
+        // is collapsed to "Ok" upstream (otlp.rs), so this collector never emits "Unset".
         let status_code = match signal.status_code {
-            StatusCode::Ok => "OK".to_string(),
-            StatusCode::Error => "ERROR".to_string(),
+            StatusCode::Ok => "Ok".to_string(),
+            StatusCode::Error => "Error".to_string(),
         };
 
         Ok(Self {
@@ -434,14 +340,9 @@ impl OtelTraceRow {
             span_id: signal.span_id,
             parent_span_id: signal.parent_span_id.unwrap_or_default(),
             span_name: signal.name,
-            service_name: hoisted.service_name,
-            sentinel_scenario: hoisted.sentinel_scenario,
-            sentinel_run_id: hoisted.sentinel_run_id,
-            cloud_provider: hoisted.cloud_provider,
-            sentinel_synthetic: hoisted.sentinel_synthetic,
+            service_name,
             duration,
             status_code,
-            contract_version: signal.contract_version,
             span_attributes,
             resource_attributes,
         })
@@ -449,28 +350,19 @@ impl OtelTraceRow {
 }
 
 impl OtelMetricRow {
-    /// Convert a [`MetricSignal`] to a row.
+    /// Convert a [`MetricSignal`] to a row. The datapoint type is consumed by
+    /// [`export`] to pick the gauge/sum table; it is not stored as a column.
     pub fn try_from_signal(signal: MetricSignal) -> Result<Self, ExporterError> {
-        let timestamp = nanos_to_offset_dt(signal.time_unix_nano)?;
-        let (hoisted, resource_attributes) = hoist(signal.resource_attributes);
+        let time_unix = nanos_to_offset_dt(signal.time_unix_nano)?;
+        let (service_name, resource_attributes) =
+            service_name_and_resource(signal.resource_attributes, signal.contract_version);
         let attributes = map_to_sorted_vec(signal.attributes);
 
-        let metric_type = match signal.metric_type {
-            MetricType::Gauge => "gauge".to_string(),
-            MetricType::Sum => "sum".to_string(),
-        };
-
         Ok(Self {
-            timestamp,
+            service_name,
             metric_name: signal.name,
-            metric_type,
+            time_unix,
             value: signal.value,
-            service_name: hoisted.service_name,
-            sentinel_scenario: hoisted.sentinel_scenario,
-            sentinel_run_id: hoisted.sentinel_run_id,
-            cloud_provider: hoisted.cloud_provider,
-            sentinel_synthetic: hoisted.sentinel_synthetic,
-            contract_version: signal.contract_version,
             attributes,
             resource_attributes,
         })
@@ -483,10 +375,10 @@ impl OtelMetricRow {
 
 /// Export a batch of [`Signal`]s to ClickHouse.
 ///
-/// Partitions signals by type, converts each to the appropriate Row struct, and
-/// performs one batched `INSERT` per signal type (three inserts total if all
-/// three types are present). Returns per-type counts of successfully written
-/// rows.
+/// Partitions signals by destination table, converts each to the appropriate Row
+/// struct, and performs one batched `INSERT` per non-empty table — logs, traces, and
+/// the per-type metric tables `otel_metrics_gauge` / `otel_metrics_sum`. Returns
+/// per-type counts of successfully written rows.
 ///
 /// # Errors
 ///
@@ -504,11 +396,12 @@ pub async fn export(
     client: &clickhouse::Client,
     signals: Vec<Signal>,
 ) -> Result<Counts, ExporterError> {
-    // Partition signals by type. We collect into three Vecs to allow separate
-    // batched inserts — one INSERT per table, per the clickhouse crate's API.
+    // Partition signals by destination table. Metrics fan out to the bronze per-type
+    // tables — the datapoint type selects gauge vs sum.
     let mut log_rows: Vec<OtelLogRow> = Vec::new();
     let mut trace_rows: Vec<OtelTraceRow> = Vec::new();
-    let mut metric_rows: Vec<OtelMetricRow> = Vec::new();
+    let mut gauge_rows: Vec<OtelMetricRow> = Vec::new();
+    let mut sum_rows: Vec<OtelMetricRow> = Vec::new();
 
     for signal in signals {
         match signal {
@@ -519,7 +412,13 @@ pub async fn export(
                 trace_rows.push(OtelTraceRow::try_from_signal(span)?);
             }
             Signal::Metric(metric) => {
-                metric_rows.push(OtelMetricRow::try_from_signal(metric)?);
+                let is_gauge = metric.metric_type == MetricType::Gauge;
+                let row = OtelMetricRow::try_from_signal(metric)?;
+                if is_gauge {
+                    gauge_rows.push(row);
+                } else {
+                    sum_rows.push(row);
+                }
             }
         }
     }
@@ -546,15 +445,22 @@ pub async fn export(
         counts.spans = trace_rows.len();
     }
 
-    // Insert metrics
-    if !metric_rows.is_empty() {
-        let mut insert = client.insert("otel_metrics")?;
-        for row in &metric_rows {
+    // Insert metrics — routed by datapoint type into the bronze per-type tables.
+    if !gauge_rows.is_empty() {
+        let mut insert = client.insert("otel_metrics_gauge")?;
+        for row in &gauge_rows {
             insert.write(row).await?;
         }
         insert.end().await?;
-        counts.metrics = metric_rows.len();
     }
+    if !sum_rows.is_empty() {
+        let mut insert = client.insert("otel_metrics_sum")?;
+        for row in &sum_rows {
+            insert.write(row).await?;
+        }
+        insert.end().await?;
+    }
+    counts.metrics = gauge_rows.len() + sum_rows.len();
 
     Ok(counts)
 }
@@ -572,7 +478,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::contract::{MetricType, StatusCode, REQUIRED_RESOURCE_KEYS};
+    use crate::contract::{MetricType, StatusCode};
 
     /// Build a resource_attributes map that contains all five required keys
     /// plus any extras passed in.
@@ -703,109 +609,70 @@ mod tests {
         assert_eq!(row.parent_span_id, parent);
     }
 
-    // ── Test 3: SentinelSynthetic "true"→1, "false"→0 ────────────────────────
+    // ── Test 3: sentinel.* + contract_version land in ResourceAttributes ──────
+    // Bronze otel_logs/otel_traces have no typed Sentinel columns; the values are
+    // preserved (not stripped) inside the ResourceAttributes Map.
 
     #[test]
-    fn sentinel_synthetic_true_becomes_1() {
-        // req_resource already sets "sentinel.synthetic" = "true"
+    fn sentinel_keys_and_contract_version_kept_in_resource_attributes() {
         let signal = make_log_signal(None, None, req_resource(&[]));
         let row = OtelLogRow::try_from_signal(signal).expect("conversion succeeds");
-        assert_eq!(row.sentinel_synthetic, 1, "\"true\" must convert to 1u8");
-    }
-
-    #[test]
-    fn sentinel_synthetic_false_becomes_0() {
-        let mut resource = req_resource(&[]);
-        resource.insert("sentinel.synthetic".to_string(), "false".to_string());
-        let signal = make_log_signal(None, None, resource);
-        let row = OtelLogRow::try_from_signal(signal).expect("conversion succeeds");
-        assert_eq!(row.sentinel_synthetic, 0, "\"false\" must convert to 0u8");
-    }
-
-    #[test]
-    fn sentinel_synthetic_unknown_string_becomes_0() {
-        // Defensive: any value that is not exactly "true" maps to 0
-        let mut resource = req_resource(&[]);
-        resource.insert("sentinel.synthetic".to_string(), "yes".to_string());
-        let signal = make_log_signal(None, None, resource);
-        let row = OtelLogRow::try_from_signal(signal).expect("conversion succeeds");
-        assert_eq!(row.sentinel_synthetic, 0);
-    }
-
-    // ── Test 4: Hoisting separates required keys from remainder ───────────────
-
-    #[test]
-    fn hoist_separates_required_keys_from_extras() {
-        let resource = req_resource(&[
-            ("cloud.account.id", "proj-123"),
-            ("cloud.region", "us-central1"),
-        ]);
-
-        let (hoisted, remainder) = hoist(resource);
-
-        // Hoisted fields populated correctly
-        assert_eq!(hoisted.service_name, "test-service");
-        assert_eq!(hoisted.sentinel_scenario, "baseline");
-        assert_eq!(hoisted.sentinel_run_id, "run-001");
-        assert_eq!(hoisted.cloud_provider, "gcp");
-        assert_eq!(hoisted.sentinel_synthetic, 1);
-
-        // Remainder contains ONLY the extras, not the 5 required keys
-        let remainder_keys: Vec<&str> = remainder.iter().map(|(k, _)| k.as_str()).collect();
-        assert!(
-            remainder_keys.contains(&"cloud.account.id"),
-            "extra key must be in remainder"
-        );
-        assert!(
-            remainder_keys.contains(&"cloud.region"),
-            "extra key must be in remainder"
-        );
-
-        // None of the 5 required keys should appear in the remainder
-        for required in REQUIRED_RESOURCE_KEYS {
-            assert!(
-                !remainder_keys.contains(required),
-                "required key {:?} must NOT appear in remainder",
-                required
-            );
-        }
-
+        let ra: HashMap<String, String> = row.resource_attributes.iter().cloned().collect();
         assert_eq!(
-            remainder.len(),
-            2,
-            "only the 2 extra keys must be in remainder"
+            ra.get("sentinel.scenario").map(String::as_str),
+            Some("baseline")
+        );
+        assert_eq!(
+            ra.get("sentinel.run_id").map(String::as_str),
+            Some("run-001")
+        );
+        assert_eq!(
+            ra.get("sentinel.synthetic").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(ra.get("cloud.provider").map(String::as_str), Some("gcp"));
+        assert_eq!(
+            ra.get("contract_version").map(String::as_str),
+            Some("1.0.0")
+        );
+        // service.name is copied to the typed column AND retained in the map.
+        assert_eq!(row.service_name, "test-service");
+        assert_eq!(
+            ra.get("service.name").map(String::as_str),
+            Some("test-service")
         );
     }
 
-    #[test]
-    fn hoist_with_no_extras_produces_empty_remainder() {
-        let resource = req_resource(&[]);
-        let (_hoisted, remainder) = hoist(resource);
-        assert!(remainder.is_empty(), "no extras → empty remainder Vec");
-    }
-
-    // ── Test 5: MetricType and StatusCode string conversion ───────────────────
+    // ── Test 4: metric row maps to the bronze gauge/sum shape ─────────────────
+    // MetricType is no longer a column — the datapoint type selects the table in
+    // export(); sentinel.* + contract_version live in ResourceAttributes.
 
     #[test]
-    fn metric_type_gauge_becomes_string_gauge() {
+    fn metric_row_maps_to_bronze_shape() {
         let signal = make_metric_signal(MetricType::Gauge, req_resource(&[]));
         let row = OtelMetricRow::try_from_signal(signal).expect("conversion succeeds");
-        assert_eq!(row.metric_type, "gauge");
+        assert_eq!(row.metric_name, "test.metric");
+        assert_eq!(row.value, 42.0);
+        assert_eq!(row.service_name, "test-service");
+        let ra: HashMap<String, String> = row.resource_attributes.iter().cloned().collect();
+        assert_eq!(
+            ra.get("sentinel.scenario").map(String::as_str),
+            Some("baseline")
+        );
+        assert_eq!(
+            ra.get("contract_version").map(String::as_str),
+            Some("1.0.0")
+        );
     }
 
-    #[test]
-    fn metric_type_sum_becomes_string_sum() {
-        let signal = make_metric_signal(MetricType::Sum, req_resource(&[]));
-        let row = OtelMetricRow::try_from_signal(signal).expect("conversion succeeds");
-        assert_eq!(row.metric_type, "sum");
-    }
+    // ── Test 5: StatusCode string conversion ──────────────────────────────────
 
     #[test]
     fn status_code_ok_becomes_string_ok() {
         let mut signal = make_span_signal(1, 2, None, req_resource(&[]));
         signal.status_code = StatusCode::Ok;
         let row = OtelTraceRow::try_from_signal(signal).expect("conversion succeeds");
-        assert_eq!(row.status_code, "OK");
+        assert_eq!(row.status_code, "Ok");
     }
 
     #[test]
@@ -813,7 +680,7 @@ mod tests {
         let mut signal = make_span_signal(1, 2, None, req_resource(&[]));
         signal.status_code = StatusCode::Error;
         let row = OtelTraceRow::try_from_signal(signal).expect("conversion succeeds");
-        assert_eq!(row.status_code, "ERROR");
+        assert_eq!(row.status_code, "Error");
     }
 
     // ── Test 6: Map conversion produces sorted Vec ────────────────────────────
@@ -857,7 +724,7 @@ mod tests {
     // ── Test 8: Full signal-to-row round-trip for a log signal ───────────────
 
     #[test]
-    fn full_log_row_has_correct_column_count_and_values() {
+    fn full_log_row_maps_to_bronze_shape() {
         let mut attrs = HashMap::new();
         attrs.insert("component.name".to_string(), "receiver".to_string());
         let resource = req_resource(&[("cloud.account.id", "proj-xyz")]);
@@ -878,26 +745,35 @@ mod tests {
         let row = OtelLogRow::try_from_signal(signal).expect("conversion succeeds");
 
         assert_eq!(row.severity_text, "ERROR");
-        assert_eq!(row.severity_number, 17);
+        assert_eq!(row.severity_number, 17u8);
         assert_eq!(row.body, "connection refused");
         assert_eq!(row.trace_id, "0".repeat(32));
         assert_eq!(row.span_id, "0".repeat(16));
-        assert_eq!(row.contract_version, "1.0.0");
+        // service.name → typed ServiceName column (from the resource map, not the signal field).
         assert_eq!(row.service_name, "test-service");
-        assert_eq!(row.sentinel_scenario, "baseline");
-        assert_eq!(row.sentinel_synthetic, 1);
-        assert_eq!(row.cloud_provider, "gcp");
         // LogAttributes: 1 entry (component.name)
         assert_eq!(row.log_attributes.len(), 1);
         assert_eq!(
             row.log_attributes[0],
             ("component.name".to_string(), "receiver".to_string())
         );
-        // ResourceAttributes: 1 extra (cloud.account.id), 5 hoisted keys removed
-        assert_eq!(row.resource_attributes.len(), 1);
+        // ResourceAttributes retains ALL resource keys (nothing stripped) + contract_version.
+        let ra: HashMap<String, String> = row.resource_attributes.iter().cloned().collect();
         assert_eq!(
-            row.resource_attributes[0],
-            ("cloud.account.id".to_string(), "proj-xyz".to_string())
+            ra.get("service.name").map(String::as_str),
+            Some("test-service")
+        );
+        assert_eq!(
+            ra.get("cloud.account.id").map(String::as_str),
+            Some("proj-xyz")
+        );
+        assert_eq!(
+            ra.get("sentinel.scenario").map(String::as_str),
+            Some("baseline")
+        );
+        assert_eq!(
+            ra.get("contract_version").map(String::as_str),
+            Some("1.0.0")
         );
     }
 }

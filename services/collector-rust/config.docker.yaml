@@ -4,7 +4,7 @@
 
 clickhouse:
   url: http://clickhouse:8123
-  database: default
+  database: sentinel   # official POD3 bronze schema (sentinel.*)
 
 grpc:
   listen: "[::]:4317"   # all interfaces, OTLP port

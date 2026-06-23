@@ -36,9 +36,9 @@ guard:               ## Validate COLLECTOR is one of: rust | go
 up: guard            ## Start ClickHouse + the selected collector
 	docker compose up -d --build clickhouse collector-$(COLLECTOR)
 
-init: guard          ## Apply the SELECTED collector's own ClickHouse DDL
+init: guard          ## Apply the selected collector's DDL (rust: bronze auto-applies on boot)
 ifeq ($(COLLECTOR),rust)
-	cat services/collector-rust/infra/clickhouse/ddl/*.sql | docker compose exec -T clickhouse clickhouse-client -mn
+	@echo "rust → official bronze schema (sentinel.*) auto-applies on ClickHouse boot via infra/clickhouse/init.d/; nothing to apply"
 else
 	cat services/collector-go/migrations/*.sql            | docker compose exec -T clickhouse clickhouse-client -mn
 endif
