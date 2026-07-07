@@ -1,0 +1,17 @@
+<clickhouse>
+  <!--
+    The official ClickHouse image ships users.d/default-user.xml restricting the
+    `default` user to localhost (::1, 127.0.0.1). The Rust collector connects as
+    `default` over the Docker network (http://clickhouse:8123), so we widen the
+    allowed networks. `replace="replace"` overrides the image's localhost-only list.
+
+    Dev/local only — do not expose this ClickHouse beyond the compose network.
+  -->
+  <users>
+    <default>
+      <networks replace="replace">
+        <ip>::/0</ip>
+      </networks>
+    </default>
+  </users>
+</clickhouse>

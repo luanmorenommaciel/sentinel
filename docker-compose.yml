@@ -1,0 +1,96 @@
+# Sentinel monorepo — configurable end-to-end pipeline.
+#
+#   generator (otelgen) ──OTLP gRPC :4317──▶ collector (rust | go) ──▶ ClickHouse :8123/:9000
+#
+# Exactly ONE collector runs per invocation (both bind :4317). Select it with the
+# `rust` or `go` Compose profile, driven by the root Makefile's COLLECTOR variable:
+#
+#   make up COLLECTOR=rust      # or: COMPOSE_PROFILES=rust docker compose up -d
+#   make up COLLECTOR=go
+#
+# Both collectors expose the network alias `collector`, so the generator always
+# targets http://collector:4317 regardless of which one is active.
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    # The Go collector connects as otelgen@9000/sentinel; the Rust collector uses the
+    # passwordless `default` user over HTTP :8123. We create otelgen + sentinel via an
+    # init script rather than CLICKHOUSE_USER/PASSWORD env, which would break `default`
+    # auth over the network.
+    ports:
+      - "8123:8123"   # HTTP interface (+ /play UI) — Rust exporter
+      - "9000:9000"   # native TCP — Go exporter
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./infra/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./infra/clickhouse-users.d/zz-default-network.xml:/etc/clickhouse-server/users.d/zz-default-network.xml:ro
+      # POD 3 canonical bronze schema (sentinel.* contrib-style) — auto-applied on first boot.
+      # The collectors currently write the POD-2 normalized schema to default.* (see
+      # docs/research/pod3-bronze-gap.md); the bronze tables land here ready for that bridge.
+      - ./infra/clickhouse/init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/02-bronze-otel.sql:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/?query=SELECT+1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    profiles: ["rust", "go"]   # member of both — always up
+
+  collector-rust:
+    build:
+      context: ./services/collector-rust
+    image: sentinel-collector-rust:dev
+    # Pass the runtime config (grpc + clickhouse sections) as argv[1] → SERVER mode.
+    command: ["/etc/sentinel/config.yaml"]
+    environment:
+      CONTRACTS_DIR: /contracts/generator/v1
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+    volumes:
+      - ./contracts:/contracts:ro
+      - ./services/collector-rust/config.docker.yaml:/etc/sentinel/config.yaml:ro
+    ports:
+      - "4317:4317"
+    networks:
+      default:
+        aliases: ["collector"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    profiles: ["rust"]
+
+  collector-go:
+    build:
+      context: ./services/collector-go
+    image: sentinel-collector-go:dev
+    environment:
+      CONTRACTS_DIR: /contracts/generator/v1
+      GRPC_PORT: "4317"
+      # POD 2 normalization: the Go collector now writes the same schema as Rust to the
+      # `default` db (migrations header: "Database: default (matches Rust)").
+      CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@clickhouse:9000/default"
+    volumes:
+      - ./contracts:/contracts:ro
+    ports:
+      - "4317:4317"
+    networks:
+      default:
+        aliases: ["collector"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    profiles: ["go"]
+
+  generator:
+    build:
+      context: ./services/generator-python
+    image: sentinel-generator:dev
+    environment:
+      CONTRACTS_DIR: /contracts/generator/v1
+    volumes:
+      - ./contracts:/contracts:ro
+    # No long-running command — driven on demand by `make generate`
+    # (docker compose run --rm generator run --scenario ... --otlp-endpoint http://collector:4317).
+    profiles: ["rust", "go"]
+
+volumes:
+  clickhouse_data: {}

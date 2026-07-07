@@ -1,0 +1,98 @@
+[package]
+name = "sentinel-collector"
+version = "0.1.0-alpha"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+description = "Sentinel OTel Collector — Rust implementation. OTLP gRPC :4317 → ClickHouse."
+repository = "https://github.com/luanmorenommaciel/sentinel"
+readme = "README.md"
+publish = false
+
+# Pinned at scaffold time. Re-resolve on first build with `cargo update`.
+# See docs/adr/0004-collector-implementation-language.md for the rationale
+# behind each dependency choice.
+
+[dependencies]
+# OTLP — receiver + wire format
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "trace", "metrics", "logs"] }
+opentelemetry-proto = { version = "0.27", features = ["gen-tonic", "trace", "metrics", "logs"] }
+
+# gRPC server
+tonic = "0.12"
+prost = "0.13"
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+
+# ClickHouse client — official, async, native protocol over HTTP
+# Bake-off alternative: klickhouse (native TCP) — swap and re-run perf gate
+clickhouse = { version = "0.13", features = ["lz4", "time"] }
+
+# time is a transitive dependency of clickhouse (pulled in via the "time" feature).
+# We declare it directly here so that `use time::OffsetDateTime` compiles in
+# clickhouse_exporter.rs. Without a direct dep declaration, Rust cannot resolve the
+# `time` crate name even though it is already in Cargo.lock. The version pin matches
+# what clickhouse 0.13 already resolves to; `cargo update` will keep them in sync.
+time = { version = "0.3", features = ["std"] }
+
+# Meta-telemetry (Collector observing itself — required so Sentinel can watch Sentinel)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Config + (de)serialization
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+
+# Errors
+anyhow = "1"
+thiserror = "1"
+
+[lib]
+name = "sentinel_collector"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sentinel-collector"
+path = "src/main.rs"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+# Lint policy — `unsafe_code = forbid` and `unwrap_used = deny` are the
+# load-bearing rules per RUST_PROJECT_STANDARDS.md. Promote to
+# [workspace.lints] when a second Rust crate triggers the workspace
+# promotion.
+#
+# pedantic + nursery + missing_docs are *aspirational* — kept commented out
+# until a dedicated clippy cleanup PR addresses the ~50 existing warnings
+# on the Day-1 code. Enable in this order: missing_docs first (cheap),
+# then pedantic, then nursery.
+[lints.rust]
+unsafe_code = "forbid"
+# missing_docs = "warn"   # ← enable after Day-2 doc pass
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+# pedantic = { level = "warn", priority = -1 }   # ← enable after cleanup PR
+# nursery = { level = "warn", priority = -1 }    # ← enable after cleanup PR
+# missing_errors_doc = "warn"                    # ← enable with pedantic
+# must_use_candidate = "warn"                    # ← enable with pedantic
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# Bench/perf builds — release optimizations + debug symbols for flamegraphs
+[profile.bench-release]
+inherits = "release"
+debug = true
+strip = false

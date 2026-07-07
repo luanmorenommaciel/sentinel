@@ -1,0 +1,54 @@
+# =============================================================================
+# Sentinel — Local ClickHouse Development Environment
+# File   : infra/docker-compose.yml
+# Usage  : docker compose -f infra/docker-compose.yml up -d
+# =============================================================================
+#
+# What this gives you:
+#   - ClickHouse 25.4 (latest stable as of 2026-06-01) on your local machine
+#   - HTTP interface on port 8123  (the Rust clickhouse 0.13 crate; curl, Grafana, health probes)
+#   - Native TCP interface on port 9000  (clickhouse-client CLI, admin tools)
+#   - Tables auto-created on first boot via init scripts
+#   - Named volume so data survives container restarts
+#   - No authentication: dev-only; do not expose to a network
+#
+# Phase 1 architecture reminder:
+#   Generator → OTel Collector (:4317 gRPC) → ClickHouse (Rust exporter → :8123 HTTP)
+#   Direct Generator → ClickHouse is REJECTED (Sync 02, 2026-05-26).
+#
+# Rust clickhouse crate note:
+#   clickhouse 0.13 defaults to HTTP port 8123 (not native 9000) even though
+#   the wire format is ClickHouse's binary RowBinary, not JSON. The URL in
+#   your Rust config should be "http://localhost:8123". See infra/clickhouse/README.md.
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.4
+    container_name: sentinel-clickhouse
+    ports:
+      - "8123:8123"   # HTTP interface — used by clickhouse 0.13 Rust crate
+      - "9000:9000"   # Native TCP interface — clickhouse-client, admin tools
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse          # persistent data volume
+      # Official POD 3 bronze schema (sentinel.*), auto-applied on first boot.
+      - ../../../infra/clickhouse/init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/01-bronze-otel.sql:ro
+    environment:
+      # No authentication for local dev. Do not use these values in staging/prod.
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/?query=SELECT+1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    ulimits:
+      # ClickHouse opens many file descriptors during merges; raise the limit.
+      nofile:
+        soft: 262144
+        hard: 262144
+
+volumes:
+  clickhouse_data:
+    name: sentinel-clickhouse-data

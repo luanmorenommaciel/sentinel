@@ -1,0 +1,107 @@
+# Pod 2 → Pod 3 ClickHouse read contract — machine-readable companion.
+#
+# This is the SEMANTIC contract: what Pod 2 populates and guarantees on top of the
+# bronze tables. It deliberately does NOT restate the full column structure — the
+# bronze DDL (structural_source_of_truth below) owns that and is the only place to
+# change table/column shapes. Keep this file in sync with pod2-pod3-read-contract.md;
+# the .md is the human-readable authority, this is its machine-readable mirror.
+
+contract: collector-read
+version: "1.0.0.1"
+boundary: pod2 -> pod3
+status: authoritative              # agreed contract boundary; ADR-0007 acceptance pending Pod 3 sign-off
+producer: Pod 2 (OTel Collector)
+consumer: Pod 3 (Volume · Schema · Latency · Storage Watchers)
+
+transport:
+  store: clickhouse
+  database: sentinel
+  endpoints: { http: ":8123", native: ":9000" }
+
+structural_source_of_truth:
+  ddl: ../../../infra/clickhouse/init.d/01-bronze-otel.sql   # create_schema:false — Pod 3 owns the lifecycle
+  schema: otel-collector-contrib
+  schema_version: v0.105.0
+  note: >
+    Bronze carries the full contrib column set. Pod 2 populates only the columns listed
+    per table below; every other bronze column is left at its ClickHouse default
+    (''/0/[]) by the named-column INSERT — by design, not data loss.
+
+# §2 — tables and the column subset Pod 2 writes (data-point type selects the metric table;
+# there is no MetricType column). Columns absent here are present in the DDL but defaulted.
+tables:
+  - name: otel_logs
+    source_signal: LogSignal
+    populated: true
+    writes: [Timestamp, ServiceName, SeverityText, SeverityNumber, Body, TraceId, SpanId, LogAttributes, ResourceAttributes]
+  - name: otel_traces
+    source_signal: SpanSignal
+    populated: true
+    writes: [Timestamp, TraceId, SpanId, ParentSpanId, SpanName, ServiceName, Duration, StatusCode, SpanAttributes, ResourceAttributes]
+  - name: otel_metrics_gauge
+    source_signal: MetricSignal (gauge data points)
+    populated: true
+    writes: [ServiceName, MetricName, TimeUnix, Value, Attributes, ResourceAttributes]
+  - name: otel_metrics_sum
+    source_signal: MetricSignal (sum data points)
+    populated: true
+    writes: [ServiceName, MetricName, TimeUnix, Value, Attributes, ResourceAttributes]
+  - name: otel_metrics_histogram
+    populated: false               # present in DDL; empty in this version (Pod 1 v1.0.0 emits gauge/sum only)
+  - name: otel_metrics_exponential_histogram
+    populated: false
+  - name: otel_metrics_summary
+    populated: false
+  - name: otel_traces_trace_id_ts
+    populated: by_mv               # populated by bronze's own MV (WHERE TraceId != ''), not the exporter
+
+# §3 — Sentinel metadata. No typed Sentinel* columns under bronze; these keys are carried
+# inside the ResourceAttributes Map, guaranteed present on every row.
+resource_attributes_keys:
+  - { key: service.name,       note: also copied to the typed ServiceName column }
+  - { key: sentinel.scenario,  note: scenario id (z-score baselines key on this) }
+  - { key: sentinel.run_id,    note: generator run id }
+  - { key: cloud.provider,     note: "e.g. gcp" }
+  - { key: sentinel.synthetic, note: string "true"/"false" }
+  - { key: contract_version,   note: "Pod 1's contract version, e.g. 1.0.0 (not this contract's)" }
+
+# §5 — guarantees that will not change without a version bump.
+guarantees:
+  timestamp: DateTime64(9) UTC event time (Timestamp on logs/traces, TimeUnix on metrics)
+  duration: { column: Duration, units: nanoseconds, definition: end - start, computed: at_insert }
+  status_code: { column: StatusCode, values: [Ok, Error], note: OTLP Unset is collapsed to Ok in the parser }
+  optional_ids:                    # §4, ADR-0006 refined by ADR-0007
+    columns: [TraceId, SpanId, ParentSpanId]
+    absent: "''"                   # never NULL
+    present: valid lowercase hex (32 chars trace / 16 chars span/parent)
+    enforcement: collector-side at insert (bronze does not validate)
+    query: { absent: "WHERE TraceId = ''", present: "WHERE TraceId != ''" }
+  metrics_scope: gauge and sum only in this version
+  index_accelerated: [ServiceName]  # leading ORDER BY key on every table
+
+# §6 — explicit non-guarantees. Do not depend on these.
+non_guarantees:
+  - contrib-rich columns are present in the DDL but EMPTY here — Scope*, Events.*, Links.*,
+    Exemplars.*, SpanKind, TraceState, StatusMessage, TraceFlags, and the
+    histogram/exponential_histogram/summary metric tables
+  - Map iteration order in *Attributes / ResourceAttributes
+  - index acceleration for non-ServiceName resource keys (sentinel.scenario etc. are Map probes;
+    materialize as silver columns if the hot path needs them)
+  - exact partition layout / TTL value (a 30-day retention floor is owned by the bronze DDL)
+
+# Rolling-stats: the previous otel_metrics_1m rollup is no longer produced by the collector;
+# Pod 3 rebuilds it in silver from gauge/sum (proven shape preserved in the .md §6).
+rollup: { otel_metrics_1m: moved_to_pod3_silver }
+
+versioning:
+  scheme: independent of Pod 1's contract version
+  current: "1.0.0.1"              # bronze-aligned revision of 1.0.0 (db, table set, metadata location changed vs 1.0.0-rc.1)
+  breaking_change_policy: version bump (1.0.0.2, …) with notice — never silent
+  bronze_anchor: otel-collector-contrib v0.105.0 (a Collector-image bump means re-dumping the DDL)
+
+references:
+  prose_contract: pod2-pod3-read-contract.md
+  adr_canonical: ../../../docs/adr/0007-bronze-canonical-contract.md
+  adr_optional_ids: ../../../docs/adr/0006-optional-id-representation.md
+  bronze_ddl: ../../../infra/clickhouse/init.d/01-bronze-otel.sql
+  rationale: ../../../docs/research/pod3-bronze-gap.md

@@ -1,0 +1,43 @@
+# contract/clickhouse_schema.yaml — DEV-ONLY schema for the non-canonical direct→ClickHouse path.
+# The real ClickStack table schema is owned by Pod 3; this file exists for local testing only.
+# canonical_field: ClickHouseColumnName
+version: "1.0.0"
+batch_size: 5000
+tables:
+  logs:
+    name: otel_logs
+    columns:
+      time_unix_nano: Timestamp
+      service_name: ServiceName
+      severity_text: SeverityText
+      severity_number: SeverityNumber
+      body: Body
+      trace_id: TraceId
+      span_id: SpanId
+      attributes: LogAttributes
+      resource_attributes: ResourceAttributes
+
+  traces:
+    name: otel_traces
+    columns:
+      start_unix_nano: Timestamp
+      trace_id: TraceId
+      span_id: SpanId
+      parent_span_id: ParentSpanId
+      name: SpanName
+      service_name: ServiceName
+      duration_nano: Duration
+      status_code: StatusCode
+      attributes: SpanAttributes
+      resource_attributes: ResourceAttributes
+
+  metrics:
+    name: otel_metrics
+    columns:
+      time_unix_nano: Timestamp
+      name: MetricName
+      type: MetricType
+      value: Value
+      service_name: ServiceName
+      attributes: Attributes
+      resource_attributes: ResourceAttributes

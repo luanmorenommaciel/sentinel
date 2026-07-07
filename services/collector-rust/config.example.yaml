@@ -1,0 +1,59 @@
+# Sentinel OTel Collector — example configuration (Day 6).
+#
+# Copy to `config.yaml` and pass it as the first argument:
+#     cargo run -- config.yaml
+#
+# With no argument the binary uses built-in defaults (this file's values),
+# which run in COUNT mode against the golden fixture. Every field is optional;
+# unknown keys are rejected to catch typos.
+
+# Where to read NDJSON-encoded signals from.
+input:
+  path: ../../contracts/generator/v1/golden/baseline_seed42.jsonl
+
+# ClickHouse target. Omit this WHOLE section for count-only mode (parse + tally,
+# no database). The `clickhouse` 0.13 crate speaks RowBinary over HTTP — use the
+# 8123 HTTP port, not native 9000.
+#
+# CLICKHOUSE_URL in the environment overrides `clickhouse.url` (and creates this
+# section if absent).
+clickhouse:
+  url: http://localhost:8123
+  database: sentinel
+
+# OTLP gRPC server. Presence of this section switches the binary into SERVER
+# mode (serve until Ctrl-C) instead of FILE mode (read `input` once, then exit).
+# In server mode, the `clickhouse` section above decides behaviour:
+#   - with clickhouse → EXPORT mode: received OTLP is transformed to signals and
+#     written to ClickHouse.
+#   - without clickhouse → LOG-ONLY mode: requests are counted and logged.
+# Uncomment to run as a server:
+#
+# grpc:
+#   listen: "[::]:4317"   # OTLP convention: all interfaces, port 4317
+
+# Contract-version policy enforced at the receive boundary.
+contract:
+  # Must equal the contract version this binary was built for, or it refuses to
+  # start (a 1.0.0 collector cannot validate a 2.0.0 pipeline).
+  expected_version: "1.0.0"
+  # FILE MODE ONLY.
+  # false → skip + count bad signals, export the good ones.
+  # true  → any parse/validation error aborts the run BEFORE export (all-or-nothing).
+  strict: false
+  # gRPC MODE ONLY — contract validation applied to each OTLP-derived signal
+  # before export:
+  #   off    → no validation (lowest overhead; no enforcement on the wire).
+  #   warn   → validate + log every violation, but export anyway (default).
+  #            Safe for mixed traffic: foreign OTLP lacking the five sentinel.*
+  #            resource keys is observed, not dropped.
+  #   strict → validate + DROP invalid signals per-signal; export only the
+  #            conformant ones. Use when the sender is guaranteed Sentinel-internal.
+  grpc_validation: warn
+
+# Structured logging.
+logging:
+  # Level or EnvFilter directive. RUST_LOG, if set, overrides this.
+  level: info
+  # json (machine-ingestible, production default) | text (human-readable).
+  format: json

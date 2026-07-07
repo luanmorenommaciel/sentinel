@@ -1,0 +1,65 @@
+version: "1.0.0"
+components:
+  - name: orchestration.daily_etl
+    type: orchestration
+    service_name: cloud-composer-etl
+    depends_on: []
+    base_rate: 2.0
+    base_latency_ms: 250.0
+    error_ratio: 0.01
+
+  - name: compute.spark_batch
+    type: compute
+    service_name: dataproc-spark-batch
+    depends_on:
+      - orchestration.daily_etl
+      - messaging.ingestion_topic
+    base_rate: 10.0
+    base_latency_ms: 1800.0
+    error_ratio: 0.02
+
+  - name: compute.spark_streaming
+    type: compute
+    service_name: dataproc-spark-streaming
+    depends_on:
+      - messaging.ingestion_topic
+    base_rate: 25.0
+    base_latency_ms: 400.0
+    error_ratio: 0.01
+
+  - name: storage.raw_bucket
+    type: storage
+    service_name: gcs-raw-bucket
+    depends_on:
+      - compute.spark_batch
+    base_rate: 15.0
+    base_latency_ms: 80.0
+    error_ratio: 0.005
+
+  - name: storage.processed_bucket
+    type: storage
+    service_name: gcs-processed-bucket
+    depends_on:
+      - compute.spark_batch
+      - compute.spark_streaming
+    base_rate: 12.0
+    base_latency_ms: 75.0
+    error_ratio: 0.005
+
+  - name: messaging.ingestion_topic
+    type: messaging
+    service_name: pubsub-ingestion-topic
+    depends_on: []
+    base_rate: 50.0
+    base_latency_ms: 30.0
+    error_ratio: 0.003
+
+  - name: kubernetes.api_gateway
+    type: kubernetes
+    service_name: k8s-api-gateway
+    depends_on:
+      - compute.spark_batch
+      - compute.spark_streaming
+    base_rate: 20.0
+    base_latency_ms: 120.0
+    error_ratio: 0.01

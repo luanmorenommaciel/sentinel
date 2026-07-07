@@ -1,0 +1,43 @@
+# Merged from the three POD branches (generator / collector-rust / collector-go).
+# Note: docs/ is intentionally NOT ignored here — the monorepo tracks shared docs.
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Rust
+target/
+**/*.rs.bk
+.cargo-home/
+
+# Go
+# (build artifacts emitted by `go build` are named per-binary; ignore common ones)
+/bin/
+
+# Local infra / data
+clickhouse_data/
+hyperdx_data/
+
+# Env / secrets
+.env
+.env.local
+*.local
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# Tooling
+.mcp.json

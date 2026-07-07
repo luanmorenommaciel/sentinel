@@ -1,0 +1,18 @@
+# Toolchain pin — `rustup` reads this when any cargo command runs in this
+# subtree. Scoped to services/collector-rust/ per the polyglot scoping rule
+# in RUST_PROJECT_STANDARDS.md; an adjacent Rust tool elsewhere in the repo
+# picks its own toolchain.
+#
+# Pinned to 1.96.0 (current stable as of 2026-06-01, verified passing the
+# Day-1 golden parser tests). Bump quarterly per the doc.
+
+[toolchain]
+channel = "1.96.0"
+components = [
+    "rustfmt",
+    "clippy",
+    "rust-docs",
+    "rust-analyzer",
+]
+targets = ["x86_64-unknown-linux-musl"]
+profile = "minimal"

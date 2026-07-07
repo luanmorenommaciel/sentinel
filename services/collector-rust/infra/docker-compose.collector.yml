@@ -1,0 +1,35 @@
+# Full-stack overlay (Day 7) — adds the collector to the ClickHouse base.
+#
+# Merge with the ClickHouse base so the stack comes up together:
+#   docker compose -f infra/docker-compose.yml \
+#                  -f infra/docker-compose.collector.yml up --build
+#
+# The collector waits for ClickHouse to be healthy (DDL auto-applied via the
+# base file's initdb mount), parses the golden fixture, exports to ClickHouse,
+# and exits 0. ClickHouse keeps running so you can inspect the result:
+#   docker exec sentinel-clickhouse clickhouse-client --query \
+#     "SELECT count() FROM otel_metrics"
+#
+# NOTE: the golden fixture is 2023-dated; under the tables' event-time TTL the
+# rows are purged on the first background merge. For a demo, query soon after
+# the collector exits. (Tests handle this by stripping TTL — see the schema KB.)
+
+services:
+  collector:
+    build:
+      # Build context is the crate dir (this file lives in services/collector-rust/infra/).
+      context: ..
+      dockerfile: Dockerfile
+    image: sentinel-collector:dev
+    container_name: sentinel-collector
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      # Golden fixture (read-only) + the container's config.
+      # Golden now lives at the monorepo-root contracts/generator/v1/golden (was contract/golden pre-monorepo).
+      - ../../../contracts/generator/v1/golden:/data:ro
+      - ./collector-config.yaml:/etc/sentinel/config.yaml:ro
+    command: ["/etc/sentinel/config.yaml"]
+    # Runs once and exits; do not restart.
+    restart: "no"

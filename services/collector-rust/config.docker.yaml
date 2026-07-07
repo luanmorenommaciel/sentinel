@@ -1,0 +1,18 @@
+# Runtime config for the Rust collector inside the root docker-compose pipeline.
+# Presence of the `grpc` section switches the binary into SERVER mode (OTLP gRPC
+# receiver), and the `clickhouse` section makes it EXPORT received signals.
+
+clickhouse:
+  url: http://clickhouse:8123
+  database: sentinel   # official POD3 bronze schema (sentinel.*)
+
+grpc:
+  listen: "[::]:4317"   # all interfaces, OTLP port
+
+contract:
+  expected_version: "1.0.0"
+  grpc_validation: warn
+
+logging:
+  level: info
+  format: json

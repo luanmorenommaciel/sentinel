@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Build
+        run: CGO_ENABLED=0 go build ./...
+
+      - name: Vet
+        run: CGO_ENABLED=0 go vet ./...
+
+      - name: Test
+        run: CGO_ENABLED=0 go test ./... -timeout 60s -race
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test
+
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.3
+        ports:
+          - 9000:9000
+          - 8123:8123
+        env:
+          CLICKHOUSE_DB: default
+          CLICKHOUSE_USER: otelgen
+          CLICKHOUSE_PASSWORD: otelgen_secret
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        options: >-
+          --health-cmd "clickhouse-client --user=otelgen --password=otelgen_secret --query='SELECT 1'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+
+      - name: Apply schema
+        run: |
+          curl -s http://localhost:8123/ -u otelgen:otelgen_secret \
+            --data-binary @migrations/001_init_schema.sql
+
+      - name: Run integration tests
+        env:
+          CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@localhost:9000/default"
+        run: CGO_ENABLED=0 go test ./internal/chstore/... -tags integration -v -timeout 60s
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t sentinel-collector:${{ github.sha }} .

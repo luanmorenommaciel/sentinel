@@ -1,0 +1,12 @@
+# Extra clippy config — most lints live in Cargo.toml's [lints.clippy].
+# Use this file only for lint configuration that isn't an enable/disable.
+
+# Cognitive complexity threshold (default is 25). Bumped slightly to
+# accommodate the OTLP signal-dispatch match arms.
+cognitive-complexity-threshold = 30
+
+# Disallow std::env::var in production code — config must flow through the
+# Sentinel config loader so it's auditable. Tests can still use it.
+disallowed-methods = [
+    { path = "std::env::var", reason = "Use the Sentinel config loader (figment-based) instead. See ADR-0004 follow-ups." },
+]

@@ -1,0 +1,9 @@
+version: "1.0.0"
+name: latency_degradation
+extends: baseline
+phases:
+  - type: latency_degradation
+    target: compute.spark_batch
+    start_offset: "8h"
+    duration: "1h"
+    magnitude: 4.0

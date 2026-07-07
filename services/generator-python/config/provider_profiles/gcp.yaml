@@ -1,0 +1,71 @@
+# GCP provider profile — research-grounded against OpenTelemetry GCP resource-detection
+# conventions and Cloud Monitoring metric descriptors. UNVERIFIED against a live tenant;
+# to be reconciled with a real GCP OTLP capture (trust-but-verify, A9).
+version: "1.0.0"
+name: gcp
+
+# Resource attributes applied to every signal (OTel resource-detector keys).
+resource_attrs:
+  cloud.provider: gcp
+  cloud.account.id: sentinel-synthetic
+  cloud.region: us-central1
+  cloud.availability_zone: us-central1-a
+
+component_types:
+  orchestration:
+    resource_attrs:
+      cloud.platform: gcp_cloud_composer
+      gcp.composer.environment.name: sentinel-composer
+    metrics:
+      - name: composer.googleapis.com/environment/dag_processing/total_parse_time
+        instrument: gauge
+        unit: s
+      - name: composer.googleapis.com/environment/task_queue_length
+        instrument: gauge
+        unit: "{task}"
+
+  compute:
+    resource_attrs:
+      cloud.platform: gcp_dataproc
+      gcp.dataproc.cluster.name: sentinel-spark
+    metrics:
+      - name: dataproc.googleapis.com/cluster/yarn/pending_memory_percentage
+        instrument: gauge
+        unit: "%"
+      - name: dataproc.googleapis.com/cluster/yarn/allocated_memory_percentage
+        instrument: gauge
+        unit: "%"
+
+  storage:
+    resource_attrs:
+      cloud.platform: gcp_cloud_storage
+      gcp.gcs.bucket.name: sentinel-data
+    metrics:
+      - name: storage.googleapis.com/api/request_count
+        instrument: sum
+        unit: "{request}"
+
+  messaging:
+    resource_attrs:
+      cloud.platform: gcp_pubsub
+      gcp.pubsub.topic.id: sentinel-ingest
+    metrics:
+      - name: pubsub.googleapis.com/topic/send_message_operation_count
+        instrument: sum
+        unit: "{operation}"
+      - name: pubsub.googleapis.com/subscription/oldest_unacked_message_age
+        instrument: gauge
+        unit: s
+
+  kubernetes:
+    resource_attrs:
+      cloud.platform: gcp_kubernetes_engine
+      k8s.cluster.name: sentinel-gke
+      k8s.namespace.name: sentinel
+    metrics:
+      - name: kubernetes.io/container/cpu/core_usage_time
+        instrument: sum
+        unit: s{CPU}
+      - name: kubernetes.io/container/memory/used_bytes
+        instrument: gauge
+        unit: By
