@@ -20,8 +20,8 @@ services:
       start_period: 10s
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      # Auto-run schema init on first start
-      - ./migrations:/docker-entrypoint-initdb.d:ro
+      # Auto-run schema init on first start (files applied alphabetically: 001→002→003)
+      - ./infra/clickhouse/ddl:/docker-entrypoint-initdb.d:ro
 
   # Go OTel Collector — receives OTLP gRPC from OTelGen (Pod 1)
   collector:

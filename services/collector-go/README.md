@@ -52,8 +52,10 @@ sentinel/
 │   ├── chstore/         # Batch flusher + inserters ClickHouse
 │   ├── grpcserver/      # Receivers OTLP gRPC
 │   └── httpserver/      # /health e /ready
-├── migrations/
-│   └── 001_init_schema.sql
+├── infra/clickhouse/ddl/   # Schema desired-state (mirror do collector-rust)
+│   ├── 001_otel_logs.sql
+│   ├── 002_otel_traces.sql
+│   └── 003_otel_metrics.sql
 ├── contract/
 │   ├── schema/          # Schema de input (Pod 1)
 │   ├── golden/          # Baseline de referência (278 registros)
