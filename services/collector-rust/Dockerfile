@@ -15,7 +15,19 @@ FROM rust:1.96-slim-bookworm AS builder
 # The musl target gives us a static binary. The base image pins the compiler to
 # 1.96; we deliberately do NOT copy rust-toolchain.toml here so rustup doesn't
 # pull the heavy components it lists (rust-analyzer et al.) into the builder.
-RUN rustup target add x86_64-unknown-linux-musl
+#
+# Pick the musl triple from the build platform's arch (BuildKit sets TARGETARCH)
+# so the image builds natively on both x86 CI (amd64 → x86_64-musl) and arm64
+# dev machines (arm64 → aarch64-musl). Cross-compiling to a foreign triple broke
+# linking on arm64 hosts (cc rejects the other arch's `-m64`). The triple is
+# stashed in /tmp/triple so the cached-deps and real-build layers reuse it.
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+        amd64) echo x86_64-unknown-linux-musl  > /tmp/triple ;; \
+        arm64) echo aarch64-unknown-linux-musl > /tmp/triple ;; \
+        *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && rustup target add "$(cat /tmp/triple)"
 
 WORKDIR /build
 
@@ -25,7 +37,7 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir src \
     && echo 'fn main() {}' > src/main.rs \
     && echo '' > src/lib.rs \
-    && cargo build --release --target x86_64-unknown-linux-musl --locked \
+    && cargo build --release --target "$(cat /tmp/triple)" --locked \
     && rm -rf src
 
 # Now the real sources. `touch` is REQUIRED: Docker COPY preserves the original
@@ -34,8 +46,8 @@ RUN mkdir src \
 # forces a recompile of the crate (deps stay cached).
 COPY src ./src
 RUN find src -name '*.rs' -exec touch {} + \
-    && cargo build --release --target x86_64-unknown-linux-musl --locked \
-    && cp target/x86_64-unknown-linux-musl/release/sentinel-collector /sentinel-collector
+    && cargo build --release --target "$(cat /tmp/triple)" --locked \
+    && cp "target/$(cat /tmp/triple)/release/sentinel-collector" /sentinel-collector
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
 # distroless/static: no libc, no shell, no package manager. Runs as nonroot.

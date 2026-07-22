@@ -1,5 +1,13 @@
 # ClickHouse Schema Divergence — Rust vs Go (estado final)
 
+> **SUPERSEDED (2026-07-21) por [ADR-0007](adr/0007-bronze-canonical-contract.md).**
+> Este documento registra a reconciliação do schema *normalizado* `default.*` (2026-06-16),
+> quando ambos os collectors passaram a escrever o mesmo DDL no database `default`. Esse
+> caminho foi **aposentado**: os dois collectors agora escrevem o schema **bronze** split
+> (OTel-contrib) diretamente no database `bronze` (`bronze.otel_logs` / `otel_traces` /
+> `otel_metrics_gauge` / `otel_metrics_sum`), com equivalência verificada. As referências a
+> `default.*` e ao MV `otel_metrics_1m` abaixo são **históricas**. Mantido para registro.
+
 **Data:** 2026-06-16  
 **Branch:** `feat/02-otel-collector-go`  
 **Propósito:** Comparação coluna a coluna após a normalização completa do POD 2.

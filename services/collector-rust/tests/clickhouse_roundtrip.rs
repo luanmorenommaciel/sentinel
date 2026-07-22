@@ -1,7 +1,7 @@
 //! ClickHouse round-trip integration test — file-mode golden fixture → bronze.
 //!
 //! Proves the Rust collector parses Pod 1's golden fixture and lands it in the
-//! official POD 3 bronze schema (`sentinel.*`).
+//! official POD 3 bronze schema (`bronze.*`).
 //!
 //! # How to run
 //!
@@ -23,7 +23,7 @@
 //! # Environment variables
 //!
 //! - `CLICKHOUSE_URL` — defaults to `http://localhost:8123` if unset. The database
-//!   is fixed to `sentinel` (the bronze database).
+//!   is fixed to `bronze` (the bronze database).
 //!
 //! # Why one combined test (not several)
 //!
@@ -62,10 +62,10 @@ fn golden_path() -> PathBuf {
     p
 }
 
-/// A ClickHouse client targeting the bronze `sentinel` database.
+/// A ClickHouse client targeting the `bronze` database.
 fn bronze_client() -> clickhouse::Client {
     let url = url_from_env().unwrap_or_else(|| DEFAULT_CLICKHOUSE_URL.to_string());
-    build_client_with_database(&url, "sentinel")
+    build_client_with_database(&url, "bronze")
 }
 
 /// Truncate the bronze tables the collector writes, for idempotent re-runs.

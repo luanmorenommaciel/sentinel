@@ -1,14 +1,14 @@
 //! ClickHouse exporter for Sentinel OTel Collector — Day 4.
 //!
 //! Converts parsed [`Signal`] values into typed Row structs and writes them to the
-//! bronze `sentinel.*` tables: `otel_logs`, `otel_traces`, and the per-type
+//! bronze tables in database `bronze`: `otel_logs`, `otel_traces`, and the per-type
 //! `otel_metrics_gauge` / `otel_metrics_sum`.
 //!
 //! # Connection model
 //!
 //! The `clickhouse` 0.13 crate speaks **HTTP on port 8123** (RowBinary over
 //! HTTP — not the native TCP protocol on 9000). The client URL is read from
-//! `CLICKHOUSE_URL` (default `http://localhost:8123`). Database is `default`.
+//! `CLICKHOUSE_URL` (default `http://localhost:8123`). Database is `bronze`.
 //!
 //! # Map columns
 //!
@@ -81,7 +81,7 @@ pub enum ExporterError {
 /// it does NOT use the native TCP protocol on port 9000.
 pub const DEFAULT_CLICKHOUSE_URL: &str = "http://localhost:8123";
 
-/// Build a [`clickhouse::Client`] targeting the given URL, database `default`.
+/// Build a [`clickhouse::Client`] targeting the given URL, database `bronze`.
 ///
 /// The URL should be an HTTP address of the form `http://host:8123`. For local
 /// development use [`DEFAULT_CLICKHOUSE_URL`]. For environment-driven
@@ -98,13 +98,13 @@ pub const DEFAULT_CLICKHOUSE_URL: &str = "http://localhost:8123";
 /// );
 /// ```
 pub fn build_client(url: &str) -> clickhouse::Client {
-    build_client_with_database(url, "default")
+    build_client_with_database(url, "bronze")
 }
 
 /// Build a [`clickhouse::Client`] targeting `url` and a specific `database`.
 ///
 /// Used by the config-driven binary path so `clickhouse.database` from
-/// `config.yaml` is honoured. [`build_client`] is the `database = "default"`
+/// `config.yaml` is honoured. [`build_client`] is the `database = "bronze"`
 /// convenience wrapper.
 pub fn build_client_with_database(url: &str, database: &str) -> clickhouse::Client {
     clickhouse::Client::default()
@@ -189,7 +189,7 @@ fn nanos_to_offset_dt(nanos: i64) -> Result<OffsetDateTime, ExporterError> {
 // Field names use `#[serde(rename = "...")]` to map from Rust's snake_case
 // convention to the DDL's PascalCase column names.
 
-/// One row in the bronze `otel_logs` table (`sentinel.*`, OTel-contrib v0.105.0 shape).
+/// One row in the bronze `otel_logs` table (`bronze.*`, OTel-contrib v0.105.0 shape).
 ///
 /// Named-column INSERT: bronze columns this collector does not produce (TraceFlags,
 /// Scope*, schema URLs, TimestampDate/Time) take their ClickHouse defaults. Sentinel
@@ -222,7 +222,7 @@ pub struct OtelLogRow {
     pub resource_attributes: Vec<(String, String)>,
 }
 
-/// One row in the bronze `otel_traces` table (`sentinel.*`, OTel-contrib v0.105.0 shape).
+/// One row in the bronze `otel_traces` table (`bronze.*`, OTel-contrib v0.105.0 shape).
 ///
 /// Named-column INSERT: bronze columns this collector does not produce (TraceState,
 /// SpanKind, Scope*, StatusMessage, Events.*, Links.*) take their ClickHouse defaults.
@@ -257,7 +257,7 @@ pub struct OtelTraceRow {
 }
 
 /// One row in the bronze metric tables `otel_metrics_gauge` / `otel_metrics_sum`
-/// (`sentinel.*`, OTel-contrib v0.105.0 shape). The datapoint type selects the table
+/// (`bronze.*`, OTel-contrib v0.105.0 shape). The datapoint type selects the table
 /// (see [`export`]) — there is no `MetricType` column. Named-column INSERT, so bronze
 /// columns this collector does not produce (Scope*, MetricDescription/Unit,
 /// StartTimeUnix, Flags, Exemplars.*, AggregationTemporality, IsMonotonic) take

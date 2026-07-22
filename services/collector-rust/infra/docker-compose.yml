@@ -30,11 +30,11 @@ services:
       - "9000:9000"   # Native TCP interface — clickhouse-client, admin tools
     volumes:
       - clickhouse_data:/var/lib/clickhouse          # persistent data volume
-      # Official POD 3 bronze schema (sentinel.*), auto-applied on first boot.
+      # Official POD 3 bronze schema (bronze.*), auto-applied on first boot.
       - ../../../infra/clickhouse/init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/01-bronze-otel.sql:ro
     environment:
       # No authentication for local dev. Do not use these values in staging/prod.
-      CLICKHOUSE_DB: default
+      CLICKHOUSE_DB: bronze
       CLICKHOUSE_USER: default
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     healthcheck:

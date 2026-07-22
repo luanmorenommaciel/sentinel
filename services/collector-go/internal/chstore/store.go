@@ -73,19 +73,24 @@ func (s *Store) SendSpan(span model.Span)   { s.spanCh <- span }
 func (s *Store) SendLog(log model.Log)       { s.logCh <- log }
 func (s *Store) SendMetric(m model.Metric)   { s.metricCh <- m }
 
+// The three flush goroutines are the live write path: each drains its signal
+// channel and inserts into the Sentinel bronze layer (bronze.* tables) via the
+// bronze exporter (clickhouse_exporter.go) — the same OTel-contrib split schema
+// collector-rust writes. Metrics are routed to the per-type gauge/sum tables.
+
 func (s *Store) flushSpans(ctx context.Context) {
 	defer s.wg.Done()
-	flushLoop(ctx, s.spanCh, s.batchSize, s.flushInterval, s.logger, "spans", s.insertSpans)
+	flushLoop(ctx, s.spanCh, s.batchSize, s.flushInterval, s.logger, "spans", s.insertBronzeTraces)
 }
 
 func (s *Store) flushLogs(ctx context.Context) {
 	defer s.wg.Done()
-	flushLoop(ctx, s.logCh, s.batchSize, s.flushInterval, s.logger, "logs", s.insertLogs)
+	flushLoop(ctx, s.logCh, s.batchSize, s.flushInterval, s.logger, "logs", s.insertBronzeLogs)
 }
 
 func (s *Store) flushMetrics(ctx context.Context) {
 	defer s.wg.Done()
-	flushLoop(ctx, s.metricCh, s.batchSize, s.flushInterval, s.logger, "metrics", s.insertMetrics)
+	flushLoop(ctx, s.metricCh, s.batchSize, s.flushInterval, s.logger, "metrics", s.insertBronzeMetrics)
 }
 
 func flushLoop[T any](

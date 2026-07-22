@@ -15,14 +15,18 @@ type BronzeCounts struct {
 }
 
 // ExportBronze writes logs, spans, and gauge/sum metrics into the Sentinel bronze layer
-// (sentinel.* tables, DDL: infra/clickhouse/init.d/01-bronze-otel.sql) — the OTel-contrib
+// (bronze.* tables, DDL: infra/clickhouse/init.d/01-bronze-otel.sql) — the OTel-contrib
 // v0.105.0 shape that collector-rust's clickhouse_exporter.rs also targets. Bronze has no
 // typed Sentinel columns, so the hoisted fields are folded back into ResourceAttributes
 // (see fullResourceAttributes).
 //
+// This is the batch entry point; the live collector reaches the same insert helpers through
+// the store's flush goroutines (see store.go). Both paths share insertBronze* so schema and
+// column order stay identical.
+//
 // Histogram metrics are not written here: transform/metrics.go explodes each histogram
 // datapoint into one row per bucket boundary, which does not match bronze's per-datapoint
-// BucketCounts/ExplicitBounds array shape (sentinel.otel_metrics_histogram).
+// BucketCounts/ExplicitBounds array shape (bronze.otel_metrics_histogram).
 func (s *Store) ExportBronze(
 	ctx context.Context,
 	logs []model.Log,
@@ -45,6 +49,23 @@ func (s *Store) ExportBronze(
 		counts.Spans = len(spans)
 	}
 
+	if err := s.insertBronzeMetrics(ctx, metrics); err != nil {
+		return counts, err
+	}
+	for _, m := range metrics {
+		if m.MetricType == "gauge" || m.MetricType == "sum" {
+			counts.Metrics++
+		}
+	}
+
+	return counts, nil
+}
+
+// insertBronzeMetrics routes each datapoint to the per-type bronze table (gauge/sum),
+// mirroring collector-rust's split. It is the live metrics flush callback (store.go) and
+// is also reused by ExportBronze. Other OTel metric types (histogram/summary/exponential)
+// are intentionally not written in v1 — see ExportBronze's doc comment.
+func (s *Store) insertBronzeMetrics(ctx context.Context, metrics []model.Metric) error {
 	var gauges, sums []model.Metric
 	for _, m := range metrics {
 		switch m.MetricType {
@@ -55,22 +76,20 @@ func (s *Store) ExportBronze(
 		}
 	}
 	if len(gauges) > 0 {
-		if err := s.insertBronzeMetrics(ctx, "sentinel.otel_metrics_gauge", gauges); err != nil {
-			return counts, fmt.Errorf("bronze metrics gauge: %w", err)
+		if err := s.insertBronzeMetricsInto(ctx, "bronze.otel_metrics_gauge", gauges); err != nil {
+			return fmt.Errorf("bronze metrics gauge: %w", err)
 		}
 	}
 	if len(sums) > 0 {
-		if err := s.insertBronzeMetrics(ctx, "sentinel.otel_metrics_sum", sums); err != nil {
-			return counts, fmt.Errorf("bronze metrics sum: %w", err)
+		if err := s.insertBronzeMetricsInto(ctx, "bronze.otel_metrics_sum", sums); err != nil {
+			return fmt.Errorf("bronze metrics sum: %w", err)
 		}
 	}
-	counts.Metrics = len(gauges) + len(sums)
-
-	return counts, nil
+	return nil
 }
 
 func (s *Store) insertBronzeLogs(ctx context.Context, logs []model.Log) error {
-	batch, err := s.conn.PrepareBatch(ctx, `INSERT INTO sentinel.otel_logs (
+	batch, err := s.conn.PrepareBatch(ctx, `INSERT INTO bronze.otel_logs (
 		Timestamp, ServiceName, SeverityText, SeverityNumber, Body,
 		TraceId, SpanId, LogAttributes, ResourceAttributes
 	)`)
@@ -100,7 +119,7 @@ func (s *Store) insertBronzeLogs(ctx context.Context, logs []model.Log) error {
 }
 
 func (s *Store) insertBronzeTraces(ctx context.Context, spans []model.Span) error {
-	batch, err := s.conn.PrepareBatch(ctx, `INSERT INTO sentinel.otel_traces (
+	batch, err := s.conn.PrepareBatch(ctx, `INSERT INTO bronze.otel_traces (
 		Timestamp, TraceId, SpanId, ParentSpanId, SpanName,
 		ServiceName, Duration, StatusCode, SpanAttributes, ResourceAttributes
 	)`)
@@ -130,7 +149,7 @@ func (s *Store) insertBronzeTraces(ctx context.Context, spans []model.Span) erro
 	return batch.Send()
 }
 
-func (s *Store) insertBronzeMetrics(ctx context.Context, table string, metrics []model.Metric) error {
+func (s *Store) insertBronzeMetricsInto(ctx context.Context, table string, metrics []model.Metric) error {
 	batch, err := s.conn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s (
 		ServiceName, MetricName, TimeUnix, Value, Attributes, ResourceAttributes
 	)`, table))
@@ -157,8 +176,8 @@ func (s *Store) insertBronzeMetrics(ctx context.Context, table string, metrics [
 }
 
 // fullResourceAttributes reconstructs the complete resource-attribute map bronze expects.
-// The normalized default.* schema hoists service.name/sentinel.*/cloud.provider into typed
-// columns and strips them out of ResourceAttributes; bronze has no typed Sentinel columns,
+// The retired normalized schema hoisted service.name/sentinel.*/cloud.provider into typed
+// columns and stripped them out of ResourceAttributes; bronze has no typed Sentinel columns,
 // so this folds them back in alongside contract_version (contrib/bronze convention, matches
 // collector-rust's service_name_and_resource).
 func fullResourceAttributes(

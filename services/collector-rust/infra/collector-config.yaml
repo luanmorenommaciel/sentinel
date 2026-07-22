@@ -8,7 +8,7 @@ input:
 clickhouse:
   # Compose service DNS — the ClickHouse container is reachable as `clickhouse`.
   url: http://clickhouse:8123
-  database: default
+  database: bronze
 
 contract:
   expected_version: "1.0.0"

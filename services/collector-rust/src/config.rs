@@ -9,7 +9,7 @@
 //!   path: ../../contracts/generator/v1/golden/baseline_seed42.jsonl
 //! clickhouse:                 # omit this whole section for count-only mode
 //!   url: http://localhost:8123
-//!   database: default
+//!   database: bronze
 //! contract:
 //!   expected_version: "1.0.0" # must match the version this binary was built for
 //!   strict: false             # true → any contract violation aborts before export
@@ -82,13 +82,13 @@ pub struct ClickHouseConfig {
     /// HTTP endpoint, e.g. `http://localhost:8123`. The `clickhouse` 0.13 crate
     /// speaks RowBinary over HTTP — not native `:9000`.
     pub url: String,
-    /// Target database. Defaults to `default`.
+    /// Target database. Defaults to `bronze`.
     #[serde(default = "default_database")]
     pub database: String,
 }
 
 fn default_database() -> String {
-    "default".to_string()
+    "bronze".to_string()
 }
 
 /// OTLP gRPC server configuration. Presence of this section switches the binary
@@ -319,7 +319,7 @@ input:
   path: /data/signals.jsonl
 clickhouse:
   url: http://ch:8123
-  database: sentinel
+  database: bronze
 contract:
   expected_version: "1.0.0"
   strict: true
@@ -331,7 +331,7 @@ logging:
         assert_eq!(cfg.input.path, PathBuf::from("/data/signals.jsonl"));
         let ch = cfg.clickhouse.expect("clickhouse section present");
         assert_eq!(ch.url, "http://ch:8123");
-        assert_eq!(ch.database, "sentinel");
+        assert_eq!(ch.database, "bronze");
         assert!(cfg.contract.strict);
         assert_eq!(cfg.logging.level, "debug");
         assert_eq!(cfg.logging.format, LogFormat::Text);
@@ -345,10 +345,10 @@ logging:
     }
 
     #[test]
-    fn clickhouse_database_defaults_to_default() {
+    fn clickhouse_database_defaults_to_bronze() {
         let yaml = "clickhouse:\n  url: http://ch:8123\n";
         let cfg: Config = serde_yaml::from_str(yaml).expect("parses");
-        assert_eq!(cfg.clickhouse.expect("present").database, "default");
+        assert_eq!(cfg.clickhouse.expect("present").database, "bronze");
     }
 
     #[test]
@@ -436,6 +436,6 @@ logging:
         });
         let ch = cfg.clickhouse.expect("present");
         assert_eq!(ch.url, "http://injected:8123");
-        assert_eq!(ch.database, "default");
+        assert_eq!(ch.database, "bronze");
     }
 }

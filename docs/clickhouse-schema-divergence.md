@@ -1,11 +1,11 @@
 # ClickHouse Schema Divergence (carried forward for POD 3)
 
-> **RESOLVED (2026-06-23) by [ADR-0007](adr/0007-bronze-canonical-contract.md).** This
-> divergence is closed: Pod 2 normalized both collectors, and the canonical read schema is
-> now Pod 3's **bronze** DDL (`infra/clickhouse/init.d/01-bronze-otel.sql`, `sentinel.*`,
-> otel-collector-contrib v0.105.0). The Rust collector writes directly into bronze
-> (validated end-to-end); the Go collector still writes `default.*` and needs the same
-> alignment. Kept below for history.
+> **RESOLVED by [ADR-0007](adr/0007-bronze-canonical-contract.md).** This divergence is
+> fully closed. The canonical read schema is Pod 3's **bronze** DDL
+> (`infra/clickhouse/init.d/01-bronze-otel.sql`, database `bronze`, `bronze.*`,
+> otel-collector-contrib v0.105.0). **Both** collectors — Rust **and** Go — now write
+> directly into bronze; cross-collector equivalence is verified (identical row counts). The
+> retired `default.*` normalized write path is gone. Kept below for history.
 
 The two collectors currently ship **different, incompatible** ClickHouse schemas. As decided
 in DEFINE v1.1, the monorepo integration **does not** reconcile them — each collector keeps its

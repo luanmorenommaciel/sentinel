@@ -15,7 +15,7 @@ consumer: Pod 3 (Volume · Schema · Latency · Storage Watchers)
 
 transport:
   store: clickhouse
-  database: sentinel
+  database: bronze
   endpoints: { http: ":8123", native: ":9000" }
 
 structural_source_of_truth:

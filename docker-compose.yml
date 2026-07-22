@@ -14,9 +14,9 @@
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.3
-    # The Go collector connects as otelgen@9000/sentinel; the Rust collector uses the
-    # passwordless `default` user over HTTP :8123. We create otelgen + sentinel via an
-    # init script rather than CLICKHOUSE_USER/PASSWORD env, which would break `default`
+    # The Go collector connects as otelgen@9000/bronze; the Rust collector uses the
+    # passwordless `default` user over HTTP :8123. We create otelgen + the bronze db via
+    # an init script rather than CLICKHOUSE_USER/PASSWORD env, which would break `default`
     # auth over the network.
     ports:
       - "8123:8123"   # HTTP interface (+ /play UI) — Rust exporter
@@ -25,9 +25,9 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - ./infra/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./infra/clickhouse-users.d/zz-default-network.xml:/etc/clickhouse-server/users.d/zz-default-network.xml:ro
-      # POD 3 canonical bronze schema (sentinel.* contrib-style) — auto-applied on first boot.
-      # The collectors currently write the POD-2 normalized schema to default.* (see
-      # docs/research/pod3-bronze-gap.md); the bronze tables land here ready for that bridge.
+      # POD 3 canonical bronze schema (bronze.* contrib-style) — auto-applied on first boot.
+      # Both collectors write this bronze split schema directly (ADR-0007); the tables must
+      # exist before either collector connects, so they are created here on boot.
       - ./infra/clickhouse/init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/02-bronze-otel.sql:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/?query=SELECT+1"]
@@ -65,9 +65,9 @@ services:
     environment:
       CONTRACTS_DIR: /contracts/generator/v1
       GRPC_PORT: "4317"
-      # POD 2 normalization: the Go collector now writes the same schema as Rust to the
-      # `default` db (migrations header: "Database: default (matches Rust)").
-      CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@clickhouse:9000/default"
+      # The Go collector writes the OTel-contrib bronze split schema to the `bronze` db,
+      # identical to collector-rust (ADR-0007).
+      CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@clickhouse:9000/bronze"
     volumes:
       - ./contracts:/contracts:ro
     ports:
