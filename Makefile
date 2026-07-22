@@ -40,7 +40,7 @@ init: guard          ## Apply the selected collector's DDL (rust: bronze auto-ap
 ifeq ($(COLLECTOR),rust)
 	@echo "rust → official bronze schema (sentinel.*) auto-applies on ClickHouse boot via infra/clickhouse/init.d/; nothing to apply"
 else
-	cat services/collector-go/migrations/*.sql            | docker compose exec -T clickhouse clickhouse-client -mn
+	cat services/collector-go/infra/clickhouse/ddl/*.sql  | docker compose exec -T clickhouse clickhouse-client -mn
 endif
 
 generate: guard      ## Run the generator → OTLP :4317 (SCENARIO / SEED / WINDOW configurable)
