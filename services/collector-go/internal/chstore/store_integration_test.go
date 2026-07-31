@@ -33,7 +33,9 @@ func dsn(t *testing.T) string {
 
 func newTestStore(t *testing.T) *chstore.Store {
 	t.Helper()
-	store, err := chstore.New(dsn(t), 10, 200*time.Millisecond, slog.Default())
+	// These tests assert on the normalized default.* schema (otel_metrics unified table),
+	// so pin the store to the normalized target regardless of the CLICKHOUSE_TARGET default.
+	store, err := chstore.New(dsn(t), chstore.TargetNormalized, 10, 200*time.Millisecond, slog.Default())
 	if err != nil {
 		t.Skipf("ClickHouse unavailable (%v) — skipping integration test", err)
 	}
@@ -53,7 +55,7 @@ func TestIntegration_InsertSpan(t *testing.T) {
 	startNano := now.UnixNano()
 	endNano := startNano + 1_000_000
 
-	store.SendSpan(model.Span{
+	if err := store.SendSpans([]model.Span{{
 		Timestamp:          time.Unix(0, startNano).UTC(),
 		TraceId:            "0badc0decafebabe0123456789abcdef",
 		SpanId:             "deadbeefcafe0001",
@@ -69,7 +71,9 @@ func TestIntegration_InsertSpan(t *testing.T) {
 		ContractVersion:    "1.0.0",
 		SpanAttributes:     map[string]string{"test": "true"},
 		ResourceAttributes: map[string]string{},
-	})
+	}}); err != nil {
+		t.Fatalf("SendSpans: %v", err)
+	}
 
 	time.Sleep(400 * time.Millisecond)
 
@@ -90,7 +94,7 @@ func TestIntegration_InsertLog(t *testing.T) {
 
 	now := time.Now().UTC()
 
-	store.SendLog(model.Log{
+	if err := store.SendLogs([]model.Log{{
 		Timestamp:          now,
 		ServiceName:        "integration-test",
 		SentinelScenario:   "baseline",
@@ -105,7 +109,9 @@ func TestIntegration_InsertLog(t *testing.T) {
 		ContractVersion:    "1.0.0",
 		LogAttributes:      map[string]string{},
 		ResourceAttributes: map[string]string{},
-	})
+	}}); err != nil {
+		t.Fatalf("SendLogs: %v", err)
+	}
 
 	time.Sleep(400 * time.Millisecond)
 
@@ -126,7 +132,7 @@ func TestIntegration_InsertMetric(t *testing.T) {
 
 	now := time.Now().UTC()
 
-	store.SendMetric(model.Metric{
+	if err := store.SendMetrics([]model.Metric{{
 		Timestamp:          now,
 		MetricName:         "integration.test_gauge",
 		MetricType:         "gauge",
@@ -139,7 +145,9 @@ func TestIntegration_InsertMetric(t *testing.T) {
 		ContractVersion:    "1.0.0",
 		Attributes:         map[string]string{},
 		ResourceAttributes: map[string]string{},
-	})
+	}}); err != nil {
+		t.Fatalf("SendMetrics: %v", err)
+	}
 
 	time.Sleep(400 * time.Millisecond)
 

@@ -69,6 +69,41 @@ func (s *Store) ExportBronze(
 	return counts, nil
 }
 
+// insertBronzeMetricsSplit routes a batch of metrics to the bronze per-type tables,
+// matching flushLoop's `func(ctx, []T) error` shape so it can drive the metrics flush
+// goroutine directly (ADR-0009). It splits gauge/sum like ExportBronze and — per
+// ADR-0010 (v1 = gauge+sum) — skips histogram/summary/exp-histogram, logging the drop
+// so the omission is observable rather than silent.
+func (s *Store) insertBronzeMetricsSplit(ctx context.Context, metrics []model.Metric) error {
+	var gauges, sums []model.Metric
+	var dropped int
+	for _, m := range metrics {
+		switch m.MetricType {
+		case "gauge":
+			gauges = append(gauges, m)
+		case "sum":
+			sums = append(sums, m)
+		default:
+			dropped++
+		}
+	}
+	if dropped > 0 && s.logger != nil {
+		s.logger.Warn("bronze: dropping non-gauge/sum metrics (ADR-0010 v1=gauge+sum)",
+			"dropped", dropped, "kept", len(gauges)+len(sums))
+	}
+	if len(gauges) > 0 {
+		if err := s.insertBronzeMetrics(ctx, "sentinel.otel_metrics_gauge", gauges); err != nil {
+			return fmt.Errorf("bronze metrics gauge: %w", err)
+		}
+	}
+	if len(sums) > 0 {
+		if err := s.insertBronzeMetrics(ctx, "sentinel.otel_metrics_sum", sums); err != nil {
+			return fmt.Errorf("bronze metrics sum: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *Store) insertBronzeLogs(ctx context.Context, logs []model.Log) error {
 	batch, err := s.conn.PrepareBatch(ctx, `INSERT INTO sentinel.otel_logs (
 		Timestamp, ServiceName, SeverityText, SeverityNumber, Body,

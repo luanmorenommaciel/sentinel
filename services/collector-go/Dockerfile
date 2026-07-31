@@ -8,6 +8,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/collect
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata wget
 COPY --from=builder /bin/collector /bin/collector
+USER 65532:65532
 EXPOSE 4317 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s \
     CMD wget -qO- http://localhost:8080/health || exit 1

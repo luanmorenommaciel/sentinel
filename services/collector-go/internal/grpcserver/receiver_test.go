@@ -28,20 +28,54 @@ type captureSender struct {
 	metrics []model.Metric
 }
 
-func (c *captureSender) SendSpan(s model.Span)    { c.spans = append(c.spans, s) }
-func (c *captureSender) SendLog(l model.Log)       { c.logs = append(c.logs, l) }
-func (c *captureSender) SendMetric(m model.Metric) { c.metrics = append(c.metrics, m) }
+func (c *captureSender) SendSpans(spans []model.Span) error {
+	c.spans = append(c.spans, spans...)
+	return nil
+}
+func (c *captureSender) SendLogs(logs []model.Log) error {
+	c.logs = append(c.logs, logs...)
+	return nil
+}
+func (c *captureSender) SendMetrics(metrics []model.Metric) error {
+	c.metrics = append(c.metrics, metrics...)
+	return nil
+}
 
 func startTestServer(t *testing.T, sender grpcserver.Sender) string {
+	return startTestServerWithValidation(t, sender, grpcserver.ValidationOff)
+}
+
+func startTestServerWithValidation(t *testing.T, sender grpcserver.Sender, validation grpcserver.Validation) string {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	srv := grpcserver.New(sender, "1.0.0")
+	srv := grpcserver.New(sender, "1.0.0", validation)
 	go srv.Serve(lis) //nolint:errcheck
 	t.Cleanup(srv.GracefulStop)
 	return lis.Addr().String()
+}
+
+func TestStrictValidationReportsPartialSuccess(t *testing.T) {
+	capture := &captureSender{}
+	addr := startTestServerWithValidation(t, capture, grpcserver.ValidationStrict)
+	conn := dialTestServer(t, addr)
+
+	resp, err := collectorlogs.NewLogsServiceClient(conn).Export(context.Background(),
+		&collectorlogs.ExportLogsServiceRequest{ResourceLogs: []*logsv1.ResourceLogs{{
+			Resource:  &resourcev1.Resource{Attributes: []*commonv1.KeyValue{kv("service.name", "invalid")}},
+			ScopeLogs: []*logsv1.ScopeLogs{{LogRecords: []*logsv1.LogRecord{{Body: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: "missing contract attrs"}}}}}},
+		}}})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if resp.PartialSuccess == nil || resp.PartialSuccess.RejectedLogRecords != 1 {
+		t.Fatalf("partial success=%v, want one rejected log", resp.PartialSuccess)
+	}
+	if len(capture.logs) != 0 {
+		t.Fatalf("strict validation exported %d invalid logs", len(capture.logs))
+	}
 }
 
 func dialTestServer(t *testing.T, addr string) *grpc.ClientConn {
@@ -70,7 +104,7 @@ func TestTraceReceiver_NonZeroIDs(t *testing.T) {
 
 	traceID := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
 		0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10}
-	spanID   := []byte{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18}
+	spanID := []byte{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18}
 	parentID := []byte{0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28}
 
 	_, err := collectortrace.NewTraceServiceClient(conn).Export(

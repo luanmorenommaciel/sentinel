@@ -24,6 +24,24 @@ opentelemetry-proto = { version = "0.27", features = ["gen-tonic", "trace", "met
 tonic = "0.12"
 prost = "0.13"
 
+# `/metrics` HTTP server (EP3.2) — hyper 1.x + hyper-util + http-body-util
+# are already resolved transitively via tonic; declaring them directly only
+# adds feature flags (server/http1/tokio), not new crates to the dep tree.
+# See src/metrics_server.rs module docs.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+
+# Prometheus metrics (EP3.2). `default-features = false` drops the
+# `protobuf` feature (pure-Rust but an unneeded build dependency for text
+# exposition) and keeps `push`/`process` off (already non-default; they'd
+# pull in reqwest/procfs+libc). What remains — lazy_static, memchr,
+# parking_lot — is pure Rust with no -sys/OpenSSL/ring dependency, so it
+# links cleanly into the musl-static distroless image. See
+# src/metrics.rs module docs.
+prometheus = { version = "0.13", default-features = false }
+
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
 tokio-stream = "0.1"

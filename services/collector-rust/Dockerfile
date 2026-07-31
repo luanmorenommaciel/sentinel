@@ -1,21 +1,39 @@
-# Sentinel OTel Collector — multi-stage build (Day 7).
+# Sentinel OTel Collector — multi-stage, multi-arch build (EP4.1).
 #
 # Our dependency tree is pure Rust (cityhash-rs + lz4_flex, no *-sys / OpenSSL /
 # ring), so we cross-compile a FULLY STATIC musl binary and ship it on
 # distroless/static — no libc, no shell, ~the binary only. Smallest + safest
 # attack surface.
 #
-# Build (from the crate dir):  docker build -t sentinel-collector:dev services/collector-rust
-# Or via the full-stack compose: docker compose -f infra/docker-compose.yml \
-#                                  -f infra/docker-compose.collector.yml up --build
+# Multi-arch: BuildKit populates TARGETARCH (amd64 | arm64). Each platform builds
+# for its OWN musl triple, so there is no host→target cross-link (that path failed
+# with `cc: unrecognized command-line option '-m64'` on arm64 hosts). Build both
+# arches with buildx:
+#
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -t sentinel-collector-rust:dev services/collector-rust
+#
+# Single-arch (native) still works with a plain `docker build`.
 
 # ─── builder ──────────────────────────────────────────────────────────────────
 FROM rust:1.96-slim-bookworm AS builder
 
-# The musl target gives us a static binary. The base image pins the compiler to
-# 1.96; we deliberately do NOT copy rust-toolchain.toml here so rustup doesn't
-# pull the heavy components it lists (rust-analyzer et al.) into the builder.
-RUN rustup target add x86_64-unknown-linux-musl
+# BuildKit sets TARGETARCH from --platform (defaults to the build host's arch for
+# a plain `docker build`). Map Docker's arch names to Rust musl triples.
+ARG TARGETARCH
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      amd64) echo "x86_64-unknown-linux-musl"  > /tmp/rust-target ;; \
+      arm64) echo "aarch64-unknown-linux-musl" > /tmp/rust-target ;; \
+      *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac
+
+# musl-tools provides musl-gcc, the linker for the *-musl targets. We build each
+# arch natively (no cross toolchain), so only the musl target + its std are added.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends musl-tools \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add "$(cat /tmp/rust-target)"
 
 WORKDIR /build
 
@@ -25,7 +43,7 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir src \
     && echo 'fn main() {}' > src/main.rs \
     && echo '' > src/lib.rs \
-    && cargo build --release --target x86_64-unknown-linux-musl --locked \
+    && cargo build --release --target "$(cat /tmp/rust-target)" --locked \
     && rm -rf src
 
 # Now the real sources. `touch` is REQUIRED: Docker COPY preserves the original
@@ -34,8 +52,8 @@ RUN mkdir src \
 # forces a recompile of the crate (deps stay cached).
 COPY src ./src
 RUN find src -name '*.rs' -exec touch {} + \
-    && cargo build --release --target x86_64-unknown-linux-musl --locked \
-    && cp target/x86_64-unknown-linux-musl/release/sentinel-collector /sentinel-collector
+    && cargo build --release --target "$(cat /tmp/rust-target)" --locked \
+    && cp "target/$(cat /tmp/rust-target)/release/sentinel-collector" /sentinel-collector
 
 # ─── runtime ──────────────────────────────────────────────────────────────────
 # distroless/static: no libc, no shell, no package manager. Runs as nonroot.

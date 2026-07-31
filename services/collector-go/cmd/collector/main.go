@@ -18,6 +18,10 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(2)
+	}
 
 	var handler slog.Handler
 	if cfg.LogFormat == "text" {
@@ -28,7 +32,7 @@ func main() {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
-	store, err := chstore.New(cfg.ClickHouseDSN, cfg.BatchSize, cfg.FlushInterval, logger)
+	store, err := chstore.New(cfg.ClickHouseDSN, cfg.Target, cfg.BatchSize, cfg.FlushInterval, logger)
 	if err != nil {
 		logger.Error("failed to connect to ClickHouse", "error", err)
 		os.Exit(1)
@@ -49,7 +53,7 @@ func main() {
 		grpcOpts = append(grpcOpts, tlsOpt)
 		logger.Info("gRPC TLS enabled", "cert", cfg.GRPCTLSCertFile)
 	}
-	grpcSrv := grpcserver.New(store, cfg.ExpectedContractVersion, grpcOpts...)
+	grpcSrv := grpcserver.New(store, cfg.ExpectedContractVersion, grpcserver.ParseValidation(cfg.GRPCValidation), grpcOpts...)
 	httpSrv := httpserver.New(cfg.HTTPPort, store)
 
 	quit := make(chan os.Signal, 1)

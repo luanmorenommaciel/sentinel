@@ -16,11 +16,15 @@ import (
 	"sentinel/collector/internal/model"
 )
 
-// Sender accepts telemetry signals for buffered delivery to the store.
+// Sender accepts telemetry signals for buffered delivery to the store. Each
+// method returns an error when the signal cannot be enqueued (buffer full →
+// ClickHouse not draining) so the handler rejects the whole gRPC request. A
+// successful ack means accepted into the in-memory pipeline; storage completion
+// is reported separately by persisted/dropped metrics.
 type Sender interface {
-	SendSpan(model.Span)
-	SendLog(model.Log)
-	SendMetric(model.Metric)
+	SendSpans([]model.Span) error
+	SendLogs([]model.Log) error
+	SendMetrics([]model.Metric) error
 }
 
 type Server struct {
@@ -28,14 +32,14 @@ type Server struct {
 }
 
 // New creates the gRPC server and registers all three OTLP service handlers.
-// expectedContractVersion is logged as a warning when incoming telemetry carries
-// a different contract_version resource attribute.
-func New(sender Sender, expectedContractVersion string, opts ...grpc.ServerOption) *Server {
+// expectedContractVersion is checked against incoming telemetry's contract_version;
+// validation selects how boundary contract violations are handled (EP3.3).
+func New(sender Sender, expectedContractVersion string, validation Validation, opts ...grpc.ServerOption) *Server {
 	srv := grpc.NewServer(opts...)
 
-	collectortrace.RegisterTraceServiceServer(srv, &traceReceiver{sender: sender, expectedVersion: expectedContractVersion})
-	collectorlogs.RegisterLogsServiceServer(srv, &logsReceiver{sender: sender, expectedVersion: expectedContractVersion})
-	collectormetrics.RegisterMetricsServiceServer(srv, &metricsReceiver{sender: sender, expectedVersion: expectedContractVersion})
+	collectortrace.RegisterTraceServiceServer(srv, &traceReceiver{sender: sender, expectedVersion: expectedContractVersion, validation: validation})
+	collectorlogs.RegisterLogsServiceServer(srv, &logsReceiver{sender: sender, expectedVersion: expectedContractVersion, validation: validation})
+	collectormetrics.RegisterMetricsServiceServer(srv, &metricsReceiver{sender: sender, expectedVersion: expectedContractVersion, validation: validation})
 
 	reflection.Register(srv)
 
