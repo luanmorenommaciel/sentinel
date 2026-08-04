@@ -7,14 +7,14 @@
 | Date | 2026-06-23 (supersedes `1.0.0-rc.1`: adopts the bronze schema) |
 | Producer | Pod 2 (OTel Collector) |
 | Consumer | Pod 3 (Volume · Schema · Latency · Storage Watchers) |
-| Transport | ClickHouse — HTTP `:8123` / native `:9000`, database **`sentinel`** |
+| Transport | ClickHouse — HTTP `:8123` / native `:9000`, database **`bronze`** |
 | Source of truth | [`infra/clickhouse/init.d/01-bronze-otel.sql`](../../../infra/clickhouse/init.d/01-bronze-otel.sql) — the bronze DDL (Pod-3-owned, otel-collector-contrib v0.105.0) |
 | Decisions | [ADR-0007](../../../docs/adr/0007-bronze-canonical-contract.md) (bronze = canonical) · [ADR-0006](../../../docs/adr/0006-optional-id-representation.md) (optional IDs, refined) · ~~ADR-0005~~ (superseded) |
 | Rationale | [`docs/research/pod3-bronze-gap.md`](../../../docs/research/pod3-bronze-gap.md) (gap analysis + live evidence) |
 
 > **What changed in 1.0.0.1 (consumers must update reads).** This contract previously documented Pod 2's
 > *hand-rolled* `default.*` schema (ADR-0005). Per **ADR-0007**, the canonical read
-> schema is now Pod 3's **bronze** DDL (`sentinel.*`, otel-collector-contrib v0.105.0),
+> schema is now Pod 3's **bronze** DDL (`bronze.*`, otel-collector-contrib v0.105.0),
 > and the Rust collector writes directly into it. The structural shape is therefore owned
 > by the bronze DDL — this document is the **semantic layer** on top of it: which columns
 > Pod 2 populates and guarantees, where the Sentinel metadata lives, and the conventions
@@ -31,7 +31,7 @@
 ## 1. What this contract covers
 
 Pod 2's Collector parses Pod 1's OTLP signals and writes them into the **bronze**
-ClickHouse tables (database `sentinel`). Pod 3's Watchers and silver layer **read** from
+ClickHouse tables (database `bronze`). Pod 3's Watchers and silver layer **read** from
 bronze. The bronze table/column *structure* is defined by the DDL (source of truth above,
 `create_schema:false` — Pod 3 owns the lifecycle; the collector only `INSERT`s). This
 document adds the **semantic guarantees** Pod 3 may rely on, plus consumer obligations.
@@ -190,7 +190,7 @@ The bronze schema is already the agreed contract boundary (`1.0.0.1`); full rati
 (flipping [ADR-0007](../../../docs/adr/0007-bronze-canonical-contract.md) → Accepted) needs **all** of:
 
 1. ☑ **Round-trip into bronze verified** *(2026-06-23)* — generator → Rust collector →
-   `sentinel.*` lands `40,200 logs / 40,200 traces / 152,700 metrics` (gauge 83,400 + sum
+   `bronze.*` lands `40,200 logs / 40,200 traces / 152,700 metrics` (gauge 83,400 + sum
    69,300), lossless, zero export failures; the file-mode golden round-trip yields
    `48 logs / 48 traces / 183 metrics`; Sentinel keys present in `ResourceAttributes`;
    contrib-rich columns defaulted; no leakage to `default.*`. Proven live against ClickHouse
@@ -216,7 +216,7 @@ The bronze schema is already the agreed contract boundary (`1.0.0.1`); full rati
          sum(Value*Value) AS sum_sq,
          min(Value)     AS min_val,
          max(Value)     AS max_val
-  FROM sentinel.otel_metrics_sum   -- (UNION the gauge table as needed)
+  FROM bronze.otel_metrics_sum   -- (UNION the gauge table as needed)
   GROUP BY ServiceName, MetricName, scenario, window_start;
   ```
 - **Index acceleration for Sentinel filters (§3).** Do you want these materialized as silver

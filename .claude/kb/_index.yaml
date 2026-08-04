@@ -203,7 +203,8 @@ domains:
     entry_points:
       index: index.md
       quick_reference: quick-reference.md
-    concepts: []
+    concepts:
+      - agent-git-governance
     patterns: []
     related_agents:
       - the-planner
@@ -267,5 +268,5 @@ domains:
 stats:
   domain_count: 11
   agent_count: 16
-  total_files: 76     # arch-diagramming v1: + diagram-type-rubrics + boundary-types concepts
+  total_files: 77     # + agent-git-governance concept
   templates_count: 5

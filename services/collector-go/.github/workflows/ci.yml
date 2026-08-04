@@ -44,7 +44,7 @@ jobs:
           - 9000:9000
           - 8123:8123
         env:
-          CLICKHOUSE_DB: default
+          CLICKHOUSE_DB: bronze
           CLICKHOUSE_USER: otelgen
           CLICKHOUSE_PASSWORD: otelgen_secret
           CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
@@ -63,14 +63,14 @@ jobs:
           go-version: "1.21"
           cache: true
 
-      - name: Apply schema
+      - name: Apply bronze schema
         run: |
-          curl -s http://localhost:8123/ -u otelgen:otelgen_secret \
-            --data-binary @migrations/001_init_schema.sql
+          cat ../../infra/clickhouse/init.d/01-bronze-otel.sql | curl -s http://localhost:8123/ -u otelgen:otelgen_secret \
+            --data-binary @-
 
       - name: Run integration tests
         env:
-          CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@localhost:9000/default"
+          CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@localhost:9000/bronze"
         run: CGO_ENABLED=0 go test ./internal/chstore/... -tags integration -v -timeout 60s
 
   docker:

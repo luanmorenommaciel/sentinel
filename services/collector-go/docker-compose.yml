@@ -8,7 +8,7 @@ services:
       - "8123:8123"   # HTTP interface + /play UI
       - "9000:9000"   # Native TCP (used by collector)
     environment:
-      CLICKHOUSE_DB: default
+      CLICKHOUSE_DB: bronze
       CLICKHOUSE_USER: otelgen
       CLICKHOUSE_PASSWORD: otelgen_secret
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
@@ -20,8 +20,9 @@ services:
       start_period: 10s
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      # Auto-run schema init on first start
-      - ./migrations:/docker-entrypoint-initdb.d:ro
+      # Auto-apply the POD 3 canonical bronze split schema (bronze.*) on first boot.
+      # Shared with the root orchestrator — the Go collector writes bronze directly (ADR-0007).
+      - ../../infra/clickhouse/init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/01-bronze-otel.sql:ro
 
   # Go OTel Collector — receives OTLP gRPC from OTelGen (Pod 1)
   collector:
@@ -30,7 +31,7 @@ services:
       - "4317:4317"   # OTLP gRPC receiver
       - "8080:8080"   # HTTP health/ready
     environment:
-      CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@clickhouse:9000/default"
+      CLICKHOUSE_DSN: "clickhouse://otelgen:otelgen_secret@clickhouse:9000/bronze"
       GRPC_PORT: "4317"
       HTTP_PORT: "8080"
       BATCH_SIZE: "100"
@@ -54,7 +55,7 @@ services:
   # CLICKHOUSE_ENDPOINT aponta o OTel Collector interno do HyperDX para nosso CH.
   # DEFAULT_CONNECTIONS usa nome "Local ClickHouse" (hardcoded nos DEFAULT_SOURCES do entrypoint).
   # Adiciona também "Sentinel ClickHouse" (user otelgen) para consultas manuais às nossas tabelas.
-  # make sender-hyperdx envia dados via OTLP gRPC :4316 → gravados em default.otel_* no nosso CH.
+  # make sender-hyperdx envia dados via OTLP gRPC :4316 → gravados em bronze.otel_* no nosso CH.
   hyperdx:
     image: hyperdx/hyperdx-all-in-one:latest
     depends_on:
@@ -67,9 +68,9 @@ services:
     environment:
       NODE_ENV: "production"
       # "Local ClickHouse" (localhost:8123) = CH interno do HyperDX — usado pelos DEFAULT_SOURCES do entrypoint.
-      # "Sentinel ClickHouse" = nosso CH externo com user otelgen — para consultas manuais às tabelas sentinel.*.
+      # "Sentinel ClickHouse" = nosso CH externo com user otelgen — para consultas manuais às tabelas bronze.*.
       # make sender-hyperdx → OTLP :4316 → CH interno → visível no HyperDX UI
-      # make sender        → nosso collector :4317 → default.otel_* → ClickHouse Play ou Sentinel ClickHouse
+      # make sender        → nosso collector :4317 → bronze.otel_* → ClickHouse Play ou Sentinel ClickHouse
       DEFAULT_CONNECTIONS: '[{"name":"Local ClickHouse","host":"http://localhost:8123","username":"default","password":""},{"name":"Sentinel ClickHouse","host":"http://clickhouse:8123","username":"otelgen","password":"otelgen_secret"}]'
     volumes:
       - hyperdx_data:/data

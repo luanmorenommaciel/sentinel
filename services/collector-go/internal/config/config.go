@@ -23,7 +23,7 @@ func Load() Config {
 	return Config{
 		GRPCPort:                getEnv("GRPC_PORT", "4317"),
 		HTTPPort:                getEnv("HTTP_PORT", "8080"),
-		ClickHouseDSN:           getEnv("CLICKHOUSE_DSN", "clickhouse://otelgen:otelgen_secret@localhost:9000/sentinel"),
+		ClickHouseDSN:           getEnv("CLICKHOUSE_DSN", "clickhouse://otelgen:otelgen_secret@localhost:9000/bronze"),
 		BatchSize:               getEnvInt("BATCH_SIZE", 100),
 		FlushInterval:           time.Duration(getEnvInt("FLUSH_INTERVAL_MS", 500)) * time.Millisecond,
 		LogFormat:               getEnv("LOG_FORMAT", "json"),

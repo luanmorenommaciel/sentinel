@@ -18,9 +18,10 @@ Pod 2 (Collector Go)   ←── este repositório
         │  Native TCP :9000
         ▼
 ClickHouse :9000
-  sentinel.otel_spans
-  sentinel.otel_logs
-  sentinel.otel_metrics
+  bronze.otel_traces
+  bronze.otel_logs
+  bronze.otel_metrics_gauge
+  bronze.otel_metrics_sum
 ```
 
 ---
@@ -52,8 +53,6 @@ sentinel/
 │   ├── chstore/         # Batch flusher + inserters ClickHouse
 │   ├── grpcserver/      # Receivers OTLP gRPC
 │   └── httpserver/      # /health e /ready
-├── migrations/
-│   └── 001_init_schema.sql
 ├── contract/
 │   ├── schema/          # Schema de input (Pod 1)
 │   ├── golden/          # Baseline de referência (278 registros)
@@ -77,7 +76,7 @@ cp .env.example .env
 |----------|---------|-----------|
 | `GRPC_PORT` | `4317` | Porta OTLP/gRPC |
 | `HTTP_PORT` | `8080` | Porta HTTP (health/ready) |
-| `CLICKHOUSE_DSN` | `clickhouse://otelgen:otelgen_secret@localhost:9000/sentinel` | DSN nativo TCP |
+| `CLICKHOUSE_DSN` | `clickhouse://otelgen:otelgen_secret@localhost:9000/bronze` | DSN nativo TCP |
 | `BATCH_SIZE` | `100` | Registros por batch antes do flush |
 | `FLUSH_INTERVAL_MS` | `500` | Intervalo máximo de flush em ms |
 | `LOG_FORMAT` | `json` | `json` (produção) ou `text` (dev) |
@@ -109,7 +108,7 @@ make up
 
 O que acontece internamente:
 1. Docker constrói a imagem do collector (multi-stage, binário estático)
-2. ClickHouse sobe e executa `migrations/001_init_schema.sql` → cria `sentinel.otel_spans`, `sentinel.otel_logs`, `sentinel.otel_metrics`
+2. ClickHouse sobe e aplica automaticamente o DDL bronze (owned pelo Pod 3) de `infra/clickhouse/init.d/01-bronze-otel.sql` → cria `bronze.otel_traces`, `bronze.otel_logs`, `bronze.otel_metrics_gauge`, `bronze.otel_metrics_sum`
 3. O collector aguarda o ClickHouse passar o healthcheck antes de iniciar
 4. gRPC escuta em `:4317`, HTTP em `:8080`
 
@@ -140,20 +139,20 @@ Output esperado:
 Abra **http://localhost:8123/play** (user: `otelgen`, senha: `otelgen_secret`):
 
 ```sql
--- Spans
-SELECT trace_id, span_id, name, service_name, status_code
-FROM sentinel.otel_spans
-WHERE service_name = 'sender-test';
+-- Traces (spans agora ficam na tabela otel_traces)
+SELECT TraceId, SpanId, SpanName, ServiceName, StatusCode
+FROM bronze.otel_traces
+WHERE ServiceName = 'sender-test';
 
 -- Logs
-SELECT trace_id, body, severity_text
-FROM sentinel.otel_logs
-WHERE service_name = 'sender-test';
+SELECT TraceId, Body, SeverityText
+FROM bronze.otel_logs
+WHERE ServiceName = 'sender-test';
 
--- Métricas
-SELECT name, type, value, service_name
-FROM sentinel.otel_metrics
-WHERE service_name = 'sender-test';
+-- Métricas (o bronze divide por tipo de data point; gauge nesta consulta)
+SELECT MetricName, Value, ServiceName
+FROM bronze.otel_metrics_gauge
+WHERE ServiceName = 'sender-test';
 ```
 
 ### 7. Ver logs em tempo real
@@ -169,7 +168,7 @@ make down     # para, preserva dados no volume
 make reset    # para E apaga volumes (reset completo)
 ```
 
-> Use `make reset` sempre que alterar `migrations/001_init_schema.sql` — o ClickHouse só executa o init script com volume vazio.
+> Use `make reset` sempre que alterar o DDL bronze (`infra/clickhouse/init.d/01-bronze-otel.sql`) — o ClickHouse só executa o init script com volume vazio.
 
 ---
 
@@ -214,9 +213,9 @@ O sistema tem Go 1.21.5 instalado. A diretiva `go 1.23` no `go.mod` dispara down
 
 macOS 15 (Sonoma/Sequoia) + Go 1.21.5 tem incompatibilidade com o linker: binários com CGO falham com `dyld: missing LC_UUID load command`. Compilar sem CGO (`CGO_ENABLED=0`) produz um binário estático puro Go, sem dependência do runtime C do macOS. O `Makefile` encapsula isso.
 
-### Por que `CREATE DATABASE IF NOT EXISTS sentinel` na migration?
+### Por que nomes totalmente qualificados (`bronze.otel_*`)?
 
-O `docker-entrypoint-initdb.d` do ClickHouse executa o SQL sem contexto de banco padrão. `CREATE TABLE IF NOT EXISTS otel_spans` cria em `default`, não em `sentinel`. Nomes totalmente qualificados (`sentinel.otel_spans`) junto com `CREATE DATABASE IF NOT EXISTS sentinel` garantem que as tabelas fiquem no banco correto independente do contexto de execução.
+O `docker-entrypoint-initdb.d` do ClickHouse executa o SQL sem contexto de banco padrão. `CREATE TABLE IF NOT EXISTS otel_traces` criaria em `default`, não em `bronze`. Nomes totalmente qualificados (`bronze.otel_traces`) junto com `CREATE DATABASE IF NOT EXISTS bronze` garantem que as tabelas fiquem no banco correto independente do contexto de execução. O DDL bronze é owned pelo Pod 3 e auto-aplicado no boot (`infra/clickhouse/init.d/01-bronze-otel.sql`); o collector apenas faz `INSERT`.
 
 ### Por que interface `Sender` no grpcserver?
 

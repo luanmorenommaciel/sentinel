@@ -9,6 +9,37 @@
 | Supersedes | ADR-0005 (hand-rolled ClickHouse storage schema) |
 | Related | ADR-0006 (optional-ID representation — refined, not superseded) · ADR-0004 (Collector language) · [Pod 2→Pod 3 read contract](../../contracts/collector/v1/pod2-pod3-read-contract.md) · [bronze gap analysis](../research/pod3-bronze-gap.md) · [schema-divergence note](../clickhouse-schema-divergence.md) · bronze DDL `infra/clickhouse/init.d/01-bronze-otel.sql` |
 
+## Amendment — 2026-07-21 (draft; ADR remains **Proposed**)
+
+Two changes since the original draft. **This amendment does not flip the status** — the
+acceptance gate (Pod 3 sign-off, Next-step 1) is still open, so ADR-0007 stays *Proposed*.
+The decision body below is preserved as originally written; where it names the database
+`sentinel`, read it as **`bronze`** per (a).
+
+**(a) The canonical bronze database was renamed `sentinel` → `bronze`.**
+The original DDL created the database `sentinel` (commit `660920d`). That name collided with
+two *different* concepts also called "sentinel": the project itself, and the `sentinel.*`
+resource-attribute **keys** (`sentinel.scenario` / `sentinel.run_id` / `sentinel.synthetic`)
+that this ADR deliberately carries inside `ResourceAttributes`. A reader could not tell "the
+Sentinel database" from "the Sentinel attribute namespace" from "the Sentinel project". The
+database is now named **`bronze`** — it names the medallion storage tier explicitly, and
+removes the ambiguity. All tables are now `bronze.otel_*`; the DDL, both collector configs,
+the read contract, and the compose/orchestrator wiring were updated in lockstep. The
+`sentinel.*` attribute **keys** are unchanged (they are semantic metadata, not the db name).
+
+**(b) The Go collector is aligned to bronze — this closes Next-steps item 4.**
+The Go collector now writes the *identical* OTel-contrib bronze split schema into database
+`bronze` (logs → `bronze.otel_logs`, spans → `bronze.otel_traces`, metrics routed by
+data-point type into `bronze.otel_metrics_gauge` / `bronze.otel_metrics_sum`), via the same
+`insertBronze*` path collector-rust uses. Its previous normalized `default.*` write path
+(and its per-collector DDL) was **retired**. Cross-collector equivalence is verified: for the
+same seed/scenario/window both collectors land identical row counts — `otel_logs` 40,200,
+`otel_traces` 40,200, `otel_metrics_gauge` 83,400, `otel_metrics_sum` 69,300 — and an
+identical `SHOW TABLES FROM bronze`. Both collectors are now interchangeable at the bronze
+boundary.
+
+The original acceptance gate, options, trade-offs, and remaining risks are unchanged.
+
 ## Context
 
 ADR-0005 chose a **hand-rolled** ClickHouse schema (`default.*`, the 5 guaranteed
@@ -125,7 +156,8 @@ moves to silver and must be rebuilt there.
    `1.0.0.1`.
 3. Confirm with Pod 3: the `StatusCode` value convention (R3) and ownership of the
    `otel_metrics_1m` rollup in silver (R4).
-4. Align the Go collector to bronze (separate task).
+4. ~~Align the Go collector to bronze (separate task).~~ ✅ **Done 2026-07-21** — see the
+   Amendment (b) above; both collectors now write identical rows into `bronze.*`.
 
 ## References
 

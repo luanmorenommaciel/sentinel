@@ -4,11 +4,11 @@
 //
 // Run with:
 //
-//	CLICKHOUSE_DSN="clickhouse://otelgen:otelgen_secret@localhost:9000/sentinel" \
+//	CLICKHOUSE_DSN="clickhouse://otelgen:otelgen_secret@localhost:9000/bronze" \
 //	  CGO_ENABLED=0 go test ./internal/chstore/... -tags integration -v
 //
-// The ClickHouse instance must have the sentinel schema applied
-// (see migrations/001_init_schema.sql).
+// The ClickHouse instance must have the bronze schema applied
+// (see infra/clickhouse/init.d/01-bronze-otel.sql).
 package chstore_test
 
 import (
@@ -26,7 +26,7 @@ func dsn(t *testing.T) string {
 	t.Helper()
 	v := os.Getenv("CLICKHOUSE_DSN")
 	if v == "" {
-		v = "clickhouse://otelgen:otelgen_secret@localhost:9000/default"
+		v = "clickhouse://otelgen:otelgen_secret@localhost:9000/bronze"
 	}
 	return v
 }
@@ -146,7 +146,7 @@ func TestIntegration_InsertMetric(t *testing.T) {
 	conn := store.Conn()
 	var count uint64
 	if err := conn.QueryRow(context.Background(),
-		"SELECT count() FROM otel_metrics WHERE MetricName = 'integration.test_gauge'",
+		"SELECT count() FROM otel_metrics_gauge WHERE MetricName = 'integration.test_gauge'",
 	).Scan(&count); err != nil {
 		t.Fatalf("query: %v", err)
 	}

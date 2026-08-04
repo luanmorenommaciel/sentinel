@@ -1,12 +1,13 @@
 ---
 title: Crew B Way of Working
-last_updated: 2026-06-01
-confidence: 0.85
+last_updated: 2026-07-14
+confidence: 0.95
 ---
 
 # Crew B Way of Working
 
 > **MCP Validated:** 2026-06-01
+> **Agent Git governance web-validated:** 2026-07-14
 > Sources: Sync 01 deck, Sync 02 transcript (2026-05-26), `bem-vindos.md` (Commander's intro), `.claude/docs/CREW_B_GLOSSARY.md`.
 
 This is the canonical process reference for Sentinel Crew B. Every Astronaut, every PR, and every weekly sync follows what is written here. When this file and a Discord message disagree, this file wins.
@@ -125,6 +126,8 @@ ADR-0004 (Collector implementation language: Rust vs Go) is live on `feat/rust-o
 ---
 
 ## PR Flow (8 Steps)
+
+For agent-authored changes, the eight steps run inside the isolation and governance rules in [`concepts/agent-git-governance.md`](concepts/agent-git-governance.md): one Issue, agent task, worktree, short-lived branch, and PR per independently reviewable outcome. Agents never share a mutable checkout or bypass GitHub merge controls.
 
 ```mermaid
 flowchart TD
@@ -248,6 +251,7 @@ Contract spec for Pod 1 output: `contract/schema/otlp_output.schema.json` on `00
 
 ## See also
 
+- [`concepts/agent-git-governance.md`](concepts/agent-git-governance.md) — three agent execution models and Sentinel's Git/GitHub control standard
 - `.claude/CLAUDE.md` — full project context, architecture summary, KB routing table
 - `.claude/docs/CREW_B_GLOSSARY.md` — canonical definitions for all Sentinel terms
 - `.claude/docs/RUST_PROJECT_STANDARDS.md` — Rust CI profile, workspace layout, `cargo` toolchain

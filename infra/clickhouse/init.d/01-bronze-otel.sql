@@ -21,12 +21,12 @@
 -- TTL: 30-day rolling window (ADR-002) — owned here, not in collector config.
 -- Idempotent: CREATE ... IF NOT EXISTS throughout, safe to re-run.
 
-CREATE DATABASE IF NOT EXISTS sentinel;
+CREATE DATABASE IF NOT EXISTS bronze;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- TRACES — one row per span. The primary bronze table watchers' silver feeds from.
 -- ─────────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS sentinel.otel_traces
+CREATE TABLE IF NOT EXISTS bronze.otel_traces
 (
     `Timestamp` DateTime64(9) CODEC(Delta(8), ZSTD(1)),
     `TraceId` String CODEC(ZSTD(1)),
@@ -64,7 +64,7 @@ TTL toDateTime(Timestamp) + toIntervalDay(30)
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
 -- Trace lookup helper: TraceId -> time range. Populated by the MV below, not the exporter.
-CREATE TABLE IF NOT EXISTS sentinel.otel_traces_trace_id_ts
+CREATE TABLE IF NOT EXISTS bronze.otel_traces_trace_id_ts
 (
     `TraceId` String CODEC(ZSTD(1)),
     `Start` DateTime64(9) CODEC(Delta(8), ZSTD(1)),
@@ -76,20 +76,20 @@ ORDER BY (TraceId, toUnixTimestamp(Start))
 TTL toDateTime(Start) + toIntervalDay(30)
 SETTINGS index_granularity = 8192;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS sentinel.otel_traces_trace_id_ts_mv
-TO sentinel.otel_traces_trace_id_ts
+CREATE MATERIALIZED VIEW IF NOT EXISTS bronze.otel_traces_trace_id_ts_mv
+TO bronze.otel_traces_trace_id_ts
 AS SELECT
     TraceId,
     min(Timestamp) AS Start,
     max(Timestamp) AS End
-FROM sentinel.otel_traces
+FROM bronze.otel_traces
 WHERE TraceId != ''
 GROUP BY TraceId;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- LOGS — one row per log record (pipeline stage INFO/ERROR lines land here).
 -- ─────────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS sentinel.otel_logs
+CREATE TABLE IF NOT EXISTS bronze.otel_logs
 (
     `Timestamp` DateTime64(9) CODEC(Delta(8), ZSTD(1)),
     `TimestampDate` Date DEFAULT toDate(Timestamp),
@@ -129,7 +129,7 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 -- bytes_written); gauge/exponential_histogram/summary must still exist or the
 -- exporter's table check fails at startup.
 -- ─────────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS sentinel.otel_metrics_gauge
+CREATE TABLE IF NOT EXISTS bronze.otel_metrics_gauge
 (
     `ResourceAttributes` Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     `ResourceSchemaUrl` LowCardinality(String) CODEC(ZSTD(1)),
@@ -165,7 +165,7 @@ ORDER BY (ServiceName, MetricName, Attributes, toUnixTimestamp64Nano(TimeUnix))
 TTL toDateTime(TimeUnix) + toIntervalDay(30)
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
-CREATE TABLE IF NOT EXISTS sentinel.otel_metrics_sum
+CREATE TABLE IF NOT EXISTS bronze.otel_metrics_sum
 (
     `ResourceAttributes` Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     `ResourceSchemaUrl` LowCardinality(String) CODEC(ZSTD(1)),
@@ -203,7 +203,7 @@ ORDER BY (ServiceName, MetricName, Attributes, toUnixTimestamp64Nano(TimeUnix))
 TTL toDateTime(TimeUnix) + toIntervalDay(30)
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
-CREATE TABLE IF NOT EXISTS sentinel.otel_metrics_histogram
+CREATE TABLE IF NOT EXISTS bronze.otel_metrics_histogram
 (
     `ResourceAttributes` Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     `ResourceSchemaUrl` LowCardinality(String) CODEC(ZSTD(1)),
@@ -245,7 +245,7 @@ ORDER BY (ServiceName, MetricName, Attributes, toUnixTimestamp64Nano(TimeUnix))
 TTL toDateTime(TimeUnix) + toIntervalDay(30)
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
-CREATE TABLE IF NOT EXISTS sentinel.otel_metrics_exponential_histogram
+CREATE TABLE IF NOT EXISTS bronze.otel_metrics_exponential_histogram
 (
     `ResourceAttributes` Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     `ResourceSchemaUrl` LowCardinality(String) CODEC(ZSTD(1)),
@@ -291,7 +291,7 @@ ORDER BY (ServiceName, MetricName, Attributes, toUnixTimestamp64Nano(TimeUnix))
 TTL toDateTime(TimeUnix) + toIntervalDay(30)
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
-CREATE TABLE IF NOT EXISTS sentinel.otel_metrics_summary
+CREATE TABLE IF NOT EXISTS bronze.otel_metrics_summary
 (
     `ResourceAttributes` Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     `ResourceSchemaUrl` LowCardinality(String) CODEC(ZSTD(1)),

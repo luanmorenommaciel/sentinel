@@ -4,7 +4,7 @@ services:
   # Standalone ClickHouse — target for the DIRECT-WRITE path (--delivery direct).
   # Uses the config-driven schema from contract/clickhouse_schema.yaml.
   # Inspect data via the built-in Play UI at http://localhost:8123/play
-  # (user: otelgen / password: otelgen_secret / database: sentinel).
+  # (user: otelgen / password: otelgen_secret / database: bronze).
   # ---------------------------------------------------------------------------
   clickhouse:
     image: clickhouse/clickhouse-server:24.3
@@ -12,7 +12,7 @@ services:
       - "8123:8123"   # HTTP interface (+ /play UI)
       - "9000:9000"   # Native TCP interface
     environment:
-      CLICKHOUSE_DB: sentinel
+      CLICKHOUSE_DB: bronze
       CLICKHOUSE_USER: otelgen
       CLICKHOUSE_PASSWORD: otelgen_secret
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
@@ -61,7 +61,7 @@ services:
       CH_PORT: "8123"
       CH_USER: otelgen
       CH_PASSWORD: otelgen_secret
-      CH_DATABASE: sentinel
+      CH_DATABASE: bronze
       # OTLP endpoint (used with --delivery otlp) — point at the ClickStack
       # all-in-one collector by its compose service name.
       OTELGEN_OTLP_ENDPOINT: "http://clickstack:4318"

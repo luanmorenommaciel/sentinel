@@ -24,16 +24,16 @@ flowchart TB
         subgraph POD2["POD 2 · B2 — OTel Collector · interchangeable impls"]
             direction LR
             CRUST["collector-rust ✅<br/>reference · writes bronze"]
-            CGO["collector-go 🔶<br/>normalized · bronze pending"]
+            CGO["collector-go ✅<br/>writes bronze"]
             C3["collector-&lt;lang&gt; ⏳<br/>future"]
         end
 
-        subgraph STORE["ClickHouse · sentinel.* BRONZE (Pod-3-owned DDL)"]
+        subgraph STORE["ClickHouse · BRONZE bronze.* (Pod-3-owned DDL)"]
             direction LR
             RAW[("otel_logs · otel_traces<br/>otel_metrics_gauge · otel_metrics_sum")]
         end
 
-        C2{{"◆ CONTRACT ② ◆<br/>Pod 2 → Pod 3 · read interface<br/>= the bronze DDL (infra/clickhouse/init.d/)<br/>sentinel.* · contrib v0.105.0<br/>v1.0.0.1 · ''=absent · Duration ns"}}
+        C2{{"◆ CONTRACT ② ◆<br/>Pod 2 → Pod 3 · read interface<br/>= the bronze DDL (infra/clickhouse/init.d/)<br/>bronze.* · contrib v0.105.0<br/>v1.0.0.1 · ''=absent · Duration ns"}}
 
         subgraph POD3["POD 3 · B3 — Data modelling & read layer"]
             direction LR
@@ -83,7 +83,7 @@ flowchart TB
 |---|---|
 | **Receive** | OTLP gRPC `:4317` (real clients) **or** NDJSON file (Pod 1's generator), both conforming to **`contracts/generator/v1/otlp_output.schema.json` v1.0.0** |
 | **Process** | Parse/transform → internal `Signal` (log / span / metric) → typed rows; derive span duration; route metrics by type |
-| **Deliver** | Rows in the **bronze** `sentinel.otel_logs` / `otel_traces` / `otel_metrics_gauge` / `otel_metrics_sum`, per the **Pod 2 → Pod 3 read contract**; Pod 3 builds silver (rolling-stats, read models) on top |
+| **Deliver** | Rows in the **bronze** `bronze.otel_logs` / `otel_traces` / `otel_metrics_gauge` / `otel_metrics_sum`, per the **Pod 2 → Pod 3 read contract**; Pod 3 builds silver (rolling-stats, read models) on top |
 
 ---
 
@@ -94,7 +94,7 @@ flowchart TB
 | Pod | Crew | Phase 1 role | Status |
 |---|---|---|---|
 | **Pod 1** | B1 | Telemetry **Generator** + the **OTLP input contract** | Input contract **v1.0.0 frozen** |
-| **Pod 2** | B2 | **OTel Collector** — ingest · validate · transform · export | Rust **writes bronze, validated e2e**; Go normalized (bronze pending) |
+| **Pod 2** | B2 | **OTel Collector** — ingest · validate · transform · export | Rust **and** Go both **write bronze**, validated e2e (equivalence verified) |
 | **Pod 3** | B3 | **Data modelling** — owns the bronze DDL; builds silver + read models | Bronze landed; silver in progress |
 | **Pod 4** | B4 | *(Future)* Action Dispatcher — remediation + paging | Future phase |
 
@@ -110,8 +110,8 @@ Pod 2 ships **multiple collector implementations** (a deliberate bake-off — [A
 
 | Implementation | Language | Owner | Status |
 |---|---|---|---|
-| [`services/collector-rust/`](services/collector-rust/) | Rust | Victor | ✅ **Reference** — OTLP gRPC + NDJSON → **bronze `sentinel.*`**, Dockerized, CI-green |
-| [`services/collector-go/`](services/collector-go/) | Go | Alex | 🔶 Normalized to `default.*`; bronze alignment pending |
+| [`services/collector-rust/`](services/collector-rust/) | Rust | Victor | ✅ **Reference** — OTLP gRPC + NDJSON → **bronze `bronze.*`**, Dockerized, CI-green |
+| [`services/collector-go/`](services/collector-go/) | Go | Alex | ✅ Aligned — writes **bronze `bronze.*`** (same schema as Rust; equivalence verified) |
 | `services/collector-<lang>/` | TBD | B2 | ⏳ Future |
 
 The Rust collector is the **reference**: it defines the behaviour every other implementation must match (the bronze output + the golden conformance fixture). The aligned exporter writes directly into Pod 3's bronze tables — see [ADR-0007](docs/adr/0007-bronze-canonical-contract.md).
@@ -129,7 +129,7 @@ Contracts are **language-agnostic shared assets** — never duplicated inside an
 
 **Input** — three signal types (`log` / `span` / `metric`), 5 guaranteed `sentinel.*`/`cloud.provider` resource keys, contract-versioned. A golden fixture (`baseline_seed42.jsonl`, 48 logs + 48 spans + 183 metrics) is the conformance oracle.
 
-**Output** — the canonical read schema is Pod 3's **bronze** DDL (`sentinel.*`, otel-collector-contrib v0.105.0). The read contract documents the *semantic* layer on top: the 5 Sentinel keys are carried in `ResourceAttributes`, optional IDs follow the `''`=absent rule, `Duration` is nanoseconds, metrics split into gauge/sum, and the rolling-stats rollup is a Pod 3 **silver** artifact. Full ratification = [ADR-0007](docs/adr/0007-bronze-canonical-contract.md) accepted + Pod 3 sign-off (the round-trip evidence is met).
+**Output** — the canonical read schema is Pod 3's **bronze** DDL (`bronze.*`, otel-collector-contrib v0.105.0). The read contract documents the *semantic* layer on top: the 5 Sentinel keys are carried in `ResourceAttributes`, optional IDs follow the `''`=absent rule, `Duration` is nanoseconds, metrics split into gauge/sum, and the rolling-stats rollup is a Pod 3 **silver** artifact. Full ratification = [ADR-0007](docs/adr/0007-bronze-canonical-contract.md) accepted + Pod 3 sign-off (the round-trip evidence is met).
 
 **Decisions of record** — [`docs/adr/`](docs/adr/): 0004 (language) · ~~0005 (hand-rolled schema)~~ superseded · 0006 (optional-ID, refined) · **0007 (bronze = canonical contract)**.
 
@@ -155,7 +155,7 @@ sentinel/
 ├── infra/                         # 🔗 SHARED · ClickHouse bootstrap
 │   ├── clickhouse-init.sql                #   db/users init (dev-only auth)
 │   ├── clickhouse-users.d/                #   default-user network override (Rust HTTP path)
-│   └── clickhouse/init.d/01-bronze-otel.sql  #   the BRONZE schema (sentinel.*, Pod-3-owned)
+│   └── clickhouse/init.d/01-bronze-otel.sql  #   the BRONZE schema (bronze.*, Pod-3-owned)
 │
 ├── docs/                          # 🔗 SHARED · cross-cutting knowledge
 │   ├── adr/                       #   architecture decisions (numbered, Pod-spanning)
@@ -179,8 +179,8 @@ sentinel/
 Requires Docker (no host toolchains). Choose the collector with `COLLECTOR` (default `rust`):
 
 ```sh
-make e2e                  # ClickHouse (bronze auto-applied) + Rust collector + generator → sentinel.*
-make e2e COLLECTOR=go     # same, with the Go collector (writes default.* — bronze alignment pending)
+make e2e                  # ClickHouse (bronze auto-applied) + Rust collector + generator → bronze.*
+make e2e COLLECTOR=go     # same, with the Go collector (writes bronze.* — same as Rust)
 ```
 
 Step by step, plus inspect:
@@ -189,7 +189,7 @@ Step by step, plus inspect:
 make up   COLLECTOR=rust       # start ClickHouse (bronze auto-applies on boot) + the collector
 make generate SCENARIO=black_friday SEED=42   # generate → OTLP :4317
 make logs COLLECTOR=rust       # tail collector logs
-# inspect at http://localhost:8123/play  →  SELECT count() FROM sentinel.otel_traces
+# inspect at http://localhost:8123/play  →  SELECT count() FROM bronze.otel_traces
 make reset                     # stop everything + drop the ClickHouse volume
 ```
 
@@ -210,21 +210,21 @@ Run `make help` for all targets and the active `COLLECTOR / SCENARIO / SEED / WI
 
 ## 8. Current status
 
-**Pod 2 / Rust reference — writes the bronze schema, validated end-to-end.** generator → Rust collector → `sentinel.*` lands **40,200 logs / 40,200 traces / 152,700 metrics** (gauge 83,400 + sum 69,300), lossless; the golden file-mode round-trip yields 48 / 48 / 183.
+**Pod 2 / Rust reference — writes the bronze schema, validated end-to-end.** generator → Rust collector → `bronze.*` lands **40,200 logs / 40,200 traces / 152,700 metrics** (gauge 83,400 + sum 69,300), lossless; the golden file-mode round-trip yields 48 / 48 / 183.
 
 | Capability | State |
 |---|---|
 | Parse Pod 1 NDJSON / OTLP gRPC against v1.0.0 contract | ✅ |
-| Write directly into Pod 3 **bronze** (`sentinel.*`) | ✅ verified live |
+| Write directly into Pod 3 **bronze** (`bronze.*`) | ✅ verified live |
 | Metrics routed by type → `otel_metrics_gauge` / `otel_metrics_sum` | ✅ |
 | Sentinel metadata carried in `ResourceAttributes` | ✅ |
 | gRPC receive-boundary contract validation (`off`/`warn`/`strict`) | ✅ |
 | Distroless Docker image + root compose orchestrator | ✅ |
 | CI: fmt · clippy · tests · cargo-deny · docker-build | ✅ |
-| Go collector → bronze | 🔶 normalized to `default.*`; alignment pending |
+| Go collector → bronze | ✅ verified live (equivalence with Rust) |
 | Pod 3 silver (rolling-stats rollup, read models) | 🔶 in progress |
 
-**Remaining:** ADR-0007 acceptance (Pod 3 sign-off); align the Go collector to bronze; Pod 3 silver.
+**Remaining:** ADR-0007 acceptance (Pod 3 sign-off); Pod 3 silver.
 
 ---
 
@@ -237,7 +237,7 @@ Run `make help` for all targets and the active `COLLECTOR / SCENARIO / SEED / WI
 | 3 | Sentinel keys are `Map` probes under bronze (no typed columns) — materialize in silver? | Open | [ADR-0007 §Trade-offs](docs/adr/0007-bronze-canonical-contract.md) |
 | 4 | `otel_metrics_1m` rolling-stats moved to Pod 3 silver (Tier-1 input) | Handoff | [read contract §2.3](contracts/collector/v1/pod2-pod3-read-contract.md) |
 | 5 | Histogram / Summary metrics not emitted (no v1.0.0 type) | Known gap | `services/collector-rust/src/otlp.rs` |
-| 6 | Go collector still writes `default.*` — needs the same bronze alignment | Pending | `services/collector-go/` |
+| 6 | Go collector aligned to bronze — writes `bronze.*` (equivalence with Rust verified) | ✅ Done | `services/collector-go/` |
 
 ---
 
