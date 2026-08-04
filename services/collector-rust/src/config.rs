@@ -527,13 +527,15 @@ logging:
     #[test]
     fn validate_runtime_rejects_zero_batch_and_flush() {
         for (batch_size, flush_interval_ms) in [(0, 500), (1000, 0)] {
-            let mut cfg = Config::default();
-            cfg.clickhouse = Some(ClickHouseConfig {
-                url: "http://ch:8123".to_string(),
-                database: "sentinel".to_string(),
-                batch_size,
-                flush_interval_ms,
-            });
+            let cfg = Config {
+                clickhouse: Some(ClickHouseConfig {
+                    url: "http://ch:8123".to_string(),
+                    database: "sentinel".to_string(),
+                    batch_size,
+                    flush_interval_ms,
+                }),
+                ..Config::default()
+            };
             assert!(matches!(
                 cfg.validate_runtime(),
                 Err(ConfigError::InvalidValue(_))

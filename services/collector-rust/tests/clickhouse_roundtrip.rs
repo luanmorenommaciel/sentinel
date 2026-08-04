@@ -44,6 +44,8 @@
 
 use std::path::PathBuf;
 
+use tokio::time::{sleep, Duration, Instant};
+
 use sentinel_collector::clickhouse_exporter::{
     build_client_with_database, url_from_env, DEFAULT_CLICKHOUSE_URL,
 };
@@ -90,19 +92,21 @@ async fn truncate_tables(client: &clickhouse::Client) {
 /// The golden fixture (`baseline_seed42.jsonl`) is timestamped 2023-11-14 — ~2.5
 /// years before now — so under the bronze 30-day TTL the rows are eligible for
 /// purging on the next background merge (the tables set `ttl_only_drop_parts = 1`).
-/// We push the TTL out ~100 years for the test session; production TTL is
-/// unaffected. `MODIFY TTL` is idempotent, so re-running the suite is safe.
+/// We push the TTL out 50 years for the test session. This stays below the 2106
+/// upper bound of ClickHouse `DateTime`; 100 years would overflow for 2023 rows
+/// and make them expire immediately. Production TTL is unaffected. `MODIFY TTL`
+/// is idempotent, so re-running the suite is safe.
 async fn relax_ttl(client: &clickhouse::Client) {
     for (table, ttl) in [
-        ("otel_logs", "TimestampTime + INTERVAL 100 YEAR"),
-        ("otel_traces", "toDateTime(Timestamp) + INTERVAL 100 YEAR"),
+        ("otel_logs", "TimestampTime + INTERVAL 50 YEAR"),
+        ("otel_traces", "toDateTime(Timestamp) + INTERVAL 50 YEAR"),
         (
             "otel_metrics_gauge",
-            "toDateTime(TimeUnix) + INTERVAL 100 YEAR",
+            "toDateTime(TimeUnix) + INTERVAL 50 YEAR",
         ),
         (
             "otel_metrics_sum",
-            "toDateTime(TimeUnix) + INTERVAL 100 YEAR",
+            "toDateTime(TimeUnix) + INTERVAL 50 YEAR",
         ),
     ] {
         client
@@ -120,6 +124,42 @@ async fn count_rows(client: &clickhouse::Client, table: &str) -> u64 {
         .fetch_one::<u64>()
         .await
         .unwrap_or_else(|e| panic!("count() on {table} failed: {e}"))
+}
+
+/// Wait for a freshly inserted part to become visible on a cold ClickHouse
+/// startup. The HTTP insert may complete just before the first SELECT sees the
+/// committed part; keep the retry bounded so a real persistence failure still
+/// fails the test quickly and with the last observed count.
+async fn wait_for_count(client: &clickhouse::Client, table: &str, expected: u64) -> u64 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let observed = count_rows(client, table).await;
+        if observed == expected {
+            return observed;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {table}: expected {expected} rows, observed {observed}"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn wait_for_metric_count(client: &clickhouse::Client, expected: u64) -> (u64, u64) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let gauges = count_rows(client, "otel_metrics_gauge").await;
+        let sums = count_rows(client, "otel_metrics_sum").await;
+        if gauges + sums == expected {
+            return (gauges, sums);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for metrics: expected {expected} rows, observed {}",
+            gauges + sums
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -163,10 +203,9 @@ async fn golden_fixture_round_trip() {
         "golden file should have zero validation errors"
     );
 
-    let log_count = count_rows(&client, "otel_logs").await;
-    let trace_count = count_rows(&client, "otel_traces").await;
-    let gauge_count = count_rows(&client, "otel_metrics_gauge").await;
-    let sum_count = count_rows(&client, "otel_metrics_sum").await;
+    let log_count = wait_for_count(&client, "otel_logs", 48).await;
+    let trace_count = wait_for_count(&client, "otel_traces", 48).await;
+    let (gauge_count, sum_count) = wait_for_metric_count(&client, 183).await;
 
     assert_eq!(log_count, 48, "otel_logs must contain exactly 48 rows");
     assert_eq!(trace_count, 48, "otel_traces must contain exactly 48 rows");
@@ -187,7 +226,7 @@ async fn golden_fixture_round_trip() {
         .await
         .expect("second export must succeed");
 
-    let log_count_after = count_rows(&client, "otel_logs").await;
+    let log_count_after = wait_for_count(&client, "otel_logs", 96).await;
     assert_eq!(
         log_count_after, 96,
         "two exports must produce 2×48=96 log rows (MergeTree does not deduplicate)"
