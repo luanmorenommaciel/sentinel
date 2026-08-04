@@ -896,6 +896,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "prometheus"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d33c28a30771f7f96db69893f78b857f7450d7e0237e9c8fc6427a81bae7ed1"
+dependencies = [
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "memchr",
+ "parking_lot",
+ "thiserror",
+]
+
+[[package]]
 name = "prost"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1023,12 +1037,17 @@ name = "sentinel-collector"
 version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
+ "bytes",
  "clickhouse",
  "futures",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-proto",
  "opentelemetry_sdk",
+ "prometheus",
  "prost",
  "serde",
  "serde_json",

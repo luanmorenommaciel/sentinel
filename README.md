@@ -3,13 +3,13 @@
 > **Self-healing data pipelines.** Autonomous detection, AI-native reasoning, OTel-native by design.
 > *No downstream user finds the bug before Sentinel does.*
 
-Sentinel is an open-source observability + remediation system for data pipelines, built by **Crew B** of the DataShip Mission 2026 program (Commander: Luan Moreno). This repository is the **integrated polyglot monorepo** — every Pod's component behind clear contracts and ownership boundaries, with a one-command end-to-end pipeline.
+Sentinel is an open-source observability + remediation system for data pipelines, built by **Crew B** of the DataShip Mission 2026 program (Commander: Luan Moreno). This repository is the **integrated monorepo** — every Pod's component behind clear contracts and ownership boundaries, with a one-command end-to-end pipeline. Pod 2 uses Rust as its selected collector implementation.
 
 ---
 
 ## 1. System architecture
 
-Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling (bronze → silver → read models). **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one. Implementations (e.g. Pod 2's collectors) are interchangeable behind their contract.
+Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling (bronze → silver → read models). **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
 
 ```mermaid
 flowchart TB
@@ -21,11 +21,8 @@ flowchart TB
 
         C1{{"◆ CONTRACT ① ◆<br/>Pod 1 → Pod 2 · input<br/>contracts/generator/v1/otlp_output.schema.json<br/>v1.0.0 ✅ frozen<br/>3 signals · 5 sentinel.* keys"}}
 
-        subgraph POD2["POD 2 · B2 — OTel Collector · interchangeable impls"]
-            direction LR
-            CRUST["collector-rust ✅<br/>reference · writes bronze"]
-            CGO["collector-go ✅<br/>writes bronze"]
-            C3["collector-&lt;lang&gt; ⏳<br/>future"]
+        subgraph POD2["POD 2 · B2 — OTel Collector"]
+            CRUST["collector-rust ✅<br/>selected · writes bronze"]
         end
 
         subgraph STORE["ClickHouse · BRONZE bronze.* (Pod-3-owned DDL)"]
@@ -68,7 +65,6 @@ flowchart TB
     class C1,C2 contract;
     class POD1,POD2,POD3 zone;
     class STORE store;
-    class CGO,C3 impl;
     class CRUST refimpl;
     class FUTURE,CREW,WATCH,XCORR,DETECT,REMED future;
     linkStyle 0,1,2,3,4 stroke:#b45309,stroke-width:3px;
@@ -94,7 +90,7 @@ flowchart TB
 | Pod | Crew | Phase 1 role | Status |
 |---|---|---|---|
 | **Pod 1** | B1 | Telemetry **Generator** + the **OTLP input contract** | Input contract **v1.0.0 frozen** |
-| **Pod 2** | B2 | **OTel Collector** — ingest · validate · transform · export | Rust **and** Go both **write bronze**, validated e2e (equivalence verified) |
+| **Pod 2** | B2 | **OTel Collector** — ingest · validate · transform · export | Rust selected; writes bronze and is validated e2e |
 | **Pod 3** | B3 | **Data modelling** — owns the bronze DDL; builds silver + read models | Bronze landed; silver in progress |
 | **Pod 4** | B4 | *(Future)* Action Dispatcher — remediation + paging | Future phase |
 
@@ -106,15 +102,9 @@ flowchart TB
 
 Be the **single ingestion gateway** between telemetry producers and storage: receive OTLP (or Pod 1 NDJSON), validate/transform against the input contract, and persist to the **bronze** ClickHouse schema in a shape the detection layer can query in <1s. Nothing reaches storage except through a collector.
 
-Pod 2 ships **multiple collector implementations** (a deliberate bake-off — [ADR-0004](docs/adr/0004-collector-implementation-language.md)). They are **interchangeable**: same input contract in, same bronze schema out.
+After the language bake-off documented in [ADR-0004](docs/adr/0004-collector-implementation-language.md), Pod 2 selected the Rust implementation. The former Go implementation was removed from the active repository structure.
 
-| Implementation | Language | Owner | Status |
-|---|---|---|---|
-| [`services/collector-rust/`](services/collector-rust/) | Rust | Victor | ✅ **Reference** — OTLP gRPC + NDJSON → **bronze `bronze.*`**, Dockerized, CI-green |
-| [`services/collector-go/`](services/collector-go/) | Go | Alex | ✅ Aligned — writes **bronze `bronze.*`** (same schema as Rust; equivalence verified) |
-| `services/collector-<lang>/` | TBD | B2 | ⏳ Future |
-
-The Rust collector is the **reference**: it defines the behaviour every other implementation must match (the bronze output + the golden conformance fixture). The aligned exporter writes directly into Pod 3's bronze tables — see [ADR-0007](docs/adr/0007-bronze-canonical-contract.md).
+[`services/collector-rust/`](services/collector-rust/) receives OTLP gRPC or NDJSON, validates the input contract, buffers exports with bounded backpressure, writes directly into Pod 3's **bronze `bronze.*`** tables, and exposes Prometheus metrics on `:9090`. See [ADR-0007](docs/adr/0007-bronze-canonical-contract.md) for the canonical output contract.
 
 ---
 
@@ -142,8 +132,8 @@ The monorepo separates **shared** assets (contracts, infra, docs) from **per-com
 ```text
 sentinel/
 ├── README.md                      # ← this file: system entry point
-├── Makefile                       # 🔗 one-command UX (COLLECTOR=rust|go switch)
-├── docker-compose.yml             # 🔗 root orchestrator (rust|go compose profiles)
+├── Makefile                       # 🔗 one-command UX
+├── docker-compose.yml             # 🔗 root Rust pipeline orchestrator
 │
 ├── contracts/                     # 🔗 SHARED · contract registry, namespaced by producing Pod
 │   ├── generator/v1/                      #   Pod 1 → Pod 2 INPUT contract (SSOT)
@@ -162,8 +152,7 @@ sentinel/
 │   └── research/ · proposals/     #   design notes, gap analysis, decision proposals
 │
 ├── services/                      # 🧩 PER-COMPONENT · self-contained implementations
-│   ├── collector-rust/            #   Pod 2 — Rust (reference). Own Cargo/toolchain/Docker/tests ✅
-│   ├── collector-go/              #   Pod 2 — Go (own go.mod/Docker/tests) 🔶
+│   ├── collector-rust/            #   Pod 2 — selected Rust collector. Cargo/Docker/tests ✅
 │   └── generator-python/          #   Pod 1 — Python telemetry generator (otelgen)
 │
 ├── .github/workflows/             # per-component CI, path-filtered (rust-ci.yml, …)
@@ -174,28 +163,26 @@ sentinel/
 
 ---
 
-## 6. Quick start — configurable end-to-end
+## 6. Quick start — end-to-end
 
-Requires Docker (no host toolchains). Choose the collector with `COLLECTOR` (default `rust`):
+Requires Docker (no host toolchains):
 
 ```sh
 make e2e                  # ClickHouse (bronze auto-applied) + Rust collector + generator → bronze.*
-make e2e COLLECTOR=go     # same, with the Go collector (writes bronze.* — same as Rust)
 ```
 
 Step by step, plus inspect:
 
 ```sh
-make up   COLLECTOR=rust       # start ClickHouse (bronze auto-applies on boot) + the collector
+make up                        # start ClickHouse (bronze auto-applies on boot) + the collector
 make generate SCENARIO=black_friday SEED=42   # generate → OTLP :4317
-make logs COLLECTOR=rust       # tail collector logs
+make logs                      # tail collector logs
 # inspect at http://localhost:8123/play  →  SELECT count() FROM bronze.otel_traces
+# scrape collector metrics at http://localhost:9090/metrics
 make reset                     # stop everything + drop the ClickHouse volume
 ```
 
-Run `make help` for all targets and the active `COLLECTOR / SCENARIO / SEED / WINDOW`. Per-component dev still works standalone (`cd services/collector-rust && cargo test`).
-
-> Only one collector runs at a time — both bind OTLP `:4317`. The generator targets the network alias `collector`, so it works regardless of which is active.
+Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-component dev still works standalone (`cd services/collector-rust && cargo test`).
 
 ---
 
@@ -210,7 +197,7 @@ Run `make help` for all targets and the active `COLLECTOR / SCENARIO / SEED / WI
 
 ## 8. Current status
 
-**Pod 2 / Rust reference — writes the bronze schema, validated end-to-end.** generator → Rust collector → `bronze.*` lands **40,200 logs / 40,200 traces / 152,700 metrics** (gauge 83,400 + sum 69,300), lossless; the golden file-mode round-trip yields 48 / 48 / 183.
+**Pod 2 / selected Rust collector — writes the bronze schema, validated end-to-end.** generator → Rust collector → `bronze.*` lands **40,200 logs / 40,200 traces / 152,700 metrics** (gauge 83,400 + sum 69,300), lossless; the golden file-mode round-trip yields 48 / 48 / 183.
 
 | Capability | State |
 |---|---|
@@ -219,9 +206,11 @@ Run `make help` for all targets and the active `COLLECTOR / SCENARIO / SEED / WI
 | Metrics routed by type → `otel_metrics_gauge` / `otel_metrics_sum` | ✅ |
 | Sentinel metadata carried in `ResourceAttributes` | ✅ |
 | gRPC receive-boundary contract validation (`off`/`warn`/`strict`) | ✅ |
+| Bounded buffered export with batch-size and flush-interval controls | ✅ |
+| Prometheus `/metrics` endpoint on `:9090` | ✅ |
+| Graceful shutdown with final buffer flush | ✅ |
 | Distroless Docker image + root compose orchestrator | ✅ |
 | CI: fmt · clippy · tests · cargo-deny · docker-build | ✅ |
-| Go collector → bronze | ✅ verified live (equivalence with Rust) |
 | Pod 3 silver (rolling-stats rollup, read models) | 🔶 in progress |
 
 **Remaining:** ADR-0007 acceptance (Pod 3 sign-off); Pod 3 silver.
@@ -232,12 +221,11 @@ Run `make help` for all targets and the active `COLLECTOR / SCENARIO / SEED / WI
 
 | # | Item | Type | Where |
 |---|---|---|---|
-| 1 | Collector language bake-off not formally accepted (Rust is the reference) | Open | [ADR-0004](docs/adr/0004-collector-implementation-language.md) |
+| 1 | Record the Rust selection formally in ADR-0004 | Pending | [ADR-0004](docs/adr/0004-collector-implementation-language.md) |
 | 2 | Bronze = canonical Pod 2 → Pod 3 contract (`Proposed`; Pod 3 sign-off pending) | Pending | [ADR-0007](docs/adr/0007-bronze-canonical-contract.md) · [read contract](contracts/collector/v1/pod2-pod3-read-contract.md) |
 | 3 | Sentinel keys are `Map` probes under bronze (no typed columns) — materialize in silver? | Open | [ADR-0007 §Trade-offs](docs/adr/0007-bronze-canonical-contract.md) |
 | 4 | `otel_metrics_1m` rolling-stats moved to Pod 3 silver (Tier-1 input) | Handoff | [read contract §2.3](contracts/collector/v1/pod2-pod3-read-contract.md) |
 | 5 | Histogram / Summary metrics not emitted (no v1.0.0 type) | Known gap | `services/collector-rust/src/otlp.rs` |
-| 6 | Go collector aligned to bronze — writes `bronze.*` (equivalence with Rust verified) | ✅ Done | `services/collector-go/` |
 
 ---
 

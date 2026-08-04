@@ -35,11 +35,15 @@ async fn start_server() -> (
         let shutdown = async {
             let _ = rx.await;
         };
+        let metrics = sentinel_collector::metrics::Metrics::new_shared()
+            .expect("metrics registry registers cleanly");
         sentinel_collector::grpc::serve_with_listener(
             listener,
             shutdown,
             None,
             sentinel_collector::config::GrpcValidation::Off,
+            sentinel_collector::buffer::BufferConfig::default(),
+            metrics,
         )
         .await
         .expect("server runs cleanly");

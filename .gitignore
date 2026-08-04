@@ -1,5 +1,4 @@
-# Merged from the three POD branches (generator / collector-rust / collector-go).
-# Note: docs/ is intentionally NOT ignored here — the monorepo tracks shared docs.
+# Shared monorepo ignore rules. Documentation remains tracked intentionally.
 
 # Python
 __pycache__/
@@ -18,10 +17,6 @@ venv/
 target/
 **/*.rs.bk
 .cargo-home/
-
-# Go
-# (build artifacts emitted by `go build` are named per-binary; ignore common ones)
-/bin/
 
 # Local infra / data
 clickhouse_data/

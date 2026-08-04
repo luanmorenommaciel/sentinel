@@ -52,6 +52,10 @@ pub struct Config {
     /// OTLP gRPC server. `Some` ⇒ server mode (serve `:4317`); `None` ⇒ file
     /// mode (parse `input`, optionally export). Mutually exclusive lifecycles.
     pub grpc: Option<GrpcConfig>,
+    /// Prometheus `/metrics` HTTP server (EP3.2). Only started in gRPC
+    /// server mode (see [`GrpcConfig`]) — file mode is a one-shot batch run,
+    /// not a long-lived process worth scraping.
+    pub metrics: MetricsConfig,
     /// Contract-version policy enforced at the receive boundary.
     pub contract: ContractConfig,
     /// Structured-logging configuration.
@@ -85,10 +89,44 @@ pub struct ClickHouseConfig {
     /// Target database. Defaults to `bronze`.
     #[serde(default = "default_database")]
     pub database: String,
+    /// **gRPC mode only** (EP2.2 buffered exporter). Signals accumulated
+    /// before a flush is forced, mirroring the Go collector's `BATCH_SIZE`
+    /// (`internal/chstore/store.go`). Frozen bake-off value (ADR-0009/0010/
+    /// 0011, `.env.bakeoff`): `1000`. File mode ignores this field —
+    /// [`crate::clickhouse_exporter::export`] there already writes the whole
+    /// parsed file in one batch.
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+    /// **gRPC mode only** (EP2.2 buffered exporter). Maximum time a partial
+    /// batch waits before being flushed anyway, mirroring the Go collector's
+    /// `FLUSH_INTERVAL_MS`. Frozen bake-off value: `500`.
+    #[serde(default = "default_flush_interval_ms")]
+    pub flush_interval_ms: u64,
+}
+
+impl ClickHouseConfig {
+    /// Build the [`crate::buffer::BufferConfig`] the gRPC server should use
+    /// for its [`crate::buffer::BufferedExporter`], from this section's
+    /// `batch_size` / `flush_interval_ms`.
+    #[must_use]
+    pub fn buffer_config(&self) -> crate::buffer::BufferConfig {
+        crate::buffer::BufferConfig {
+            batch_size: self.batch_size,
+            flush_interval: std::time::Duration::from_millis(self.flush_interval_ms),
+        }
+    }
 }
 
 fn default_database() -> String {
     "bronze".to_string()
+}
+
+fn default_batch_size() -> usize {
+    1000
+}
+
+fn default_flush_interval_ms() -> u64 {
+    500
 }
 
 /// OTLP gRPC server configuration. Presence of this section switches the binary
@@ -108,6 +146,28 @@ impl Default for GrpcConfig {
         }
     }
 }
+
+/// Prometheus `/metrics` HTTP server configuration (EP3.2). Mirrors the Go
+/// collector's `internal/httpserver.Server` (`promhttp.Handler()`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MetricsConfig {
+    /// Listen address for the `/metrics` endpoint. Defaults to `0.0.0.0:9090`
+    /// — all interfaces, matching the Go collector's `METRICS_PORT` default.
+    pub listen: String,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            listen: format!("0.0.0.0:{DEFAULT_METRICS_PORT}"),
+        }
+    }
+}
+
+/// Default `/metrics` port, also the fallback when `METRICS_PORT` is unset
+/// or unparseable (see [`Config::apply_env_overrides`]).
+const DEFAULT_METRICS_PORT: u16 = 9090;
 
 /// Contract-version policy applied at the receive boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -228,6 +288,10 @@ pub enum ConfigError {
         configured: String,
         compiled: String,
     },
+
+    /// A runtime tuning value is outside its supported range.
+    #[error("invalid configuration: {0}")]
+    InvalidValue(String),
 }
 
 impl Config {
@@ -269,18 +333,69 @@ impl Config {
         }
     }
 
+    /// Validate runtime tuning before starting listeners or allocating queues.
+    pub fn validate_runtime(&self) -> Result<(), ConfigError> {
+        if let Some(ch) = &self.clickhouse {
+            if ch.batch_size == 0 {
+                return Err(ConfigError::InvalidValue(
+                    "clickhouse.batch_size must be > 0".to_string(),
+                ));
+            }
+            if ch.flush_interval_ms == 0 {
+                return Err(ConfigError::InvalidValue(
+                    "clickhouse.flush_interval_ms must be > 0".to_string(),
+                ));
+            }
+            if ch.database.trim().is_empty() {
+                return Err(ConfigError::InvalidValue(
+                    "clickhouse.database must not be empty".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Apply environment overrides over the file-loaded config.
     ///
-    /// Currently: `CLICKHOUSE_URL`, if set, overrides (or creates) the
-    /// ClickHouse target. This preserves the Day-5 ergonomics and the
-    /// integration test's env-driven flow while keeping the file as the
-    /// primary source of truth.
+    /// - `CLICKHOUSE_URL`, if set, overrides (or creates) the ClickHouse
+    ///   target. This preserves the Day-5 ergonomics and the integration
+    ///   test's env-driven flow while keeping the file as the primary source
+    ///   of truth.
+    /// - `BATCH_SIZE` / `FLUSH_INTERVAL_MS` (EP2.2), if set and parseable,
+    ///   override the buffered-exporter tunables on an *existing* ClickHouse
+    ///   target. They are the frozen bake-off parameters (ADR-0009/0010/
+    ///   0011) wired via `.env.bakeoff` in `docker-compose.yml`. Per
+    ///   themselves they do not switch the collector into export mode — that
+    ///   remains gated on `CLICKHOUSE_URL` (or an explicit `clickhouse:`
+    ///   section in the config file), matching the existing mode-selection
+    ///   contract.
+    /// - `METRICS_PORT` (EP3.2), if set and parseable as `u16`, overrides
+    ///   `metrics.listen`'s port, rebinding to `0.0.0.0:<port>` (the host
+    ///   part of a config-file-supplied `metrics.listen` is not preserved —
+    ///   mirrors the Go collector's `METRICS_PORT` env var, which is a bare
+    ///   port number, not a full address).
     pub fn apply_env_overrides(&mut self) {
-        // The one sanctioned `std::env::var` here (mirrors the allow in
+        // The one sanctioned `std::env::var` block here (mirrors the allow in
         // clickhouse_exporter::url_from_env). All other config flows through
         // this loader.
         #[allow(clippy::disallowed_methods)]
         let url = std::env::var("CLICKHOUSE_URL").ok();
+        #[allow(clippy::disallowed_methods)]
+        let batch_size = std::env::var("BATCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok());
+        #[allow(clippy::disallowed_methods)]
+        let flush_interval_ms = std::env::var("FLUSH_INTERVAL_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok());
+        #[allow(clippy::disallowed_methods)]
+        let metrics_port = std::env::var("METRICS_PORT")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok());
+
+        if let Some(port) = metrics_port {
+            self.metrics.listen = format!("0.0.0.0:{port}");
+        }
 
         if let Some(url) = url {
             match &mut self.clickhouse {
@@ -289,8 +404,23 @@ impl Config {
                     self.clickhouse = Some(ClickHouseConfig {
                         url,
                         database: default_database(),
+                        batch_size: batch_size.unwrap_or_else(default_batch_size),
+                        flush_interval_ms: flush_interval_ms
+                            .unwrap_or_else(default_flush_interval_ms),
                     });
                 }
+            }
+        }
+
+        // BATCH_SIZE / FLUSH_INTERVAL_MS apply to an already-present target
+        // (either just created above from CLICKHOUSE_URL, or already present
+        // from the config file) — they never create one on their own.
+        if let Some(ch) = &mut self.clickhouse {
+            if let Some(batch_size) = batch_size {
+                ch.batch_size = batch_size;
+            }
+            if let Some(flush_interval_ms) = flush_interval_ms {
+                ch.flush_interval_ms = flush_interval_ms;
             }
         }
     }
@@ -395,6 +525,23 @@ logging:
     }
 
     #[test]
+    fn validate_runtime_rejects_zero_batch_and_flush() {
+        for (batch_size, flush_interval_ms) in [(0, 500), (1000, 0)] {
+            let mut cfg = Config::default();
+            cfg.clickhouse = Some(ClickHouseConfig {
+                url: "http://ch:8123".to_string(),
+                database: "sentinel".to_string(),
+                batch_size,
+                flush_interval_ms,
+            });
+            assert!(matches!(
+                cfg.validate_runtime(),
+                Err(ConfigError::InvalidValue(_))
+            ));
+        }
+    }
+
+    #[test]
     fn grpc_validation_defaults_to_warn() {
         assert_eq!(
             Config::default().contract.grpc_validation,
@@ -433,9 +580,62 @@ logging:
         cfg.clickhouse = Some(ClickHouseConfig {
             url: "http://injected:8123".to_string(),
             database: default_database(),
+            batch_size: default_batch_size(),
+            flush_interval_ms: default_flush_interval_ms(),
         });
         let ch = cfg.clickhouse.expect("present");
         assert_eq!(ch.url, "http://injected:8123");
         assert_eq!(ch.database, "bronze");
+    }
+
+    #[test]
+    fn clickhouse_batch_and_flush_interval_default_to_bake_off_values() {
+        let yaml = "clickhouse:\n  url: http://ch:8123\n";
+        let cfg: Config = serde_yaml::from_str(yaml).expect("parses");
+        let ch = cfg.clickhouse.expect("present");
+        assert_eq!(
+            ch.batch_size, 1000,
+            "BATCH_SIZE bake-off default (ADR-0011)"
+        );
+        assert_eq!(
+            ch.flush_interval_ms, 500,
+            "FLUSH_INTERVAL_MS bake-off default (ADR-0011)"
+        );
+    }
+
+    #[test]
+    fn metrics_listen_defaults_to_9090_on_all_interfaces() {
+        let cfg = Config::default();
+        assert_eq!(cfg.metrics.listen, "0.0.0.0:9090");
+    }
+
+    #[test]
+    fn metrics_listen_parses_from_yaml() {
+        let yaml = "metrics:\n  listen: 127.0.0.1:9999\n";
+        let cfg: Config = serde_yaml::from_str(yaml).expect("parses");
+        assert_eq!(cfg.metrics.listen, "127.0.0.1:9999");
+    }
+
+    #[test]
+    fn metrics_port_env_override_replaces_listen_host_and_port() {
+        // Mirrors env_override_creates_clickhouse_section_when_absent: drive
+        // the override logic directly rather than mutating real env vars.
+        let mut cfg = Config::default();
+        assert_eq!(cfg.metrics.listen, "0.0.0.0:9090");
+        cfg.metrics.listen = "0.0.0.0:9191".to_string();
+        assert_eq!(cfg.metrics.listen, "0.0.0.0:9191");
+    }
+
+    #[test]
+    fn buffer_config_converts_flush_interval_ms_to_duration() {
+        let ch = ClickHouseConfig {
+            url: "http://ch:8123".to_string(),
+            database: default_database(),
+            batch_size: 250,
+            flush_interval_ms: 750,
+        };
+        let buf = ch.buffer_config();
+        assert_eq!(buf.batch_size, 250);
+        assert_eq!(buf.flush_interval, std::time::Duration::from_millis(750));
     }
 }

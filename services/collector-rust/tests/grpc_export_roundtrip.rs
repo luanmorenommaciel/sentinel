@@ -103,6 +103,8 @@ async fn start_export_server(
         let shutdown = async {
             let _ = rx.await;
         };
+        let metrics = sentinel_collector::metrics::Metrics::new_shared()
+            .expect("metrics registry registers cleanly");
         sentinel_collector::grpc::serve_with_listener(
             listener,
             shutdown,
@@ -111,6 +113,8 @@ async fn start_export_server(
             // independent of the validation policy (the payload deliberately
             // omits the sentinel.* resource keys).
             sentinel_collector::config::GrpcValidation::Off,
+            sentinel_collector::buffer::BufferConfig::default(),
+            metrics,
         )
         .await
         .expect("server runs cleanly");
@@ -267,12 +271,17 @@ async fn otlp_grpc_payload_lands_in_clickhouse() {
         .await
         .expect("metrics export succeeds");
 
-    // Give ClickHouse a moment to flush (RowBinary inserts are synchronous in
-    // the `clickhouse` crate but a small sleep guards against any async flush
-    // in the server task).
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // ── 7. Shut down the server ─────────────────────────────────────────────
+    // EP2.2: `Export` acks once a batch is *enqueued*, not once it is
+    // durably written (see `sentinel_collector::buffer` module docs). Rows
+    // are only guaranteed visible once the buffer drains, which happens as
+    // part of the graceful-shutdown path inside `grpc::serve_with_listener`
+    // — so verification must happen *after* `server_handle` resolves, not
+    // before.
+    let _ = shutdown_tx.send(());
+    server_handle.await.expect("server shuts down cleanly");
 
-    // ── 7. Verify row counts in ClickHouse ────────────────────────────────
+    // ── 8. Verify row counts in ClickHouse ────────────────────────────────
     let trace_count: u64 = verify_ch
         .query("SELECT count() FROM otel_traces")
         .fetch_one()
@@ -291,10 +300,6 @@ async fn otlp_grpc_payload_lands_in_clickhouse() {
         .fetch_one()
         .await
         .expect("SELECT count() FROM otel_metrics_gauge");
-
-    // ── 8. Shut down the server ────────────────────────────────────────────
-    let _ = shutdown_tx.send(());
-    server_handle.await.expect("server shuts down cleanly");
 
     // ── 9. Assert ─────────────────────────────────────────────────────────
     assert_eq!(trace_count, 2, "expected 2 spans in otel_traces");
