@@ -59,7 +59,6 @@ flowchart TB
     classDef contract fill:#fde68a,stroke:#b45309,stroke-width:4px,color:#3a2f00;
     classDef zone fill:#f1f5f9,stroke:#94a3b8,color:#0f172a;
     classDef store fill:#eef6ff,stroke:#4a86c5,color:#0d2a45;
-    classDef impl fill:#ffffff,stroke:#cbd5e1,color:#334155;
     classDef refimpl fill:#ffffff,stroke:#475569,stroke-width:2px,color:#1e293b;
     classDef future fill:#f5f3ff,stroke:#7c3aed,stroke-width:2px,stroke-dasharray:6 4,color:#3b1d6e;
     class C1,C2 contract;
@@ -71,7 +70,7 @@ flowchart TB
     linkStyle 5,6,7,8 stroke:#7c3aed,stroke-width:2px,stroke-dasharray:6 4;
 ```
 
-**Diagram key** — gold gate = contract boundary (versioned; the durable asset) · grey box = Pod / ownership zone · white box = interchangeable implementation · **purple dashed cluster = future phase** · status glyphs: ✅ frozen / agreed · 🔶 in progress · ⏳ pending. The hierarchy is shape- and border-redundant, so it survives grayscale.
+**Diagram key** — gold gate = contract boundary (versioned; the durable asset) · grey box = Pod / ownership zone · white box = active component · **purple dashed cluster = future phase** · status glyphs: ✅ frozen / agreed · 🔶 in progress · ⏳ pending. The hierarchy is shape- and border-redundant, so it survives grayscale.
 
 **What Pod 2 receives, processes, and delivers:**
 
@@ -102,7 +101,7 @@ flowchart TB
 
 Be the **single ingestion gateway** between telemetry producers and storage: receive OTLP (or Pod 1 NDJSON), validate/transform against the input contract, and persist to the **bronze** ClickHouse schema in a shape the detection layer can query in <1s. Nothing reaches storage except through a collector.
 
-After the language bake-off documented in [ADR-0004](docs/adr/0004-collector-implementation-language.md), Pod 2 selected the Rust implementation. The former Go implementation was removed from the active repository structure.
+Pod 2 runs the selected Rust implementation, whose language decision is tracked in [ADR-0004](docs/adr/0004-collector-implementation-language.md).
 
 [`services/collector-rust/`](services/collector-rust/) receives OTLP gRPC or NDJSON, validates the input contract, buffers exports with bounded backpressure, writes directly into Pod 3's **bronze `bronze.*`** tables, and exposes Prometheus metrics on `:9090`. See [ADR-0007](docs/adr/0007-bronze-canonical-contract.md) for the canonical output contract.
 
@@ -138,7 +137,7 @@ sentinel/
 ├── contracts/                     # 🔗 SHARED · contract registry, namespaced by producing Pod
 │   ├── generator/v1/                      #   Pod 1 → Pod 2 INPUT contract (SSOT)
 │   │   ├── schema/otlp_output.schema.json #     the wire schema (v1.0.0)
-│   │   └── golden/baseline_seed42.jsonl   #     conformance fixture (all impls test against this)
+│   │   └── golden/baseline_seed42.jsonl   #     collector conformance fixture
 │   └── collector/v1/                      #   Pod 2 → Pod 3 READ contract (bronze semantic layer)
 │       └── pod2-pod3-read-contract.md     #     v1.0.0.1 · points at the bronze DDL
 │
@@ -189,8 +188,8 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
 ## 7. Ownership & boundaries
 
 - **`main` is protected.** Feature branches `feat/<area>-<short>`; Conventional Commits; signed commits; attribution trailers; squash-merge after 2 approvals (peer + Captain).
-- **Per-component CI** is path-filtered so each implementation's gates run independently.
-- **Contracts are jointly owned** by the Pods on both sides of a boundary (input = Pod 1 + Pod 2; the bronze read schema = Pod 2 + Pod 3). **Implementations are singly owned.**
+- **Per-component CI** is path-filtered so each component's gates run independently.
+- **Contracts are jointly owned** by the Pods on both sides of a boundary (input = Pod 1 + Pod 2; the bronze read schema = Pod 2 + Pod 3). **Components are singly owned.**
 - The **bronze DDL is Pod-3-owned** (`create_schema:false`); collectors only `INSERT`.
 
 ---
@@ -212,6 +211,21 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
 | Distroless Docker image + root compose orchestrator | ✅ |
 | CI: fmt · clippy · tests · cargo-deny · docker-build | ✅ |
 | Pod 3 silver (rolling-stats rollup, read models) | 🔶 in progress |
+
+**Latest local E2E snapshot** — Docker/Linux arm64, scenario `baseline`, seed `42`, window `5m` (2026-08-04):
+
+| Measurement | Result |
+|---|---:|
+| Signals delivered | 233,100 in 4.5s (~51.4k signals/s) |
+| Ingested / accepted / persisted | 233,100 / 233,100 / 233,100 |
+| Rejected / dropped / export errors | 0 / 0 / 0 |
+| Successful batch flushes | 84 |
+| Average batch size | 2,775 signals |
+| Average ClickHouse export latency | 32.3ms |
+| Export latency distribution | 100% of flush attempts ≤80ms |
+| Bronze rows | 40,200 logs · 40,200 traces · 83,400 gauges · 69,300 sums |
+
+This workload met the collector health gates: no signal loss, no contract rejection, no failed export, complete bronze parity, and sub-80ms export attempts. These numbers are a reproducible local snapshot, not a production SLO or a substitute for sustained-load benchmarking on target infrastructure.
 
 **Remaining:** ADR-0007 acceptance (Pod 3 sign-off); Pod 3 silver.
 
