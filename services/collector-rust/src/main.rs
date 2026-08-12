@@ -25,12 +25,14 @@ use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use sentinel_collector::clickhouse_exporter;
 use sentinel_collector::config::{Config, LogFormat, LoggingConfig};
+use sentinel_collector::metrics::Metrics;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -47,6 +49,10 @@ async fn main() -> ExitCode {
     // contract version the config expects. Fail fast before reading any data.
     if let Err(err) = config.ensure_build_compatible() {
         error!(error = %err, "incompatible contract version");
+        return ExitCode::FAILURE;
+    }
+    if let Err(err) = config.validate_runtime() {
+        error!(error = %err, "invalid runtime configuration");
         return ExitCode::FAILURE;
     }
 
@@ -82,14 +88,54 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
     };
 
     // Build the ClickHouse client when the clickhouse config section is present.
+    // batch_size/flush_interval_ms (EP2.2 buffered exporter) travel with it —
+    // BufferConfig::default() only applies in log-only mode, where it is unused.
+    let buffer_config = config.clickhouse.as_ref().map_or_else(
+        sentinel_collector::buffer::BufferConfig::default,
+        sentinel_collector::config::ClickHouseConfig::buffer_config,
+    );
     let client: Option<clickhouse::Client> = config.clickhouse.as_ref().map(|ch| {
-        info!(url = %ch.url, database = %ch.database, "export mode: ClickHouse target configured");
+        info!(
+            url = %ch.url,
+            database = %ch.database,
+            batch_size = ch.batch_size,
+            flush_interval_ms = ch.flush_interval_ms,
+            "export mode: ClickHouse target configured (EP2.2 buffered exporter)"
+        );
         clickhouse_exporter::build_client_with_database(&ch.url, &ch.database)
     });
 
     if client.is_none() {
         info!("log-only mode: no clickhouse section configured");
     }
+
+    // EP3.2: one shared Prometheus registry for the gRPC handlers
+    // (crate::grpc), the buffered exporter's flush loop (crate::buffer),
+    // and the `/metrics` HTTP server below — see crate::metrics module docs.
+    let metrics = match Metrics::new_shared() {
+        Ok(metrics) => metrics,
+        Err(err) => {
+            error!(error = %err, "failed to initialize Prometheus metrics registry");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let metrics_addr: SocketAddr = match cfg_metrics_addr(config) {
+        Ok(addr) => addr,
+        Err(err) => {
+            error!(error = %err, "invalid metrics.listen address");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let metrics_shutdown = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    let metrics_task = tokio::spawn(sentinel_collector::metrics_server::serve(
+        metrics_addr,
+        Arc::clone(&metrics),
+        metrics_shutdown,
+    ));
 
     let shutdown = async {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -102,15 +148,38 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
         "gRPC receive-boundary validation policy"
     );
 
-    match sentinel_collector::grpc::serve(addr, shutdown, client, config.contract.grpc_validation)
-        .await
-    {
+    let result = sentinel_collector::grpc::serve(
+        addr,
+        shutdown,
+        client,
+        config.contract.grpc_validation,
+        buffer_config,
+        metrics,
+    )
+    .await;
+
+    // Best-effort: log a failed metrics server, but never let it override
+    // the gRPC server's own exit code — `/metrics` is observability, not the
+    // collector's primary function.
+    metrics_task.abort();
+    if let Ok(Err(err)) = metrics_task.await {
+        error!(error = %err, "metrics server terminated with error");
+    }
+
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             error!(error = %err, "gRPC server terminated with error");
             ExitCode::FAILURE
         }
     }
+}
+
+/// Parse `config.metrics.listen` into a [`SocketAddr`].
+fn cfg_metrics_addr(
+    config: &sentinel_collector::config::Config,
+) -> Result<SocketAddr, std::net::AddrParseError> {
+    config.metrics.listen.parse()
 }
 
 /// Load config from an optional path argument, applying env overrides.

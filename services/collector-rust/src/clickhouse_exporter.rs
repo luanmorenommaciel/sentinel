@@ -423,46 +423,58 @@ pub async fn export(
         }
     }
 
-    let mut counts = Counts::default();
-
-    // Insert logs
-    if !log_rows.is_empty() {
-        let mut insert = client.insert("otel_logs")?;
-        for row in &log_rows {
-            insert.write(row).await?;
+    // Independent destination inserts run concurrently, matching Go's
+    // per-stream flush goroutines and removing four serialized HTTP round trips
+    // from every mixed batch.
+    let insert_logs = async {
+        if !log_rows.is_empty() {
+            let mut insert = client.insert("otel_logs")?;
+            for row in &log_rows {
+                insert.write(row).await?;
+            }
+            insert.end().await?;
         }
-        insert.end().await?;
-        counts.logs = log_rows.len();
-    }
-
-    // Insert traces
-    if !trace_rows.is_empty() {
-        let mut insert = client.insert("otel_traces")?;
-        for row in &trace_rows {
-            insert.write(row).await?;
+        Ok::<(), ExporterError>(())
+    };
+    let insert_traces = async {
+        if !trace_rows.is_empty() {
+            let mut insert = client.insert("otel_traces")?;
+            for row in &trace_rows {
+                insert.write(row).await?;
+            }
+            insert.end().await?;
         }
-        insert.end().await?;
-        counts.spans = trace_rows.len();
-    }
-
-    // Insert metrics — routed by datapoint type into the bronze per-type tables.
-    if !gauge_rows.is_empty() {
-        let mut insert = client.insert("otel_metrics_gauge")?;
-        for row in &gauge_rows {
-            insert.write(row).await?;
+        Ok::<(), ExporterError>(())
+    };
+    let insert_gauges = async {
+        if !gauge_rows.is_empty() {
+            let mut insert = client.insert("otel_metrics_gauge")?;
+            for row in &gauge_rows {
+                insert.write(row).await?;
+            }
+            insert.end().await?;
         }
-        insert.end().await?;
-    }
-    if !sum_rows.is_empty() {
-        let mut insert = client.insert("otel_metrics_sum")?;
-        for row in &sum_rows {
-            insert.write(row).await?;
+        Ok::<(), ExporterError>(())
+    };
+    let insert_sums = async {
+        if !sum_rows.is_empty() {
+            let mut insert = client.insert("otel_metrics_sum")?;
+            for row in &sum_rows {
+                insert.write(row).await?;
+            }
+            insert.end().await?;
         }
-        insert.end().await?;
-    }
-    counts.metrics = gauge_rows.len() + sum_rows.len();
+        Ok::<(), ExporterError>(())
+    };
 
-    Ok(counts)
+    tokio::try_join!(insert_logs, insert_traces, insert_gauges, insert_sums)?;
+
+    Ok(Counts {
+        logs: log_rows.len(),
+        spans: trace_rows.len(),
+        metrics: gauge_rows.len() + sum_rows.len(),
+        ..Counts::default()
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -25,10 +25,13 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use tracing::warn;
 
+pub mod buffer;
 pub mod clickhouse_exporter;
 pub mod config;
 pub mod contract;
 pub mod grpc;
+pub mod metrics;
+pub mod metrics_server;
 pub mod otlp;
 
 pub use contract::{ContractError, MetricType, Signal, StatusCode, CONTRACT_VERSION};
