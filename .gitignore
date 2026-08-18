@@ -36,3 +36,6 @@ hyperdx_data/
 
 # Tooling
 .mcp.json
+
+# Agentic gitflow worktrees (ADR-0009)
+.worktrees/
