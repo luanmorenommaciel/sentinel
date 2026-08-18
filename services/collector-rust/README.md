@@ -1,103 +1,118 @@
-# `sentinel-collector` · Rust (Day 1: NDJSON parser)
+# `sentinel-collector` · Rust
 
-The Rust implementation of the Sentinel OTel Collector. Eventually receives OTLP over gRPC on `:4317`, validates against Pod 1's contract, batches, and exports to ClickHouse.
+The Sentinel OTel Collector — Pod 2's ingestion gateway. Receives OTLP over gRPC on `:4317`
+(or reads Pod 1's NDJSON), validates against the Pod 1 → Pod 2 input contract, buffers and
+batches, and writes directly into Pod 3's **bronze** ClickHouse schema.
 
-> **Status: Day 1 of the [10-day Pod 2 sprint plan](../../docs/research/learning-roadmap-pod2-rust.md).** Currently reads Pod 1's golden NDJSON fixture (`contract/golden/baseline_seed42.jsonl`), deserializes into the canonical `Signal` enum, validates against the v1.0.0 contract, and prints per-signal-type counts. ClickHouse exporter lands Day 3-5; OTLP gRPC receiver lands Day 8-9.
+> **Status: selected implementation, validated end-to-end.** After the language bake-off,
+> Pod 2 standardized on Rust and `services/collector-go/` was removed from the repo
+> (PR #28, merged 2026-08-12). Latest local E2E: 233,100 signals in 4.5s, lossless, avg export
+> latency 32.3ms — see [README §8](../../README.md) for the full snapshot.
+> ⚠️ [ADR-0004](../../docs/adr/0004-collector-implementation-language.md) still reads
+> `Proposed` and has not been updated to record the selection.
 
-## Why this exists
+## What it does
 
-Sync 02 (2026-05-26) action A7 scheduled a bake-off for the Collector implementation language. This crate is the Rust corner. The Go corner should land in a sibling PR at `services/collector-go/` (not yet open).
+| Boundary | Contract | Enforcement |
+|---|---|---|
+| **Inbound** (producer → collector) | [`contracts/generator/v1/schema/otlp_output.schema.json`](../../contracts/generator/v1/schema/otlp_output.schema.json) **v1.0.0** — 3 signal types, 5 guaranteed `sentinel.*`/`cloud.provider` resource keys | gRPC: `contract.grpc_validation` = `off`/`warn`/**`warn` default**/`strict`. File: `contract.strict` (all-or-nothing) |
+| **Outbound** (collector → ClickHouse) | the **bronze DDL** ([`infra/clickhouse/init.d/01-bronze-otel.sql`](../../infra/clickhouse/init.d/01-bronze-otel.sql)), documented by the [Pod 2 → Pod 3 read contract](../../contracts/collector/v1/pod2-pod3-read-contract.md) v1.0.0.1 | Typed rows via the `clickhouse` crate. The collector issues **no DDL at all** — Pod 3 owns the table lifecycle (the repo calls this policy `create_schema:false`, after the contrib exporter's flag) |
 
-The full case is in [`docs/adr/0004-collector-implementation-language.md`](../../docs/adr/0004-collector-implementation-language.md). The receipts are in [`docs/research/rust-otel-collector.md`](../../docs/research/rust-otel-collector.md). Read those first if you arrived here cold.
+`warn` is the gRPC default on purpose: foreign OTLP legitimately lacks the five `sentinel.*`
+keys, so `strict` would silently drop real traffic. Use `strict` only when the sender is
+guaranteed Sentinel-internal.
 
-## Prerequisites
+## Run it
 
-```bash
-# Rust toolchain (stable 1.75+)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup default stable
-rustup component add rustfmt clippy
+From the repo root (Docker, no host toolchain):
 
-# Verify
-cargo --version
-rustc --version
+```sh
+make e2e        # ClickHouse + collector + generator → bronze.*
+make logs       # tail the collector
 ```
 
-## Build & run (scaffold only)
+Standalone:
 
-```bash
+```sh
 cd services/collector-rust
-cargo build
-cargo run     # logs a startup line in JSON then exits
-cargo test    # runs the scaffold-compiles smoke test
+cargo run -- config.example.yaml   # FILE mode: read the golden NDJSON, tally, exit
+cargo test                         # unit + integration (live-ClickHouse tests are #[ignore]d)
 ```
 
-Both should succeed before the bake-off properly starts.
+**Run modes** are decided by which config sections are present — see
+[`config.example.yaml`](config.example.yaml), which documents every key:
 
-## Lint + format gates
+| `grpc:` | `clickhouse:` | Mode |
+|---|---|---|
+| absent | absent | FILE + count only — parse `input.path`, tally, exit |
+| absent | present | FILE + export — parse `input.path`, write to ClickHouse, exit |
+| present | absent | SERVER + log only — serve `:4317`, count and log requests |
+| present | present | SERVER + export — the production path |
 
-These map to the CI gates in the [Crew B WoW spec](../../docs/adr/) (when ADR-0007 — per-language CI profiles — lands):
+`CLICKHOUSE_URL` and `RUST_LOG` override the config file.
 
-```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+## Lint + test gates
+
+These are the gates `.github/workflows/rust-ci.yml` enforces:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --locked
+cargo test --test clickhouse_roundtrip --locked -- --ignored   # needs a live ClickHouse
+cargo deny check                                               # advisories + licenses (deny.toml)
 ```
 
-## What's next (in dependency order)
+CI runs these as four jobs: **gates** (fmt · clippy · test · release build) ·
+**integration** (ClickHouse round-trip against a real container) · **supply-chain**
+(cargo-deny) · **docker-build** (distroless image).
 
-1. **Bind OTLP gRPC server on `:4317`** — `tonic`-based, accepting `ExportTraceServiceRequest`. Smallest possible loop: receive → log → return default response. Goal: prove the wire is alive.
-2. **Connect to ClickHouse** — using the `clickhouse` crate (Native protocol via HTTP). Create one table, write one span. Goal: prove the export side works.
-3. **Glue receive → export with a bounded `mpsc` channel** — backpressure surface for the bake-off. Goal: load-generator pings the receiver, span lands in ClickHouse.
-4. **Batching + flush thresholds** — size + time. Goal: throughput numbers worth measuring.
-5. **Container image** — multi-stage build, distroless final. Goal: 5–20 MB image for cold-start advantage.
-6. **Meta-telemetry** — the Collector emits its own OTel signals. Goal: Sentinel can watch Sentinel.
+The enforced lint policy is package-level `[lints]` in `Cargo.toml`: `unsafe_code = "forbid"`,
+`unwrap_used = "deny"`, `expect_used = "warn"`. **`pedantic`, `nursery` and `missing_docs` are
+deliberately commented out** — aspirational until a dedicated cleanup PR clears the existing
+warnings. Don't assume pedantic is on. (It becomes `[workspace.lints]` if a second Rust crate
+ever appears.) Full standards:
+[`.claude/docs/RUST_PROJECT_STANDARDS.md`](../../.claude/docs/RUST_PROJECT_STANDARDS.md).
 
-Each of these steps is a small PR, reviewed by Pod 2 and merged via the standard 8-step PR flow (signed commits, 2 approvals, 7 CI gates, attribution trailers).
-
-## Directory layout (target)
+## Layout
 
 ```text
 services/collector-rust/
-├── Cargo.toml
-├── README.md         # this file
+├── Cargo.toml · rust-toolchain.toml · rustfmt.toml · clippy.toml · deny.toml
+├── config.example.yaml     # documented reference config
+├── config.docker.yaml      # the compose profile (has `grpc:` → server mode)
+├── Dockerfile              # multi-stage → distroless
+├── justfile                # local dev recipes
 ├── src/
-│   ├── main.rs       # entry point (scaffold)
-│   ├── receiver.rs   # OTLP gRPC server (planned)
-│   ├── exporter.rs   # ClickHouse write path (planned)
-│   ├── pipeline.rs   # receive → batch → export glue (planned)
-│   └── config.rs     # YAML config loader (planned)
-└── tests/            # integration tests against a local ClickHouse container
+│   ├── main.rs             # entry point — picks run mode from config
+│   ├── lib.rs              # module root
+│   ├── config.rs           # YAML loader; unknown keys rejected
+│   ├── contract.rs         # v1.0.0 input-contract validation
+│   ├── otlp.rs             # OTLP protobuf → internal `Signal`
+│   ├── grpc.rs             # tonic OTLP server (:4317) + `apply_validation`
+│   ├── buffer.rs           # bounded buffer, size + interval flush thresholds
+│   ├── clickhouse_exporter.rs  # typed bronze writes (RowBinary over HTTP :8123)
+│   ├── metrics.rs          # Prometheus counters/histograms
+│   └── metrics_server.rs   # `/metrics` on :9090
+└── tests/
+    ├── golden_parse.rs           # golden fixture → 48 logs / 48 spans / 183 metrics
+    ├── grpc_smoke.rs             # server accepts OTLP
+    ├── grpc_export_roundtrip.rs  # OTLP in → bronze rows out
+    └── clickhouse_roundtrip.rs   # live-ClickHouse export (#[ignore]d by default)
 ```
 
-## Bake-off harness (cross-language, not in this crate)
+**Ports:** OTLP gRPC `:4317` · Prometheus `/metrics` `:9090` · ClickHouse **HTTP `:8123`**
+(the `clickhouse` crate speaks RowBinary over HTTP — not native `:9000`).
 
-The bake-off compares this crate to the eventual `services/collector-go/` against a shared:
+## Known gaps
 
-- Load generator (the Python data generator that Vinícius pushed — `services/generator/`)
-- ClickHouse instance (Docker compose, 8 GB VM)
-- Metric collection (Prometheus scraping both Collectors' meta-telemetry)
-- Decision criteria (defined in a future ADR-0006)
-
-The harness lives at `bench/collector-bakeoff/` (also not yet open). Either Pod 2 or the Captain will scaffold it once the language ADR is accepted.
-
-## Contract & boundaries
-
-Per Sync 02 D8, every component declares input/output contracts. The Collector's contracts:
-
-| Boundary | Contract | Validation |
-|---|---|---|
-| **Inbound** (Generator → Collector) | OTLP `ExportTraceServiceRequest` / `ExportMetricsServiceRequest` / `ExportLogsServiceRequest` | `opentelemetry-proto` generated types — protobuf-validated on receive |
-| **Outbound** (Collector → ClickHouse) | RAW table schema (per signal type), defined by Pod 3 | Strongly-typed via `clickhouse` crate `Row` derive; schema-version field in every row |
-
-Contracts are versioned. A breaking change opens a new ADR.
-
-## Attribution
-
-This scaffold was authored with `Co-Authored-By: Claude Opus 4.7` per the [Crew B attribution contract](../../docs/adr/) (see Sync 01 *How we ship*).
+- **Histogram / Summary metrics are not emitted** — the v1.0.0 input contract has no such type (`src/otlp.rs`).
+- **Sentinel keys live in `ResourceAttributes` `Map`** under bronze, not typed columns. Materializing them is a Pod 3 silver decision ([ADR-0007 §Trade-offs](../../docs/adr/0007-bronze-canonical-contract.md)).
 
 ## See also
 
-- [`docs/adr/0004-collector-implementation-language.md`](../../docs/adr/0004-collector-implementation-language.md) — the ADR this scaffold is paired with
-- [`docs/research/rust-otel-collector.md`](../../docs/research/rust-otel-collector.md) — research receipts
-- Sentinel spec (`sentinel.pdf` in Crew B docs) — overall mission + Watcher fleet context
+[ADR-0004](../../docs/adr/0004-collector-implementation-language.md) (language) ·
+[ADR-0006](../../docs/adr/0006-optional-id-representation.md) (optional IDs) ·
+[ADR-0007](../../docs/adr/0007-bronze-canonical-contract.md) (bronze = canonical contract) ·
+[read contract](../../contracts/collector/v1/pod2-pod3-read-contract.md) ·
+[research receipts](../../docs/research/rust-otel-collector.md)
