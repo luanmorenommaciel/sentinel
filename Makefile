@@ -18,7 +18,7 @@ VALID_COLLECTORS := rust go
 
 .PHONY: help guard up init generate e2e down reset logs ps \
         build test test-generator test-collector-rust test-collector-go \
-        lint lint-generator lint-collector-rust lint-collector-go
+        test-silver sample-silver lint lint-generator lint-collector-rust lint-collector-go
 
 # Docker runner for per-service build/test/lint — no host toolchains required.
 DK_RUN := docker run --rm --user $(shell id -u):$(shell id -g) -v "$(CURDIR)":/w
@@ -65,6 +65,12 @@ build:               ## Build all service images (generator + both collectors)
 	COMPOSE_PROFILES=rust,go docker compose build
 
 test: test-generator test-collector-rust test-collector-go  ## Run all unit test suites
+
+test-silver:            ## Verify Bronze→Silver load and Silver read-model invariants
+	docker compose exec -T clickhouse clickhouse-client --multiquery < infra/clickhouse/tests/02-silver-layer.test.sql
+
+sample-silver:          ## Print representative rows from the Silver models
+	docker compose exec -T clickhouse clickhouse-client --multiquery --format PrettyCompact < infra/clickhouse/queries/02-silver-sample.sql
 
 test-generator:      ## Generator unit tests (pytest)
 	$(DK_RUN) -w /w/services/generator-python -e HOME=/tmp -e CONTRACTS_DIR=/w/contracts/generator/v1 \
