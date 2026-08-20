@@ -29,7 +29,7 @@ services:
       # Both collectors write this bronze split schema directly (ADR-0007); the tables must
       # exist before either collector connects, so they are created here on boot.
       - ./infra/clickhouse/init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/02-bronze-otel.sql:ro
-      # POD 3 typed Silver models and Watcher read models (ADR-0009).
+      # POD 3 typed Silver models and Watcher read models (ADR-0010).
       - ./infra/clickhouse/init.d/02-silver-layer.sql:/docker-entrypoint-initdb.d/03-silver-layer.sql:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/?query=SELECT+1"]

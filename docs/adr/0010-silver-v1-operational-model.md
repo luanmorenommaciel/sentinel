@@ -1,4 +1,4 @@
-# ADR-0009 · Silver v1 operational model
+# ADR-0010 · Silver v1 operational model
 
 | Field | Value |
 |---|---|
