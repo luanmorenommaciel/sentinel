@@ -1099,6 +1099,10 @@
         `${fmt(r.export_errors)} batches lost · no dead-letter queue`));
 
     $("stage-h").replaceChildren(svg);
+    // The crumb says "validation ·" so it has to carry the validation policy. It was
+    // rendered once from `s.mode` — the delivery mode — and never updated, so the live page
+    // read "validation · idle".
+    set("h-pol", `validation · ${policyOf()}`);
     $("legend-h").innerHTML = `<span class="on" style="color:${tone}">● ${state}</span>
       <span>${r.health_note || ""}</span>
       <span class="sp">series are a <b>${Math.min(hist.length, 120)}s window</b></span>
@@ -1462,8 +1466,17 @@
     $("tile-rj")?.classList.toggle("bad", rej > 0);
     $("m-col")?.setAttribute("data-up", s.collector_up ? "y" : "n");
     $("m-ch")?.setAttribute("data-up", s.clickhouse_up ? "y" : "n");
+    // `rc`/`rb` must be pushed here too, not only served by `/api/history`. The client keeps
+    // its own window, so ~120 ticks after load every visible point is one of these — and
+    // without the per-signal reject arrays the Contract board's sparklines flatlined to zero
+    // while violations were happening. Same shape the server writes, so the two are one
+    // series; `LANES` fixes the order.
+    const cm = s.reject_matrix || {};
+    const bySignal = (reason) => LANES.map(([n]) => (cm[reason] || {})[n] || 0);
     hist.push({ t: s.ts, in: sum2(s.ingest_rate), fl: s.flush_rate, lat: s.export_latency_ms,
-      st: s.persist_rate, rj: sum2(s.reject_rate), dr: s.drop_rate, m: s.mode });
+      st: s.persist_rate, rj: sum2(s.reject_rate),
+      rc: bySignal("contract"), rb: bySignal("backpressure"),
+      dr: s.drop_rate, m: s.mode });
     if (hist.length > HIST_MAX) hist.shift();
     // A board only draws when it is on screen. Neither has animation to preserve, but
     // rebuilding a chart nobody is looking at, once a second, is work for nothing.

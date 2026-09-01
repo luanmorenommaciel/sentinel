@@ -30,10 +30,10 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from flow_ui import topology
 from flow_ui.clickhouse import EMPTY_BY_CONTRACT
 from flow_ui.config import settings
 from flow_ui.pipeline import Poller
-from flow_ui import topology
 
 logging.basicConfig(
     level=logging.INFO,
@@ -101,6 +101,9 @@ def index(request: Request):
         "ingest_total": sum(snap.ingest_rate.values()),
         "reject_total": sum(snap.reject_rate.values()),
         "poll_ms": int(settings.poll_interval_s * 1000),
+        # Server-rendered like every other figure, so the policy is right with JavaScript
+        # disabled too — and it is read from the collector's config, never assumed.
+        "contract": topology.CONTRACT,
     })
 
 
@@ -122,7 +125,7 @@ async def stream(request: Request):
                     break
                 try:
                     snap = await asyncio.wait_for(queue.get(), timeout=15.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": keepalive\n\n"   # keeps proxies from reaping an idle stream
                     continue
                 yield f"data: {json.dumps(snap.as_dict())}\n\n"

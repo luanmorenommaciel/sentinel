@@ -16,7 +16,6 @@ of the table. That gap widens with every row inserted.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 
@@ -90,6 +89,10 @@ class ClickHouse:
                 out[tbl] = int(n)
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("bronze counts unavailable: %s", exc)
+            # `{}`, not a dict of zeros. Zeros are a claim — "the tables are empty" — and the
+            # caller stores whatever it gets as the previous reading, so on the recovering
+            # tick the whole table read as one second of growth.
+            return {}
         return out
 
     async def lineage(self, limit: int = 12) -> list[dict]:
@@ -311,19 +314,29 @@ class ClickHouse:
         child span carries its parent, so parent and child rows join and the two
         `ServiceName`s are the edge.
 
-        **The join needs `TraceId` as well as `ParentSpanId = SpanId`.** The generator seeds
-        a deterministic RNG, so a fixed `--seed` repeats span ids across runs and the id
-        alone joined a child from one run onto a parent from another — which invented eight
-        edges the declared topology does not contain. `TraceId` removes all but a residue.
+        **The parent side must be deduplicated, and `TraceId` alone is not enough.** The
+        generator seeds a deterministic RNG, so a fixed `--seed` repeats *both* ids across
+        runs: joining on `SpanId` alone invented eight edges the topology does not contain,
+        and adding `TraceId` removed those while still fanning out — measured on a live
+        table, 16,154 children in the window produced 445,229 joined rows, a 27.6x
+        multiplication, because each child matched every historical copy of its parent. Edge
+        widths then encoded run history rather than traffic.
 
-        Cheap because both sides are narrowed by the same time window first (measured 0.53s
-        over a 15-minute window), but it is a self-join and belongs on the slow lane.
+        Collapsing parents to one row per `(TraceId, SpanId)` first makes the join
+        one-to-at-most-one, so a child is counted exactly once. Both sides are still bounded
+        by the same window, and it stays on the slow lane because it remains a self-join.
         """
         sql = f"""
-        SELECT p.ServiceName AS src, c.ServiceName AS dst,
+        WITH parents AS (
+            SELECT TraceId, SpanId, any(ServiceName) AS svc
+            FROM {self._db}.otel_traces
+            WHERE Timestamp > now() - INTERVAL {int(minutes)} MINUTE
+            GROUP BY TraceId, SpanId
+        )
+        SELECT p.svc AS src, c.ServiceName AS dst,
                count() AS spans, countIf(c.StatusCode = 'Error') AS errors
         FROM {self._db}.otel_traces AS c
-        INNER JOIN {self._db}.otel_traces AS p
+        INNER JOIN parents AS p
           ON c.ParentSpanId = p.SpanId AND c.TraceId = p.TraceId
         WHERE c.Timestamp > now() - INTERVAL {int(minutes)} MINUTE AND c.ParentSpanId != ''
         GROUP BY src, dst HAVING src != dst
@@ -360,5 +373,5 @@ class ClickHouse:
         try:
             await self._query("SELECT 1")
             return True
-        except (httpx.HTTPError, asyncio.TimeoutError):
+        except (TimeoutError, httpx.HTTPError):
             return False

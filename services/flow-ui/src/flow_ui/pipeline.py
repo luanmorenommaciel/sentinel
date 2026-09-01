@@ -11,12 +11,12 @@ import contextlib
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 
 import httpx
 
-from flow_ui import prom
-from flow_ui.clickhouse import ClickHouse, EMPTY_BY_CONTRACT, LIVE_TABLES
+from flow_ui import prom, topology
+from flow_ui.clickhouse import EMPTY_BY_CONTRACT, LIVE_TABLES, ClickHouse
 from flow_ui.config import Settings
 
 log = logging.getLogger("flow_ui.pipeline")
@@ -276,14 +276,29 @@ class Poller:
         #: two viewers see the same history.
         self.history: deque[dict] = deque(maxlen=settings.history)
         self._signals = ("logs", "trace", "metrics")
-        self._errors_seen: float = 0.0
-        self._policy: str = "warn"
+        #: `None` until the first scrape, because the collector's `export_errors_total` is
+        #: cumulative over its whole life: treating 0 as the baseline made every batch it had
+        #: ever lost look like a fresh loss, and the page opened on FAIL.
+        self._errors_seen: float | None = None
+        #: Read from the collector's own config rather than assumed. It was hard-coded to
+        #: `warn`, so under `strict` the health note said contract failures were "exported
+        #: anyway" when they had been discarded at the boundary.
+        self._policy: str = topology.grpc_validation()
         self._task: asyncio.Task | None = None
+        #: Retained so `stop()` can cancel them. Unheld, they outlived the poller and went on
+        #: querying an httpx client that had already been closed.
+        self._slow: list[asyncio.Task] = []
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
+        for task in self._slow:
+            task.cancel()
+        for task in self._slow:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._slow.clear()
         if self._task:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -391,14 +406,15 @@ class Poller:
         # Bronze counts every tick (metadata-only, ~4ms); lineage on the slow cadence.
         counts = await self._ch.counts()
         snap.clickhouse_up = any(counts.values()) or await self._ch.ping()
-        snap.bronze = counts
-        if self._prev_bronze:
+        snap.bronze = counts or dict.fromkeys(LIVE_TABLES, 0)
+        if self._prev_bronze and counts:
             dtb = now - self._prev_bronze_t
             snap.bronze_rate = {
                 t: round(prom.rate(counts.get(t, 0), self._prev_bronze.get(t, 0), dtb), 1)
                 for t in LIVE_TABLES
             }
-        self._prev_bronze, self._prev_bronze_t = counts, now
+        if counts:
+            self._prev_bronze, self._prev_bronze_t = counts, now
 
         snap.health, snap.health_note = self._verdict(snap)
         self.history.append({
@@ -436,7 +452,8 @@ class Poller:
             return "fail", "collector unreachable"
         if not snap.clickhouse_up:
             return "fail", "clickhouse unreachable"
-        lost = snap.export_errors - self._errors_seen
+        # First scrape establishes the baseline; a lifetime total is not a fresh loss.
+        lost = 0.0 if self._errors_seen is None else snap.export_errors - self._errors_seen
         self._errors_seen = snap.export_errors
         if snap.drop_rate > 0 or lost > 0:
             return "fail", f"{snap.drop_rate:.2g}/s dropped · {snap.export_errors:.0f} batches lost"
@@ -483,8 +500,8 @@ class Poller:
             await asyncio.sleep(self._s.contract_interval_s)
 
     async def _run(self) -> None:
-        asyncio.create_task(self._refresh_lineage())
-        asyncio.create_task(self._refresh_contract())
+        self._slow = [asyncio.create_task(self._refresh_lineage()),
+                      asyncio.create_task(self._refresh_contract())]
         while True:
             try:
                 await self._tick()

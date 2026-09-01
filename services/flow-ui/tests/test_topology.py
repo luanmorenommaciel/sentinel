@@ -46,7 +46,7 @@ def test_table_docs_only_list_columns_pod_2_actually_writes():
 
 
 def test_optional_ids_are_documented_as_empty_string_never_null():
-    doc = dict((c[0], c[2]) for c in topology.TABLE_DOCS["otel_logs"]["columns"])
+    doc = {c[0]: c[2] for c in topology.TABLE_DOCS["otel_logs"]["columns"]}
     assert "never NULL" in doc["TraceId"]
 
 

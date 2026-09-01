@@ -113,7 +113,7 @@ def parse(text: str) -> Sample:
     return Sample(series=series)
 
 
-def quantile(sample: "Sample", name: str, q: float) -> float:
+def quantile(sample: Sample, name: str, q: float) -> float:
     """Approximate a quantile from a Prometheus histogram's cumulative buckets.
 
     The collector already publishes `export_latency_seconds` as a histogram, and reducing

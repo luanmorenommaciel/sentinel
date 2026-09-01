@@ -12,8 +12,8 @@ STEP      ?= 1s
 RATE      ?= 200
 
 .PHONY: help up init generate generate-stream ui e2e down reset logs ps \
-        build test test-generator test-collector-rust \
-        lint lint-generator lint-collector-rust
+        build test test-generator test-collector-rust test-flow-ui \
+        lint lint-generator lint-collector-rust lint-flow-ui
 
 # Docker runner for per-service build/test/lint — no host toolchains required.
 DK_RUN := docker run --rm --user $(shell id -u):$(shell id -g) -v "$(CURDIR)":/w
@@ -66,7 +66,7 @@ reset:               ## Stop all services and drop volumes (fresh ClickHouse)
 build:               ## Build all service images (generator + Rust collector)
 	docker compose build
 
-test: test-generator test-collector-rust  ## Run all unit test suites
+test: test-generator test-collector-rust test-flow-ui  ## Run all unit test suites
 
 test-generator:      ## Generator unit tests (pytest)
 	$(DK_RUN) -w /w/services/generator-python -e HOME=/tmp -e CONTRACTS_DIR=/w/contracts/generator/v1 \
@@ -76,7 +76,14 @@ test-collector-rust: ## Rust collector tests (cargo test; live-ClickHouse tests 
 	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \
 		rust:1.96 cargo test --locked
 
-lint: lint-generator lint-collector-rust  ## Lint all services
+lint: lint-generator lint-collector-rust lint-flow-ui  ## Lint all services
+
+test-flow-ui:        ## flow-ui unit tests (pytest)
+	$(DK_RUN) -w /w/services/flow-ui -e HOME=/tmp \
+		python:3.12-slim bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest && /tmp/v/bin/python -m pytest tests -q"
+
+lint-flow-ui:        ## flow-ui lint (ruff)
+	$(DK_RUN) -w /w/services/flow-ui ghcr.io/astral-sh/ruff:latest check src tests scripts
 
 lint-generator:      ## Python lint (ruff)
 	$(DK_RUN) -w /w/services/generator-python ghcr.io/astral-sh/ruff:latest check src

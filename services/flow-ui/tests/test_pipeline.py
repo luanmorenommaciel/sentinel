@@ -10,7 +10,14 @@ so the two distributions do not overlap on either axis.
 from __future__ import annotations
 
 from flow_ui.config import Settings
-from flow_ui.pipeline import MODE_BATCH, MODE_IDLE, MODE_STREAM, Poller, Snapshot, Broadcaster
+from flow_ui.pipeline import (
+    MODE_BATCH,
+    MODE_IDLE,
+    MODE_STREAM,
+    Broadcaster,
+    Poller,
+    Snapshot,
+)
 
 
 def poller() -> Poller:
