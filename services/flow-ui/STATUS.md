@@ -10,7 +10,7 @@ Working tree only. `git status`:
  M Makefile                    generate-stream + ui targets
  M docker-compose.yml          flow-ui service + generator-config mount
 ?? services/flow-ui/           the whole service
-?? docs/research/data-observability-competitive-landscape.md   (not to be committed yet)
+   docs/research/data-observability-competitive-landscape.md   (the V2 roadmap)
 ```
 
 Run: `make up` → `make ui` → `make generate-stream DURATION=20m`.
@@ -175,13 +175,49 @@ read contract that is Authoritative at `1.0.0.1` — an ADR, not a UI session.
 What landed instead is the half of Arrival that *is* answerable from this data: the absence
 signal above.
 
+## Shipped: V2.3 (partial) · the flow DAG carries health
+
+Contract and Watchers were separate boards, so the view people actually look at knew nothing
+about either. Every producer node in ORIGIN now carries a **fused state** — the worst of its
+volume verdict, the buckets it was silent for, and the rows it wrote missing a contract key —
+as a mark on the node and, when it has something to say, on its border. The reason travels in
+the `aria-label`, so it is not colour-only. The closed card carries the same answer, because
+state you can only reach by opening the box that contains it is not an answer.
+
+**A finding that changed what the feature is worth.** Building it surfaced that
+`legacy-billing-api` and `third-party-agent` — the only two producers with problems — are
+**not in Pod 1's declared topology at all**. The DAG draws what is declared, so no node exists
+to carry their state, and per-node health would have been structurally blind to exactly the
+producers that need it. Undeclared is now its own finding, reported apart from the graph
+because it has no position in the graph: nothing declared them, so nothing told them the
+contract, so they are missing required keys. The correlation is not a coincidence.
+
+**Two thirds of V2.3 are not buildable and were not faked.** It also asks for edge thickness
+by throughput and edge colour by violation rate. There is no per-edge measurement anywhere:
+ORIGIN's edges come from Pod 1's `topology.yaml` and are *declared dependencies, not measured
+flows*, and neither the collector nor bronze counts anything per edge. The per-node state
+timeline needs per-service history, which is not retained — the volume lane refreshes and
+keeps nothing.
+
 ## Next planned step
 
-**V2.4 · Freshness/arrival lag as a first-class signal**, which now has a prerequisite: an
-arrival timestamp at the collector's write path. Worth an ADR before any UI work.
-Alternatively **V2.5 · alert-noise budget**, which the shortlist flags as *not
-retrofittable*.
+Tier 1 is now closed to the limit of the data. What remains:
+
+* **V2.5 · alert-noise budget**, which the shortlist flags as *not retrofittable* — the
+  strongest remaining candidate for that reason alone.
+* **V2.6 · schema watcher** with ordinal-position awareness.
+* **V2.4 · freshness/arrival lag** and the **Arrival watcher**, both blocked on the same
+  prerequisite: an arrival timestamp at the collector's write path. Worth an ADR, not UI work.
+* A **geometry test**. Two layout collisions and one overlap reached the reader today; the
+  57 tests cover the backend and the pure logic and nothing about where things land.
+* **The rest of V2.3**, which is two pieces, not four: a per-node state timeline (needs
+  per-service history retained, which nothing does today) and Grafana node-graph frames.
+  Edge thickness by throughput and edge colour by violation rate are not pending — there is
+  no per-edge measurement to draw them from.
+* **V2.10 · language selector (PT-BR · ES · EN)**, a Crew decision rather than a survey
+  finding. Its real work is a reason-code refactor: `health_note`, `volume_state.why` and the
+  contract notes are composed server-side as finished English sentences, and the figures are
+  rendered before any script runs, so the locale has to be known at render time.
 
 Rationale and the rest of the shortlist are in
-`docs/research/data-observability-competitive-landscape.md`, which is **not to be committed
-yet**.
+[`docs/research/data-observability-competitive-landscape.md`](../../docs/research/data-observability-competitive-landscape.md).

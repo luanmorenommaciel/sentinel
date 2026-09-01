@@ -152,6 +152,9 @@ body{margin:0;background:var(--sunk);color:var(--txt);
 .hit:focus{outline:none}
 .hit:focus-visible > .nd{stroke:var(--sec);stroke-width:2}
 .nd.sel{stroke:var(--sec)}
+/* A status mark on every producer, healthy ones included: a dot that only appears when
+   something is wrong cannot be told apart from a node nobody is watching. */
+.hmark{transition:fill .3s}
 /* An open container is a REGION, not a card: with an opaque fill it painted over the
    last stretch of every lane arriving at `receive`, which made the data look as though it
    entered the box anywhere. `.hit rect{pointer-events:all}` keeps it clickable. */

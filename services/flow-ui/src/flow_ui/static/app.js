@@ -301,6 +301,60 @@
   const dots = (rate) => rate <= 0 ? 0
     : Math.max(1, Math.min(MAX_DOTS, Math.round(Math.pow(rate / QUANTUM, .62) * 2.6)));
 
+  /* ── per-service health, fused ─────────────────────────────
+   *
+   * V2.3. Contract and Watchers are separate boards, so the view people actually look at
+   * knew nothing about either. This fuses every per-service source that exists into the
+   * node itself.
+   *
+   * There are exactly two such sources and no more: `volume` (band verdict, plus the
+   * buckets a producer was silent for while the estate kept receiving) and
+   * `contract_violations` (rows it wrote missing a required key). Both keyed by service.
+   *
+   * What V2.3 also asks for and is NOT here: edge thickness by throughput and edge colour
+   * by violation rate. Neither is measurable. ORIGIN's edges come from Pod 1's
+   * `topology.yaml` — they are DECLARED dependencies, not measured flows — and nothing in
+   * the collector or in bronze counts anything per edge. Drawing them would be inventing
+   * the one thing the picture would then be asserting.
+   */
+  /** Producers writing into bronze that Pod 1 never declared.
+   *
+   *  Found while building the per-node health and it changes what that health is worth: the
+   *  DAG draws the DECLARED topology, so a producer nobody declared has no node to carry a
+   *  state — and here the only two producers with problems were exactly those. Undeclared is
+   *  itself the finding, and it correlates: nothing declared it, so nothing told it the
+   *  contract, so it is missing required keys. Reported apart from the graph because it has
+   *  no position in the graph. */
+  const undeclared = () => {
+    const declared = new Set((graph?.topology?.nodes || []).map((n) => n.service));
+    const seen = new Set([...(snap?.lineage || []).map((r) => r.service),
+                          ...(snap?.volume || []).map((r) => r.service),
+                          ...(snap?.contract_violations || []).map((r) => r.service)]);
+    return [...seen].filter((n) => n && !declared.has(n)).sort();
+  };
+
+  const HRANK = { fail: 0, warn: 1, unmonitored: 2, unknown: 3, passing: 4 };
+  const HTONE = { fail: "var(--alarm)", warn: "var(--sec)", unmonitored: "var(--dim2)",
+                  unknown: "var(--dim)", passing: "var(--pri)" };
+
+  function serviceHealth(name) {
+    const v = (snap?.volume || []).find((r) => r.service === name);
+    const c = (snap?.contract_violations || []).find((r) => r.service === name);
+    let state = v ? v.state : "unknown";
+    const worse = (s) => { if (HRANK[s] < HRANK[state]) state = s; };
+    const why = [];
+    if (v && (v.state === "warn" || v.state === "fail")) why.push(`volume ${v.z}σ off median`);
+    // Silence is not a band violation — a producer sitting at its median while writing
+    // nothing at all would read as passing — so it raises the state on its own axis.
+    if (v && v.absent > 0) { worse("warn"); why.push(`silent in ${v.absent} of ${v.estate} buckets`); }
+    if (c && c.violating > 0) {
+      worse("warn");
+      why.push(`${fmt(c.violating)} rows missing ${Object.keys(c.missing).length} of 5 contract keys`);
+    }
+    if (!why.length) why.push(v ? v.why : "no volume data for this producer");
+    return { state, tone: HTONE[state] || HTONE.unknown, why: why.join(" · ") };
+  }
+
   /* ── node bodies ───────────────────────────────────────────── */
   function originBody(g, b, edges, fx) {
     const r = snap || {}, ing = r.ingest_rate || {};
@@ -309,8 +363,20 @@
       rows.forEach(([name, v], i) => g.append(
         el("text", { class: "txt", x: b.x + 18, y: b.y + 66 + i * 26 }, name),
         el("text", { class: "val", x: b.x + b.w - 18, y: b.y + 66 + i * 26 }, fmt(v))));
+      // Closed, the card still has to answer "is anything wrong" — otherwise the fused
+      // state is information you can only get by opening the box that contains it.
+      const names = (graph?.topology?.nodes || []).map((n) => n.service);
+      const bad = names.filter((n) => ["warn", "fail"].includes(serviceHealth(n).state));
+      const off = undeclared();
       g.append(el("text", { class: "sub", x: b.x + 18, y: b.y + 158 },
-        `${graph?.topology?.nodes?.length || 0} services · ${graph?.topology?.edges?.length || 0} edges`));
+        `${names.length} declared · ${graph?.topology?.edges?.length || 0} edges`),
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 174,
+            style: bad.length ? "fill:var(--sec)" : null },
+          bad.length ? `${bad.length} needing attention` : "all declared producers in band"),
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 190,
+            style: off.length ? "fill:var(--alarm)" : null },
+          off.length ? `${off.length} undeclared producer${off.length > 1 ? "s" : ""} writing`
+                     : "no undeclared producers"));
       return;
     }
     const t = graph?.topology;
@@ -351,22 +417,40 @@
     const byName = Object.fromEntries((r.lineage || []).map((z) => [z.service, z]));
     t.nodes.forEach((n) => {
       const p = pos[n.id], row = byName[n.service], sel = n.service === service;
+      const h = serviceHealth(n.service);
       const node = el("g", { class: "hit", tabindex: "0", role: "button",
-        "aria-pressed": String(sel), "aria-label": `Trace ${n.service} through the pipeline` });
+        "aria-pressed": String(sel),
+        // The reason travels with the node for anyone not reading colour.
+        "aria-label": `Trace ${n.service} through the pipeline — ${h.state}: ${h.why}` });
       node.dataset.service = n.service;
       // Name on its own line, figure on the next: at 196px a 24-character service name
       // and a right-aligned count were landing on the same pixels.
       node.append(
         el("rect", { class: "nd sub-nd" + (sel ? " sel" : ""), x: p.x, y: p.y,
-          width: NW, height: NH, rx: 3 }),
-        el("text", { class: "txt", x: p.x + 12, y: p.y + 17 },
-          clip(n.service, n.roots ? 22 : 27)),
-        el("text", { class: "sub", x: p.x + 12, y: p.y + 33 },
+          width: NW, height: NH, rx: 3,
+          // Selection wins the border — it is a thing the reader just did. Health takes the
+          // border only when it has something to say and the node is not selected.
+          style: !sel && h.state !== "passing" && h.state !== "unknown"
+            ? `stroke:${h.tone}` : null }),
+        // A status mark on every node, including the healthy ones: a dot that appears only
+        // when something is wrong cannot be told from a node nobody is watching.
+        el("circle", { class: "hmark", cx: p.x + 6, cy: p.y + NH / 2, r: 3, fill: h.tone }),
+        el("text", { class: "txt", x: p.x + 16, y: p.y + 17 },
+          clip(n.service, n.roots ? 21 : 26)),
+        el("text", { class: "sub", x: p.x + 16, y: p.y + 33 },
           `${n.kind} · ${n.latency_ms ?? "?"} ms`),
         el("text", { class: "val", x: p.x + NW - 12, y: p.y + 33 }, row ? fmt(row.total) : "—"));
       if (n.roots) node.append(el("text", { class: "cue end", x: p.x + NW - 12, y: p.y + 17 }, "ROOT"));
       g.append(node);
     });
+    // Above the panel band, so it survives a service being selected. These have no node
+    // because they are in no declared topology — which is the point being made.
+    const off = undeclared();
+    if (off.length) g.append(
+      el("text", { class: "lbl", x: b.x + 20, y: b.y + 240, style: "fill:var(--alarm)" },
+        "UNDECLARED"),
+      el("text", { class: "sub", x: b.x + 104, y: b.y + 240 },
+        `writing into bronze, in no topology: ${off.map((n) => clip(n, 24)).join(" · ")}`));
     if (service) signalPanel(g, b, byName[service]);
   }
 
@@ -756,6 +840,8 @@
       <span><span class="tri"></span>= <b>one batch</b>, all three mixed</span>`;
     // With the collector open the same three colours take on a second job — they name
     // which type FAILED — so that rule is spelled out only where falling dots exist.
+    if (open.origin) return base
+      + `<span>every producer carries its <b>fused state</b> — volume band, silence, contract keys</span>`;
     return open.collector ? base
       + `<span>leaving the chain = <b>what failed</b></span>
          <span><span class="tri ring"></span>= a <b>lost batch</b>, type unknowable</span>`
