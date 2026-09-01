@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en" data-world="command">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/static/app.css?v={{ asset_v() }}">
+</head>
+<body data-poll="{{ poll_ms }}">
+
+<header class="top">
+  <span class="brand"><span class="led" aria-hidden="true"></span>Sentinel</span>
+  <nav class="dash" role="tablist" aria-label="Dashboards">
+    <button role="tab" id="d-flow" aria-controls="v-flow" aria-selected="true">Flow</button>
+    <button role="tab" id="d-health" aria-controls="v-health" aria-selected="false" tabindex="-1">Health</button>
+  </nav>
+  <div class="meta">
+    <span class="st hide" id="m-col" data-up="{{ 'y' if s.collector_up else 'n' }}">collector</span>
+    <span class="st hide" id="m-ch" data-up="{{ 'y' if s.clickhouse_up else 'n' }}">clickhouse</span>
+    <button class="pal" id="pal" aria-label="Switch palette" aria-pressed="false"></button>
+  </div>
+</header>
+
+<!-- Server-rendered figures. The graph below illustrates these; if no script runs, the
+     numbers are still here and still true. -->
+<section class="tiles" aria-label="Throughput">
+  <div class="tile"><b id="t-in">{{ ingest_total|fmt }}</b><i>signals/s</i></div>
+  <div class="tile"><b id="t-fl">{{ s.flush_rate|fmt }}</b><i>flushes/s</i></div>
+  <div class="tile"><b id="t-bt">{{ s.records_per_flush|fmt }}</b><i>per batch</i></div>
+  <div class="tile"><b id="t-lt">{{ s.export_latency_ms|fmt }}<u>ms</u></b><i>export</i></div>
+  <div class="tile"><b id="t-ps">{{ s.persist_rate|fmt }}</b><i>stored/s</i></div>
+  <div class="tile {{ 'bad' if reject_total else '' }}" id="tile-rj"><b id="t-rj">{{ reject_total|fmt }}</b><i>rejected/s</i></div>
+</section>
+
+<main id="v-flow" role="tabpanel" aria-labelledby="d-flow">
+  <div class="crumb">
+    <button id="c-root">Pipeline</button>
+    <span class="sep" id="c-sep" hidden>›</span>
+    <span class="now" id="c-now" hidden></span>
+    <span class="esc" id="c-esc" hidden>esc</span>
+  </div>
+  <div class="canvas">
+    <div class="stage" id="stage"></div>
+    <div class="zoom" role="group" aria-label="Canvas controls">
+      <button id="z-home" title="Reset view (Esc)" aria-label="Reset view">⌂</button>
+      <button id="z-in" title="Zoom in" aria-label="Zoom in">+</button>
+      <button id="z-out" title="Zoom out" aria-label="Zoom out">−</button>
+    </div>
+  </div>
+  <div class="legend" id="legend"></div>
+</main>
+
+<main id="v-health" role="tabpanel" aria-labelledby="d-health" hidden>
+  <div class="crumb"><span class="now" id="h-pol">validation · {{ s.mode }}</span>
+    <span class="esc">outcome per signal</span></div>
+  <div class="stage" id="stage-h"></div>
+  <div class="legend" id="legend-h"></div>
+</main>
+
+<script src="/static/app.js?v={{ asset_v() }}" defer></script>
+</body>
+</html>

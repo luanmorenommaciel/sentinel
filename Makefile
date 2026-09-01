@@ -6,8 +6,12 @@
 SCENARIO  ?= baseline
 SEED      ?= 42
 WINDOW    ?= 5m
+# Stream-mode knobs: DURATION is the wall-clock run cap, STEP the tick interval.
+DURATION  ?= 60s
+STEP      ?= 1s
+RATE      ?= 200
 
-.PHONY: help up init generate e2e down reset logs ps \
+.PHONY: help up init generate generate-stream ui e2e down reset logs ps \
         build test test-generator test-collector-rust \
         lint lint-generator lint-collector-rust
 
@@ -19,6 +23,7 @@ help:                ## Show this help
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  SCENARIO=$(SCENARIO)  SEED=$(SEED)  WINDOW=$(WINDOW)"
+	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)   (generate-stream)"
 
 up:                  ## Start ClickHouse + the Rust collector
 	docker compose up -d --build clickhouse collector-rust
@@ -30,6 +35,16 @@ generate:            ## Run the generator → OTLP :4317 (SCENARIO / SEED / WIND
 	docker compose run --rm generator \
 		--scenario $(SCENARIO) --seed $(SEED) --window $(WINDOW) \
 		--delivery otlp --otlp-endpoint http://collector:4317
+
+generate-stream:     ## Generate in real time (paced by wall clock) — DURATION / STEP / RATE
+	docker compose run --rm generator \
+		--mode stream --duration $(DURATION) --step $(STEP) --rate $(RATE) \
+		--scenario $(SCENARIO) --seed $(SEED) \
+		--delivery otlp --otlp-endpoint http://collector:4317
+
+ui:                  ## Start the flow visualizer on http://localhost:8080
+	docker compose up -d --build flow-ui
+	@echo "flow-ui → http://localhost:8080"
 
 e2e: up init generate ## Full configurable pipeline (up + init + generate)
 	@echo "E2E complete with the Rust collector. Inspect at http://localhost:8123/play"

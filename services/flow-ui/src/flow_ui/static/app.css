@@ -1,0 +1,239 @@
+/* Sentinel flow — one world, two palettes.
+ *
+ * Nothing here names a colour. Every rule reads a ROLE (--pri, --sec, --alarm), and the
+ * two palettes below assign different values to the same roles. That is the whole reason
+ * the palette switch costs one attribute on <html> instead of a second stylesheet.
+ *
+ * The alarm colour is the one that does not survive a naive port: #FF4A3D reads clearly
+ * against phosphor green and amber, but against cyan and magenta a pure red competes
+ * rather than interrupts, so substrate shifts it toward pink. Same role, tuned value.
+ *
+ * `--ter` (traces) follows a rule rather than a taste: it is the palette's own TEXT tone,
+ * near-neutral, so the three signal lanes read as "two saturated hues plus a white". In
+ * command that is literally `--txt`. Substrate used to break the rule with a magenta,
+ * which made traces the loudest lane on screen and left the alarm pink competing with it
+ * for the same register — two pinks, one of which means "lost". It is now the cool
+ * near-white, one step brighter than `--txt` so it separates from the cyan `--pri` by
+ * SATURATION, which is what separates the green and the pale green in command.
+ */
+:root, :root[data-world="command"]{
+  --bg:#080A07; --panel:#0B0E09; --raise:#0C1009; --sunk:#060805;
+  --pri:#7FE04A; --sec:#FFB000; --ter:#CFE8C0; --alarm:#FF4A3D;
+  --txt:#CFE8C0; --dim:#5F7A4E; --dim2:#7C9668;
+  --rule:#24331A; --rule2:#16200F; --via:#1A2612; --viaS:#3B5229;
+  --rule-arrow:#4E6B39;
+  --grid:rgba(127,224,74,.045); --scan:rgba(127,224,74,.03);
+  --knob:#7FE04A;
+}
+:root[data-world="substrate"]{
+  --bg:#04060B; --panel:#070B12; --raise:#091019; --sunk:#03050A;
+  --pri:#22D3EE; --sec:#FFC53D; --ter:#DCE9F5; --alarm:#FF5C7A;
+  --txt:#C3D6E6; --dim:#3D5A72; --dim2:#6C8AA6;
+  --rule:#153446; --rule2:#0E2230; --via:#0B1B26; --viaS:#1E5468;
+  --rule-arrow:#2E6E88;
+  --grid:rgba(34,211,238,.05); --scan:rgba(34,211,238,.014);
+  --knob:#22D3EE;
+}
+/* The two reachability LEDs are a semaphore, and a semaphore is not part of a palette.
+   Green means reachable and red means not, in BOTH worlds — that convention is older and
+   stronger than this design system. Substrate painted "up" with `--pri`, which is also the
+   colour of logs, so the dot said "accent" rather than "healthy". These are the only two
+   values in the file deliberately shared across palettes; the rules still read roles. */
+:root{ --up:#3ECF6E; --down:#FF4A3D; }
+*{box-sizing:border-box}
+html{color-scheme:dark}
+body{margin:0;background:var(--sunk);color:var(--txt);
+  font:14px/1.55 "IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  -webkit-font-smoothing:antialiased;transition:background .3s}
+.sans{font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif}
+
+/* ── header ── */
+.top{display:flex;align-items:center;gap:16px;padding:0 16px;height:46px;
+  background:var(--panel);border-bottom:1px solid var(--rule);transition:background .3s}
+.brand{display:flex;align-items:center;gap:9px;font-size:13px;letter-spacing:.02em;color:var(--txt)}
+.brand .led{width:8px;height:8px;border-radius:50%;background:var(--pri);
+  box-shadow:0 0 9px var(--pri);animation:led 2s ease-in-out infinite}
+.brand em{font-style:normal;color:var(--dim)}
+@keyframes led{0%,100%{opacity:1}50%{opacity:.35}}
+
+.dash{display:flex;gap:1px;margin-left:8px}
+.dash button{appearance:none;border:0;background:none;cursor:pointer;color:var(--dim);
+  font:500 11px/1 inherit;letter-spacing:.13em;text-transform:uppercase;padding:9px 13px;
+  border-radius:4px}
+.dash button:hover{color:var(--dim2)}
+.dash button[aria-selected="true"]{color:var(--txt);background:var(--raise)}
+.dash button:focus-visible{outline:2px solid var(--sec);outline-offset:-2px}
+
+.meta{margin-left:auto;display:flex;align-items:center;gap:14px;
+  font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+.meta b{color:var(--sec);font-weight:500}
+.st{display:flex;align-items:center;gap:5px}
+/* Down glows too. A failure that is quieter than the success beside it is backwards. */
+.st::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--down);
+  box-shadow:0 0 7px var(--down)}
+.st[data-up="y"]::before{background:var(--up);box-shadow:0 0 7px var(--up)}
+
+/* palette switch — no words, the colour is the label */
+.pal{appearance:none;border:1px solid var(--rule);background:var(--sunk);cursor:pointer;
+  width:44px;height:24px;border-radius:99px;position:relative;padding:0;flex:none;
+  transition:border-color .3s,background .3s}
+.pal:focus-visible{outline:2px solid var(--sec);outline-offset:2px}
+.pal::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;
+  border-radius:50%;background:var(--knob);box-shadow:0 0 10px var(--knob);
+  transition:transform .28s cubic-bezier(.3,.7,.3,1),background .3s}
+:root[data-world="substrate"] .pal::after{transform:translateX(20px)}
+
+/* ── tiles ── */
+.tiles{display:grid;gap:1px;background:var(--rule2);border-bottom:1px solid var(--rule);
+  grid-template-columns:repeat(auto-fit,minmax(112px,1fr))}
+.tile{background:var(--panel);padding:9px 13px 10px;transition:background .3s}
+.tile b{display:block;font-size:21px;font-weight:500;line-height:1.15;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;color:var(--txt)}
+.tile b u{text-decoration:none;font-size:10px;color:var(--dim);margin-left:2px}
+.tile i{display:block;font-style:normal;font-size:8.5px;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--dim);margin-top:2px}
+.tile.hot b{color:var(--sec)}
+.tile.bad b{color:var(--alarm)}
+
+/* ── stage ── */
+.crumb{display:flex;align-items:center;gap:8px;padding:6px 16px;background:var(--panel);
+  border-bottom:1px solid var(--rule2);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase}
+.crumb button{appearance:none;border:0;background:none;cursor:pointer;color:var(--dim2);
+  font:inherit;padding:2px 0;border-bottom:1px solid transparent}
+.crumb button:hover{color:var(--txt);border-bottom-color:var(--rule)}
+.crumb button:focus-visible{outline:2px solid var(--sec);outline-offset:2px}
+.crumb .now{color:var(--sec)}
+.crumb .sep{color:var(--dim)}
+.crumb .esc{margin-left:auto;color:var(--dim);font-size:9px;letter-spacing:.1em}
+
+.stage{position:relative;background:var(--bg);transition:background .3s;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px),
+    repeating-linear-gradient(0deg,var(--scan) 0 1px,transparent 1px 3px);
+  background-size:26px 26px,26px 26px,auto}
+.stage svg{display:block;width:100%;height:auto;aspect-ratio:1000/440}
+.stage{cursor:grab;touch-action:none}
+.stage.grabbing{cursor:grabbing}
+
+/* The canvas controls sit over the stage, outside the pan/zoom transform, so they never
+   move with the graph. */
+.canvas{position:relative}
+.zoom{position:absolute;right:12px;bottom:12px;display:flex;flex-direction:column;gap:1px;
+  border:1px solid var(--rule);border-radius:6px;overflow:hidden;background:var(--rule2)}
+.zoom button{appearance:none;border:0;cursor:pointer;background:var(--panel);color:var(--dim2);
+  font:400 15px/1 inherit;width:28px;height:28px;display:grid;place-items:center;padding:0}
+.zoom button:hover{background:var(--raise);color:var(--txt)}
+.zoom button:focus-visible{outline:2px solid var(--sec);outline-offset:-2px}
+
+
+.legend{display:flex;align-items:center;gap:15px;flex-wrap:wrap;padding:8px 16px;
+  background:var(--panel);border-top:1px solid var(--rule);min-height:34px;
+  font-size:9px;letter-spacing:.11em;text-transform:uppercase;color:var(--dim);transition:background .3s}
+.legend b{color:var(--txt);font-weight:500}
+.legend .gl{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;
+  vertical-align:-1px}
+.legend .tri{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;
+  vertical-align:-2px;background:conic-gradient(var(--pri) 0 33.3%,var(--ter) 0 66.6%,var(--sec) 0)}
+.legend .tri.ring{box-shadow:0 0 0 1.5px var(--alarm);margin-right:8px}
+.legend .sp{margin-left:auto}
+.legend .on{color:var(--sec)}
+.legend .on b{color:var(--sec)}
+
+/* ── svg vocabulary ── */
+.nd{fill:var(--raise);stroke:var(--rule);stroke-width:1;transition:stroke .16s,fill .16s}
+.hit{cursor:pointer;pointer-events:all}
+.hit *{pointer-events:none}
+.hit rect{pointer-events:all}
+.hit:hover .nd{stroke:var(--sec);fill:var(--panel)}
+.hit:active .nd{fill:var(--sunk)}
+.hit:focus{outline:none}
+.hit:focus-visible .nd{stroke:var(--sec);stroke-width:2}
+.nd.sel{stroke:var(--sec)}
+/* An open container is a REGION, not a card: with an opaque fill it painted over the
+   last stretch of every lane arriving at `receive`, which made the data look as though it
+   entered the box anywhere. `.hit rect{pointer-events:all}` keeps it clickable. */
+.nd.open{fill:none}
+.sub-nd{fill:var(--panel)}
+.sheet{fill:var(--panel)}
+.node > rect{transition:stroke .16s,fill .16s}
+.lbl{fill:var(--dim);font-size:8px;letter-spacing:.13em}
+.txt{fill:var(--txt);font-size:10px}
+.val{fill:var(--pri);font-size:10px;text-anchor:end;font-variant-numeric:tabular-nums}
+.sub{fill:var(--dim);font-size:7.5px}
+.vtitle{fill:var(--txt);font-size:15px;letter-spacing:.16em}
+.big{fill:var(--txt);font-size:21px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.cue{fill:var(--sec);font-size:7.5px;letter-spacing:.1em}
+.cue.end{text-anchor:end}
+.ed{fill:none;stroke:var(--rule);stroke-width:1.6;stroke-linejoin:round}
+/* ── pipes ──
+   The main flow runs THROUGH a channel, not along a wire: a casing, and inside it a bore
+   painted darker than the stage so it reads as hollow — which also hides the grid, so the
+   channel looks enclosed rather than drawn on top of the board.
+
+   Only the flow gets a pipe. Every outcome tap stays a thin line on purpose: if the pipe
+   is the flow, then failing is FALLING OUT of it, and "inside the pipe" and "out of the
+   pipe" have to be different objects, not the same object at two weights. */
+/* The bore is sized from what travels it, not from taste. The floor is the dot's CORE,
+   6.4px: at a 9px bore it scraped the walls and read as bursting out. 10px leaves 1.8px a
+   side, which is enough — the bloom halo may spill, the core may not. Going wider than
+   that bought nothing and cost two things: ORIGIN's eight-edge topology read as tangled
+   plumbing, and the collector's 32px internal hops became plugs rather than runs. */
+/* Wall thickness is (casing - bore) / 2, so it is set by the pair, not by a third number.
+   1.5px: enough to read as a wall at every zoom the viewport reaches, thin enough that the
+   pipe stays a channel rather than a bar. */
+.pw{fill:none;stroke:var(--rule);stroke-width:13;stroke-linejoin:round;stroke-linecap:butt}
+.pb{fill:none;stroke:var(--sunk);stroke-width:10;stroke-linejoin:round;stroke-linecap:butt}
+/* The trunk carries whole batches rather than signals, so it is visibly the bigger pipe.
+   Not decoration: an 18px batch sphere cannot travel a 9px bore. */
+/* Same 1.5px wall. Only the bore grows, because only the payload did. */
+.pw.trunk{stroke-width:24}
+.pb.trunk{stroke-width:21}
+/* A mouth is a LIP, and a lip is pipe-shaped: a short section perpendicular to the run,
+   wider than the casing it caps. It was a circle, which read as a bead threaded onto the
+   line — the one shape that says "not a pipe". Sized to the casing at each site, so the
+   trunk's mouth is visibly the bigger one. */
+.rim{fill:var(--sunk);stroke:var(--rule);stroke-width:1.5}
+/* A dependency between stages is brighter than a pipe: at 32px in the dimmest colour on
+   the palette, the arrows between receive/validate/buffer were invisible, and the graph
+   read as three unconnected boxes. */
+.ed.step{stroke:var(--rule-arrow);stroke-width:1.8}
+/* A tap leaves the main chain: dimmer and dashed, so it never competes with the path a
+   signal normally takes. */
+.ed.tap{stroke:var(--rule-arrow);stroke-width:1;stroke-dasharray:3 4;opacity:.45;
+  transition:opacity .3s,stroke .3s}
+/* A tap that is actually carrying something stops whispering. It brightens to a NEUTRAL
+   tone, not to amber: the dot falling down it now carries the signal type's own colour,
+   and an amber line under a green dot said two different things about the same event. */
+.ed.tap.live{stroke:var(--dim2);opacity:1;stroke-dasharray:none;stroke-width:1.4}
+/* The exception, because it is not a type but a severity: nothing comes back from here. */
+.ed.tap.live.alarm{stroke:var(--alarm)}
+.tap-via{opacity:.55;transition:opacity .3s,fill .3s,stroke .3s}
+.tap-via.live{opacity:1;fill:var(--dim2);stroke:var(--dim2)}
+.tap-via.live.alarm{fill:var(--alarm);stroke:var(--alarm)}
+/* A RETURN: what an outcome sends back into the chain. Idle it whispers like a tap, so
+   three quiet outcomes stay three quiet lines. */
+.ed.ret{stroke:var(--rule-arrow);stroke-width:1;stroke-dasharray:3 4;opacity:.45;
+  transition:opacity .3s,stroke .3s,stroke-width .3s}
+.ed.ret.live{stroke:var(--dim2);opacity:1;stroke-dasharray:none;stroke-width:1.4}
+/* A control return carries a gRPC STATUS, not the batch — the producer still holds the
+   data. It stays dotted even when live, and never gets particles, so it cannot be read as
+   telemetry travelling backwards. */
+.ed.ret.ctl{stroke-dasharray:1 3}
+.ed.ret.ctl.live{stroke:var(--rule-arrow);stroke-dasharray:1 3;stroke-width:1.1;opacity:.9}
+/* The batch that did not make it. The sectors keep saying "mixed"; the ring says "lost". */
+.lost-ring{stroke:var(--alarm);stroke-width:1.6}
+.via{fill:var(--via);stroke:var(--viaS);stroke-width:1}
+/* Particles fade rather than pop: a lane that gains throughput reveals dots already in
+   flight, so the flow never appears to restart. */
+.dot,.p1,.p2,.p3,.pa,.blk{transition:opacity .45s ease}
+.p1{fill:var(--pri)}.p2{fill:var(--ter)}.p3{fill:var(--sec)}.pa{fill:var(--alarm)}
+/* A batch is drawn as its contents, not as a colour it does not have. */
+.batch path{stroke:none}
+.batch{transition:opacity .45s ease}
+.burst{transition:opacity .3s ease}
+.blk{fill:var(--sec)}
+
+.empty{padding:44px 16px;text-align:center;color:var(--dim);font-size:12px}
+.empty code{color:var(--sec)}
+@media(prefers-reduced-motion:reduce){animateMotion,animate{display:none}}
+@media(max-width:620px){.tile b{font-size:17px}.meta .hide{display:none}}
