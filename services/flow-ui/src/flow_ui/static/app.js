@@ -120,7 +120,10 @@
     // presentation attribute loses to it, so the widths were computed correctly and every
     // pipe still rendered at its CSS gauge.
     const pw = w ? { style: `stroke-width:${w.toFixed(1)}` + (tone ? `;stroke:${tone}` : "") } : {};
-    const pb = w ? { style: `stroke-width:${Math.max(4, w - 3).toFixed(1)}` } : {};
+    // The floor is on the WALL, never on the bore: `max(4, w - 3)` let the bore reach the
+    // casing at w = 4, so the wall went to zero and the pipe rendered as a plain dark line.
+    // Every gauge keeps the same 1.5px wall a pipe needs to read as one.
+    const pb = w ? { style: `stroke-width:${Math.max(2, w - 3).toFixed(1)}` } : {};
     parent.append(el("path", { class: "pw " + gauge, d, ...pw }),
                   el("path", { class: "pb " + gauge, id, d, ...attrs, ...pb }));
   };
@@ -450,7 +453,10 @@
       // so the board read as though a service call outweighed the pipeline it feeds. Only
       // the trunk is allowed to be the widest thing on the canvas, because only it carries
       // whole batches.
-      const w = m ? 6 + Math.sqrt(m.spans / peak) * 7 : 4;
+      // Bottom of the range is 8, not 6: at 6 the wall is all there is left and the thinnest
+      // measured edge stopped looking like a pipe. Declared-but-never-traced sits below it at
+      // 7 — still a pipe, visibly the slightest one, and dashed.
+      const w = m ? 8 + Math.sqrt(m.spans / peak) * 5 : 7;
       const err = m && m.spans ? m.errors / m.spans : 0;
       const tone = !m ? "var(--dim)"
         : err >= 0.05 ? "var(--alarm)" : err >= 0.01 ? "var(--sec)" : null;
