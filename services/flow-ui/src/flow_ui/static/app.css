@@ -201,6 +201,10 @@ body{margin:0;background:var(--sunk);color:var(--txt);
 .pb{fill:none;stroke:var(--sunk);stroke-width:10;stroke-linejoin:round;stroke-linecap:butt}
 /* The trunk carries whole batches rather than signals, so it is visibly the bigger pipe.
    Not decoration: an 18px batch sphere cannot travel a 9px bore. */
+/* A declared edge nothing was ever traced on. Dashed and dim: the dependency is claimed,
+   the traffic is not observed — and grey means not observed, never fine. */
+.pw.declared{stroke:var(--dim);stroke-dasharray:4 5;opacity:.55}
+.pb.declared{opacity:.55}
 /* Same 1.5px wall. Only the bore grows, because only the payload did. */
 .pw.trunk{stroke-width:24}
 .pb.trunk{stroke-width:21}

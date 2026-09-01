@@ -14,14 +14,81 @@ generator ──OTLP :4317──▶ collector-rust ──HTTP──▶ ClickHous
 
 ## Run it
 
+Everything runs in Docker. No host toolchain is needed to bring the stack up.
+
 ```bash
-make up               # ClickHouse + collector
-make ui               # this service        → http://localhost:8080
-make generate-stream  # real-time telemetry, paced by the wall clock
-make generate         # a backfilled window, delivered as fast as it can
+make up                            # ClickHouse + the Rust collector
+make ui                            # this service → http://localhost:8080
+make generate-stream DURATION=10m  # real-time telemetry, paced by the wall clock
 ```
 
-Watch the page while running each of the last two. It looks different, on purpose.
+`make ui` builds and starts the container, so re-run it after changing anything under
+`src/`. Assets are cache-busted by mtime, so a plain reload is enough in the browser.
+
+`make generate` instead of `generate-stream` delivers a backfilled window as fast as it can.
+Watch the page while running each: it looks different, and working out which one is running
+is something the page does on its own — nothing tells it.
+
+**A first pass, in the order that makes the pipeline legible:**
+
+| | |
+|---|---|
+| **Flow**, closed | three lanes in, one trunk out. One dot is 100 signals of that type |
+| **Flow** → open `ORIGIN` | the declared service graph, each producer carrying its fused state; pipe width is what was actually traced on that edge |
+| **Flow** → open `COLLECTOR-RUST` | `receive → validate → buffer`, and the three ways a signal does not simply arrive |
+| **Flow** → open `BRONZE` | the four tables, each strand carrying the type that lands in it |
+| **Health** | the verdict and the sentence behind it, over a 120s window |
+| **Contract** | the receive boundary: what would be dropped under `strict`, and who is violating |
+| **Watchers** | rows per minute per producer against a band — and the band drawn *is* the alerting rule |
+
+The palette switch (top right) is not decoration: it re-tests every colour decision against a
+second ground. Nothing in the CSS names a colour.
+
+## See it fail
+
+A healthy pipeline shows every failure path at rest, which is correct and tells you nothing.
+Three ways to make them move, in increasing order of violence.
+
+**Contract violations — safe, loses nothing.** Sends foreign OTLP missing a required
+`sentinel.*` key. Under the default `warn` policy the collector counts it and exports it
+anyway, so it lands in bronze and the Contract board can name the producer.
+
+```bash
+docker compose run --rm --entrypoint python \
+  -v "$PWD/services/flow-ui/scripts/inject_contract_violations.py:/tmp/inject.py:ro" \
+  generator /tmp/inject.py 120 40 300
+```
+
+Watch the CONTRACT outcome row in the open collector: the falling dots are coloured by the
+type that failed, and the traces lane stays still because this sends none.
+
+**Backpressure — nothing is lost, the producer is told to retry.** Freeze ClickHouse so the
+buffer fills:
+
+```bash
+docker pause sentinel-clickhouse-1     # ~40s is enough
+docker unpause sentinel-clickhouse-1
+```
+
+**Dropped batches — this destroys data.** A *paused* container holds the connection open and
+the flush hangs, so retries never exhaust; a *stopped* one refuses immediately, the three
+attempts run out, and the batch is gone — there is no dead-letter queue.
+
+```bash
+docker stop sentinel-clickhouse-1      # ~30s
+docker start sentinel-clickhouse-1
+```
+
+## Test it
+
+```bash
+cd services/flow-ui
+uv venv && uv pip install -e . && uv pip install pytest pytest-asyncio
+.venv/bin/python -m pytest tests -q
+```
+
+The suite covers the parsing, the poller's inferences and the pure verdict logic. It does
+**not** cover SVG geometry — where things land on the canvas is checked by looking.
 
 ## What it does
 
@@ -98,7 +165,8 @@ mixed sphere, ringed to say it was lost. Neither is ever per *trace*: the counts
 | `GET /` | the page, with the current snapshot rendered in |
 | `GET /stream` | SSE, one snapshot per tick |
 | `GET /api/graph` | the static half: declared topology + table datasheets. Fetched once |
-| `GET /api/snapshot` | the latest tick as JSON |
+| `GET /api/snapshot` | the latest tick as JSON, including the per-producer verdicts |
+| `GET /api/history` | the server-side rolling window, so a page opened now is not empty |
 | `GET /healthz` | liveness + whether each source is reachable |
 
 ## Develop
@@ -122,7 +190,7 @@ uv venv && uv pip install -e . && uv pip install pytest pytest-asyncio
 
 ## Status
 
-**V1.** Pod 2 self-observability plus the bronze read side, two boards, four zoom levels, two
+**V2.3.** Pod 2 self-observability plus the bronze read side, four boards, four zoom levels, two
 palettes. 37 tests. Verified end to end against a live pipeline on 2026-09-01: mode detection
 correct across stream, batch and idle; 1,015,100 signals stored, 0 rejected, 0 export errors.
 

@@ -206,6 +206,12 @@ class Snapshot:
     metrics_by_service: dict = field(default_factory=dict)
     scenario: str = "—"
 
+    #: The call graph as traced: `{src, dst, spans, errors}`. The only per-edge measurement
+    #: in the pipeline — it exists because a child span carries its parent, so the two rows
+    #: join and the two `ServiceName`s are the edge. Compared against the *declared* topology
+    #: in the UI, because the two disagreeing is itself the finding.
+    call_edges: list[dict] = field(default_factory=list)
+
     #: Volume watcher, per producer: the band and the verdict it was judged against.
     volume: list[dict] = field(default_factory=list)
 
@@ -415,6 +421,7 @@ class Poller:
         snap.scenario = self.latest.scenario
         snap.contract_violations = self.latest.contract_violations
         snap.volume = self.latest.volume
+        snap.call_edges = self.latest.call_edges
         self.latest = snap
         self.broadcaster.publish(snap)
 
@@ -455,10 +462,12 @@ class Poller:
                 scenario = await self._ch.scenario()
                 inventory = await self._ch.metric_inventory()
                 band = await self._ch.volume_band(self._s.volume_window_min)
+                edges = await self._ch.call_edges()
                 self.latest.lineage = lineage
                 self.latest.scenario = scenario
                 self.latest.metrics_by_service = inventory
                 self.latest.volume = [volume_state(r) for r in band]
+                self.latest.call_edges = edges
             except Exception as exc:                      # noqa: BLE001 — never kill the loop
                 log.debug("lineage refresh failed: %s", exc)
             await asyncio.sleep(self._s.lineage_interval_s)

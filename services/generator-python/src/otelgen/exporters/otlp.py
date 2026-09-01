@@ -114,6 +114,26 @@ class OTLPExporter(Exporter):
             trace_flags=TraceFlags(TraceFlags.SAMPLED),
         )
 
+        # The parent link. `ScenarioEngine` already assembles correlated traces by walking
+        # `depends_on`, and every other path carries the result: the model has the field, the
+        # ClickHouse exporter writes it, `otlp_output.schema.json` declares it as 16 hex
+        # characters, and the Pod 2 -> Pod 3 read contract documents `ParentSpanId` as `''`
+        # *for root spans* — which only means anything if non-root spans have one.
+        #
+        # This path dropped it. `ReadableSpan` was built with a context and no `parent`, so
+        # `trace_id` survived onto the wire and the parent did not: measured over a live run,
+        # traces were correlated (8.5 spans each, 30k of them spanning more than one service)
+        # while 1,491,881 of 1,491,881 spans arrived in bronze as roots. A call graph that
+        # exists in the generator and nowhere downstream.
+        parent_ctx = None
+        if signal.parent_span_id:
+            parent_ctx = SpanContext(
+                trace_id=trace_id_int,
+                span_id=int(signal.parent_span_id, 16),
+                is_remote=False,
+                trace_flags=TraceFlags(TraceFlags.SAMPLED),
+            )
+
         status = Status(
             StatusCode.ERROR if signal.status_code == "ERROR" else StatusCode.OK
         )
@@ -124,6 +144,7 @@ class OTLPExporter(Exporter):
         return ReadableSpan(
             name=signal.name,
             context=ctx,
+            parent=parent_ctx,
             resource=resource,
             instrumentation_scope=scope,
             attributes=signal.attributes,

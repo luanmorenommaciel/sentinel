@@ -303,6 +303,44 @@ class ClickHouse:
             log.warning("volume band unavailable: %s", exc)
         return out
 
+    async def call_edges(self, minutes: int = 15, limit: int = 24) -> list[dict]:
+        """The call graph as it was actually traced: `A -> B` with span counts and errors.
+
+        This is the only per-edge measurement that exists anywhere in the pipeline. Neither
+        the collector nor bronze counts anything per edge; what makes it possible is that a
+        child span carries its parent, so parent and child rows join and the two
+        `ServiceName`s are the edge.
+
+        **The join needs `TraceId` as well as `ParentSpanId = SpanId`.** The generator seeds
+        a deterministic RNG, so a fixed `--seed` repeats span ids across runs and the id
+        alone joined a child from one run onto a parent from another — which invented eight
+        edges the declared topology does not contain. `TraceId` removes all but a residue.
+
+        Cheap because both sides are narrowed by the same time window first (measured 0.53s
+        over a 15-minute window), but it is a self-join and belongs on the slow lane.
+        """
+        sql = f"""
+        SELECT p.ServiceName AS src, c.ServiceName AS dst,
+               count() AS spans, countIf(c.StatusCode = 'Error') AS errors
+        FROM {self._db}.otel_traces AS c
+        INNER JOIN {self._db}.otel_traces AS p
+          ON c.ParentSpanId = p.SpanId AND c.TraceId = p.TraceId
+        WHERE c.Timestamp > now() - INTERVAL {int(minutes)} MINUTE AND c.ParentSpanId != ''
+        GROUP BY src, dst HAVING src != dst
+        ORDER BY spans DESC LIMIT {int(limit)} FORMAT TSV
+        """
+        out: list[dict] = []
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                src, dst, spans, errors = line.split("\t")
+                out.append({"src": src, "dst": dst,
+                            "spans": int(spans), "errors": int(errors)})
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("call edges unavailable: %s", exc)
+        return out
+
     async def scenario(self) -> str:
         """The most recent run's scenario, for the header.
 

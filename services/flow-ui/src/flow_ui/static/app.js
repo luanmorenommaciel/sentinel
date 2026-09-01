@@ -111,9 +111,18 @@
    *  BORE carries the id, so `animateMotion` puts the dots on its centreline and they read
    *  as travelling through the channel rather than along a wire. `extra` selects the gauge
    *  ("trunk") and any marker the run needs. */
-  const pipe = (parent, id, d, gauge = "", attrs = {}) => {
-    parent.append(el("path", { class: "pw " + gauge, d }),
-                  el("path", { class: "pb " + gauge, id, d, ...attrs }));
+  const pipe = (parent, id, d, gauge = "", attrs = {}, w = null, tone = null) => {
+    // `w` overrides the CSS gauge in user units, so an edge can be as thick as it carries.
+    // The bore keeps a 1.5px wall on each side at every width, which is what makes a thin
+    // pipe read as a thin pipe rather than as a line.
+    //
+    // As `style`, not as an attribute: `.pw{stroke-width:13}` is a stylesheet rule and a
+    // presentation attribute loses to it, so the widths were computed correctly and every
+    // pipe still rendered at its CSS gauge.
+    const pw = w ? { style: `stroke-width:${w.toFixed(1)}` + (tone ? `;stroke:${tone}` : "") } : {};
+    const pb = w ? { style: `stroke-width:${Math.max(4, w - 3).toFixed(1)}` } : {};
+    parent.append(el("path", { class: "pw " + gauge, d, ...pw }),
+                  el("path", { class: "pb " + gauge, id, d, ...attrs, ...pb }));
   };
   /** A pipe mouth: a short lip ACROSS the run, wider than the casing it caps. Every mouth
    *  on this board sits where a horizontal run meets a box, so the lip is a tall, narrow
@@ -400,16 +409,35 @@
     // a 45° elbow, and every edge that changes row would overshoot. The stub is staggered
     // per source, because edges leaving one node share a PORT and would otherwise share a
     // vertical column too — three 13px casings on one x is a blob, not a fan.
+    // Declared edges, drawn at what they were actually measured carrying.
+    //
+    // `topology.yaml` says which component depends on which; the traced call graph says
+    // how much went and how much failed. They are different claims and the picture shows
+    // both: a declared edge nothing was ever traced on is drawn as declared-only, which is
+    // the finding — here `spark_streaming -> processed_bucket` and
+    // `spark_streaming -> k8s-api-gateway` never carry a span, because the generator's
+    // engine parents every child to `depends_on[0]` and never to the second dependency.
+    const svc = Object.fromEntries((t.nodes || []).map((n) => [n.id, n.service]));
+    const measured = {};
+    (snap?.call_edges || []).forEach((e) => (measured[`${e.src}\u0000${e.dst}`] = e));
+    const peak = Math.max(1, ...(snap?.call_edges || []).map((e) => e.spans));
     const legs = {};
     t.edges.forEach((e, i) => {
       const a = pos[e.from], z = pos[e.to];
       if (!a || !z) return;
+      const m = measured[`${svc[e.from]}\u0000${svc[e.to]}`];
+      // Width from the share of the busiest edge, on a root so a 100x range stays legible;
+      // colour from the error rate on that edge, at the thresholds printed in the legend.
+      const w = m ? 8 + Math.sqrt(m.spans / peak) * 12 : 5;
+      const err = m && m.spans ? m.errors / m.spans : 0;
+      const tone = !m ? "var(--dim)"
+        : err >= 0.05 ? "var(--alarm)" : err >= 0.01 ? "var(--sec)" : null;
       // One casing apart, so three legs from one node stay three legs. Clamped to leave
       // the last chamfer room to land, which is what caps the fan at ~3 legs per node.
       const k = (legs[e.from] = (legs[e.from] ?? -1) + 1);
       const gap = z.x - (a.x + NW);
       pipe(edges, `oe${i}`, fan(a.x + NW, a.y + NH / 2, z.x, z.y + NH / 2,
-        Math.min(gap - 12, 14 + k * 14)));
+        Math.min(gap - 12, 14 + k * 14)), m ? "" : "declared", {}, w, tone);
       mouth(a.x + NW, a.y + NH / 2);
       mouth(z.x, z.y + NH / 2);
       flow3(fx, `oe${i}`, `oe${i}`, 2.6 + (i % 3) * .4, 3.2, 2);
@@ -841,7 +869,10 @@
     // With the collector open the same three colours take on a second job — they name
     // which type FAILED — so that rule is spelled out only where falling dots exist.
     if (open.origin) return base
-      + `<span>every producer carries its <b>fused state</b> — volume band, silence, contract keys</span>`;
+      + `<span>producers carry their <b>fused state</b> — volume band, silence, contract keys</span>`
+      + `<span>pipe width = <b>traced spans</b> · <span style="color:var(--sec)">≥1%</span>`
+      + ` / <span style="color:var(--alarm)">≥5%</span> of them failed</span>`
+      + `<span>dashed = <b>declared, never traced</b></span>`;
     return open.collector ? base
       + `<span>leaving the chain = <b>what failed</b></span>
          <span><span class="tri ring"></span>= a <b>lost batch</b>, type unknowable</span>`

@@ -175,7 +175,7 @@ read contract that is Authoritative at `1.0.0.1` — an ADR, not a UI session.
 What landed instead is the half of Arrival that *is* answerable from this data: the absence
 signal above.
 
-## Shipped: V2.3 (partial) · the flow DAG carries health
+## Shipped: V2.3 · the flow DAG carries health, on measured edges
 
 Contract and Watchers were separate boards, so the view people actually look at knew nothing
 about either. Every producer node in ORIGIN now carries a **fused state** — the worst of its
@@ -192,12 +192,31 @@ producers that need it. Undeclared is now its own finding, reported apart from t
 because it has no position in the graph: nothing declared them, so nothing told them the
 contract, so they are missing required keys. The correlation is not a coincidence.
 
-**Two thirds of V2.3 are not buildable and were not faked.** It also asks for edge thickness
-by throughput and edge colour by violation rate. There is no per-edge measurement anywhere:
-ORIGIN's edges come from Pod 1's `topology.yaml` and are *declared dependencies, not measured
-flows*, and neither the collector nor bronze counts anything per edge. The per-node state
-timeline needs per-service history, which is not retained — the volume lane refreshes and
-keeps nothing.
+**Edge thickness and colour are now measured, and getting there was a one-field fix in Pod 1.**
+The first pass reported them as unbuildable — "no per-edge measurement anywhere" — which was
+true of the data and wrong about why. The chain was intact end to end: `ScenarioEngine`
+assembles correlated traces by walking `depends_on`, the model carries `parent_span_id`,
+`otlp_output.schema.json` declares it, the read contract documents `ParentSpanId` as `''`
+*for root spans*, the collector parses it and its exporter writes it, both with tests. Only
+`generator-python/src/otelgen/exporters/otlp.py` built `ReadableSpan` with a context and no
+`parent`, so `trace_id` reached the wire and the parent did not — measured live, traces
+arrived correlated (8.5 spans each, 30k spanning more than one service) while 1,491,881 of
+1,491,881 landed as roots. A call graph that existed in the generator and nowhere downstream.
+Two regression tests in Pod 1 pin it; **that file wants Pod 1's review on the PR.**
+
+With the parent on the wire, `ClickHouse.call_edges()` joins child to parent and the two
+`ServiceName`s are the edge: pipe width from spans traced, casing colour from the error rate
+on that edge (≥1% / ≥5%, printed in the legend). The join needs `TraceId` as well as
+`ParentSpanId = SpanId` — a fixed `--seed` repeats span ids between runs, and the id alone
+invented eight edges the topology does not contain.
+
+**Declared and measured are drawn as different claims.** `spark_streaming → processed_bucket`
+and `spark_streaming → k8s-api-gateway` are declared and carry no span, because the engine
+parents every child to `depends_on[0]` and never to the second dependency. They are drawn
+dashed and dim — declared, never traced — rather than at a width that would imply traffic.
+
+**Still not built:** the per-node state timeline needs per-service history, which nothing
+retains, and Grafana node-graph frames.
 
 ## Next planned step
 

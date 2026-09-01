@@ -7,8 +7,9 @@ integrated monorepo baseline (`v0.0.1`) gluing the POD branches together.
 ## Pipeline
 
 ```
-generator (otelgen) ──OTLP gRPC :4317──▶ collector (rust | go) ──▶ ClickHouse :8123/:9000 ──▶ Play UI :8123/play
-                       │                  (selected via COLLECTOR)
+generator (otelgen) ──OTLP gRPC :4317──▶ collector-rust ──▶ ClickHouse :8123/:9000 ──▶ Play UI :8123/play
+                       │                        │                    │
+                       │                        └── /metrics :9090 ──┴──▶ flow-ui :8080
                        └── validates against contracts/generator/v1 (single source of truth)
 ```
 
@@ -21,7 +22,7 @@ contracts/                 # SSOT contract registry, namespaced by producing Pod
 services/
   generator-python/        # POD 1 — synthetic OTLP generator (otelgen CLI); config/ holds scenarios/topology/provider_profiles
   collector-rust/          # POD 2 — OTLP→ClickHouse collector (Rust); own DDL in infra/clickhouse/ddl/
-  collector-go/            # POD 2 — OTLP→ClickHouse collector (Go);   own DDL in migrations/
+  flow-ui/                 # the pipeline watching itself — four boards over /metrics + bronze
 infra/                     # ClickHouse bootstrap (init user/db + users.d network override)
 docs/                      # shared docs (clickhouse-schema-divergence.md)
 docker-compose.yml         # root orchestrator (rust|go profiles)
@@ -33,6 +34,8 @@ Makefile                   # one-command UX
 | Command | What it does |
 |---------|--------------|
 | `make e2e COLLECTOR=rust\|go` | Full pipeline: build+up clickhouse+collector → apply its DDL → generate → land rows |
+| `make ui` | Start flow-ui on http://localhost:8080 (see `services/flow-ui/README.md`) |
+| `make generate-stream DURATION=10m` | Real-time telemetry paced by the wall clock, rather than a backfilled window |
 | `make up / init / generate / logs / down / reset` | Individual pipeline steps |
 | `make build` | Build all service images |
 | `make test` | All unit suites (generator pytest, `cargo test`, `go test`) |
@@ -48,6 +51,10 @@ Variables: `COLLECTOR` (rust\|go, default rust), `SCENARIO`, `SEED`, `WINDOW`.
 - **Only one collector runs at a time** — both bind OTLP `:4317`. The generator targets the `collector` network alias, so it works regardless of which is active.
 - **Both collectors now write the identical bronze split schema directly into database `bronze`** (POD 2 → POD 3 landing — `otel_logs / otel_traces / otel_metrics_gauge / otel_metrics_sum`, OTel-contrib style with metrics split by data-point type, Sentinel-enriched via `ResourceAttributes`). Cross-collector equivalence is verified (identical row counts). The old normalized `default.*` write path (and the `otel_metrics_1m` rollup MV) is retired.
 - **POD 3's canonical bronze** (database `bronze`, `bronze.*`, OTel-contrib style, metrics split by type) is auto-applied on ClickHouse boot from `infra/clickhouse/init.d/01-bronze-otel.sql`. **Both collectors write directly into it** — the former collector→bronze gap is now closed (historical rationale: [docs/research/pod3-bronze-gap.md](docs/research/pod3-bronze-gap.md)).
+- **flow-ui reads, never writes.** It polls the collector's `/metrics` and queries `bronze.*`
+  read-only, plus Pod 1's `topology/default.yaml` and the collector's `config.docker.yaml`,
+  both mounted read-only — the picture is drawn from the files that define the thing, so it
+  cannot drift from them. Nothing in the pipeline depends on it being up.
 - **No comments-as-noise**; match each service's existing style. Keep the repo clean for the agentic phase that follows this baseline.
 
 ## Gotchas
