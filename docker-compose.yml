@@ -47,6 +47,33 @@ services:
       clickhouse:
         condition: service_healthy
 
+  flow-ui:
+    build:
+      context: ./services/flow-ui
+    image: sentinel-flow-ui:dev
+    environment:
+      # The browser never reaches these two directly: the collector's /metrics server sets
+      # no CORS header and neither does ClickHouse, so a cross-origin fetch from the page
+      # would be blocked. flow-ui is the only reader of both.
+      COLLECTOR_METRICS_URL: "http://collector:9090/metrics"
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_DATABASE: bronze
+    volumes:
+      # Pod 1's declared topology, read-only. The graph is drawn from the producer's
+      # own config rather than redrawn here, so the picture cannot drift from it.
+      - ./services/generator-python/config:/app/generator-config:ro
+      # The collector's own config, read-only. `contract.grpc_validation` is not exposed as
+      # a metric, so the receive-boundary policy can only be read from the file that sets
+      # it — and the contract board's headline is that policy.
+      - ./services/collector-rust/config.docker.yaml:/app/collector-config.yaml:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      collector-rust:
+        condition: service_started
+
   generator:
     build:
       context: ./services/generator-python

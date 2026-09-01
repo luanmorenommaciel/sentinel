@@ -268,3 +268,38 @@ class TestOTLPExporterExport:
         )
         exporter.export([error_span])
         mock_span_exp.export.assert_called_once()
+
+
+def test_a_child_span_carries_its_parent_onto_the_wire():
+    """The regression this exists for.
+
+    `ScenarioEngine` assembles correlated traces by walking `depends_on`, the model carries
+    the result, the ClickHouse exporter writes it, `otlp_output.schema.json` declares
+    `parent_span_id` as 16 hex characters, and the Pod 2 -> Pod 3 read contract documents
+    `ParentSpanId` as `''` *for root spans* — which only means something if non-root spans
+    have one. This path built `ReadableSpan` with a context and no `parent`, so `trace_id`
+    reached the wire and the parent did not: measured on a live run, traces arrived
+    correlated (8.5 spans each, 30k spanning more than one service) and 1,491,881 of
+    1,491,881 spans landed in bronze as roots. The call graph existed in the generator and
+    nowhere downstream.
+    """
+    from otelgen.exporters.otlp import OTLPExporter
+
+    from dataclasses import replace
+
+    child = replace(_make_span(), parent_span_id="c" * 16)
+
+    span = OTLPExporter._build_readable_span(OTLPExporter.__new__(OTLPExporter), child)
+
+    assert span.parent is not None, "a child span must reach the wire with its parent"
+    assert span.parent.span_id == int("c" * 16, 16)
+    # Same trace on both ends, or the two spans are not in one trace at all.
+    assert span.parent.trace_id == span.context.trace_id
+
+
+def test_a_root_span_has_no_parent_and_is_not_given_a_fake_one():
+    from otelgen.exporters.otlp import OTLPExporter
+
+    root = _make_span()          # parent_span_id is None
+    span = OTLPExporter._build_readable_span(OTLPExporter.__new__(OTLPExporter), root)
+    assert span.parent is None
