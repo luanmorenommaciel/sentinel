@@ -199,7 +199,16 @@
       c.out = [c.x + c.w, c.y + c.h * 0.5];
     }
     b.in = [b.x, b.y + b.h * 0.5];
-    return { boxes, width: x - GAP + 40, height: 440 };
+    // The real extent of what gets drawn, not the viewBox. `height: 440` was reported flat,
+    // so `fit()` scaled the graph against the whole canvas while the closed boxes occupy
+    // about 200 of it — on a tall window the graph sat small in the middle of empty space.
+    const bs = Object.values(boxes);
+    const y0 = Math.min(...bs.map((b) => b.y)), y1 = Math.max(...bs.map((b) => b.y + b.h));
+    // The datasheet is drawn 40px past BRONZE and is 320 wide. It is not a box, so it was
+    // absent from these bounds and `fit()` scaled to a width that did not include it — the
+    // sheet ran off the right edge of the canvas whenever bronze was open.
+    const x1 = (x - GAP) + (open.bronze ? 40 + 320 : 0);
+    return { boxes, x0: 40, y0, width: x1 - 40, height: y1 - y0 };
   }
 
   /* ── particle pools ────────────────────────────────────────── */
@@ -853,8 +862,15 @@
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(e); }
       });
     });
-    L.content = { w: L.width, h: L.height };
+    L.content = { w: L.width, h: L.height, x0: L.x0, y0: L.y0 };
+    // Refit when the drawing actually changed SIZE — opening a box, or selecting a service
+    // and growing ORIGIN for its panel. Not on every repaint: a mode change repaints too and
+    // would throw away a pan the reader had just made. Opening a box is a deliberate act
+    // with an expectation of seeing what is inside; a data tick is not.
+    const prev = lastLayout?.content;
+    const resized = !prev || prev.w !== L.content.w || prev.h !== L.content.h;
     lastLayout = L;
+    if (resized) fit();
     applyView();
     $("legend").innerHTML = legend();
     if (snap) density(snap);
@@ -897,12 +913,20 @@
     if (root) root.setAttribute("transform",
       `translate(${view.x.toFixed(2)} ${view.y.toFixed(2)}) scale(${view.k.toFixed(3)})`);
   }
+  //: How far `fit` may scale UP. A graph that never exceeds 1 leaves a 32" screen mostly
+  //: empty; one with no ceiling turns three boxes into wall art. 1.8 fills a tall window and
+  //: still looks like a diagram.
+  const FIT_MAX = 1.8;
+
   function fit() {
     if (!lastLayout) return;
-    const { w, h } = lastLayout.content;
-    view.k = Math.min(1, Math.min((VW - 20) / w, (VH - 20) / h));
-    view.x = (VW - w * view.k) / 2;
-    view.y = (VH - h * view.k) / 2;
+    const { w, h, x0, y0 } = lastLayout.content;
+    if (!(w > 0 && h > 0)) return;
+    view.k = clampK(Math.min(FIT_MAX, (VW - 24) / w, (VH - 24) / h));
+    // Centre the CONTENT, not the origin: the boxes start at x0/y0, and centring `w × h` as
+    // though it began at 0,0 offset the graph by exactly that margin.
+    view.x = (VW - w * view.k) / 2 - x0 * view.k;
+    view.y = (VH - h * view.k) / 2 - y0 * view.k;
     applyView();
   }
   const clampK = (k) => Math.max(0.3, Math.min(3, k));
@@ -1463,9 +1487,8 @@
     if (key === painted) return false;
     const first = painted === "";
     painted = key;
-    render();
+    render();          // refits itself when the drawing changed size
     renderHealth();
-    if (first) fit();
     return true;
   }
 
@@ -1524,6 +1547,13 @@
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") $("z-home").click();
   });
+
+  // Re-fit when the box changes size — maximising, splitting the screen, switching tabs.
+  // `fit()` scales the graph into the viewBox it is given, and the viewBox now tracks the
+  // window, so without this the graph kept the scale it was given at load.
+  const refit = () => requestAnimationFrame(() => { if (lastLayout) fit(); });
+  addEventListener("resize", refit);
+  if (window.ResizeObserver) new ResizeObserver(refit).observe($("stage"));
 
   wireViewport();
   render(); fit();

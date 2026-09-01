@@ -42,7 +42,14 @@
 :root{ --up:#3ECF6E; --down:#FF4A3D; }
 *{box-sizing:border-box}
 html{color-scheme:dark}
-body{margin:0;background:var(--sunk);color:var(--txt);
+/* The page owns the viewport and the canvas fills what is left of it. The stage used to
+   carry `aspect-ratio:1000/440` with `height:auto`, so its height was derived from its WIDTH
+   and the screen was never consulted: on a wide monitor it asked for more height than the
+   window had and the whole page scrolled, while half-width left the bottom half empty. A
+   column that fills `100dvh` and a canvas that takes the remainder inverts that — the
+   drawing fits the window instead of the window fitting the drawing. */
+body{margin:0;height:100dvh;display:flex;flex-direction:column;overflow:hidden;
+  background:var(--sunk);color:var(--txt);
   font:14px/1.55 "IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   -webkit-font-smoothing:antialiased;transition:background .3s}
 .sans{font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif}
@@ -111,13 +118,23 @@ body{margin:0;background:var(--sunk);color:var(--txt);
     linear-gradient(90deg,var(--grid) 1px,transparent 1px),
     repeating-linear-gradient(0deg,var(--scan) 0 1px,transparent 1px 3px);
   background-size:26px 26px,26px 26px,auto}
-.stage svg{display:block;width:100%;height:auto;aspect-ratio:1000/440}
-.stage{cursor:grab;touch-action:none}
+/* `meet` keeps the whole viewBox visible at whatever aspect the box happens to have, so
+   nothing is ever cropped — the cost is margin on the short axis, which `fit()` minimises by
+   scaling the graph into the space it actually gets. */
+.stage svg{display:block;width:100%;height:100%}
+.stage{cursor:grab;touch-action:none;height:100%}
+/* `min-height:0` on both, or a flex child refuses to shrink below its content and the
+   overflow reappears one level up. */
+/* `:not([hidden])`, or `display:flex` overrides the `hidden` attribute's own `display:none`
+   and all four boards stay in the flex flow — each taking a quarter of the height while only
+   one is on screen. Measured: a 1440px viewport gave the stage 266px. */
+main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;min-height:0}
+.top,.tiles,.crumb,.legend{flex:none}
 .stage.grabbing{cursor:grabbing}
 
 /* The canvas controls sit over the stage, outside the pan/zoom transform, so they never
    move with the graph. */
-.canvas{position:relative}
+.canvas{position:relative;flex:1;min-height:0}
 .zoom{position:absolute;right:12px;bottom:12px;display:flex;flex-direction:column;gap:1px;
   border:1px solid var(--rule);border-radius:6px;overflow:hidden;background:var(--rule2)}
 .zoom button{appearance:none;border:0;cursor:pointer;background:var(--panel);color:var(--dim2);

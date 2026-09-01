@@ -176,10 +176,24 @@ disturbing the ones already in flight.
 
 ## Layout
 
-`aspect-ratio: 1000/440` on the stage, laid out with grid and `gap`. Container queries, not
-viewport queries — the stage is a component and should reflow by its own width. Tiles fall to
-`minmax(112px, 1fr)`. `prefers-reduced-motion` removes `animateMotion` entirely; the graph and
-every figure survive.
+**The drawing fits the window; the window does not fit the drawing.** The stage carried
+`aspect-ratio: 1000/440` with `height: auto`, so its height came from its WIDTH and the screen
+was never consulted: on a 32" monitor it asked for more height than the window had and the
+whole page scrolled, while half-width left the bottom half empty. The page is now a column
+filling `100dvh` and the canvas takes the remainder. Tiles fall to `minmax(112px, 1fr)`.
+`prefers-reduced-motion` removes `animateMotion` entirely; the graph and every figure survive.
+
+**`fit()` measures what is drawn, not the viewBox.** `layout()` reported a flat `height: 440`
+while the closed boxes occupy about 200 of it, so the graph sat small in the middle of empty
+space; and the datasheet, which is not a box, was missing from the bounds entirely and ran off
+the right edge whenever bronze was open. Bounds now come from the real extent, `fit()` centres
+on it, and it may scale UP to `FIT_MAX` — a graph capped at 1× leaves a large screen mostly
+empty.
+
+**It refits when the drawing changes SIZE, and only then.** On window resize, and on opening a
+box or selecting a service — deliberate acts, with an expectation of seeing the result. Not on
+every repaint: a mode change repaints too, and refitting there would throw away a pan the
+reader had just made.
 
 **Height a box grows into is not height its contents may use.** Selecting a service grows
 ORIGIN by 138px to make room for the signal panel, and the node grid — sized as
