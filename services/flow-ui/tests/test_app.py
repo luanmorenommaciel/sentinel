@@ -21,6 +21,10 @@ def _snapshot() -> Snapshot:
         reject_rate={"logs": 0.4},
         reject_by_reason={"contract": 0.4},
         reject_matrix={"contract": {"logs": 0.4}},
+        contract_violations=[{"service": "third-party-agent", "rows": 2760,
+                              "violating": 2760,
+                              "missing": {"sentinel.run_id": 2760},
+                              "total_missing": 2760}],
         flush_rate=5.9, records_per_flush=2500.0, export_latency_ms=45.3,
         persist_rate=14750.0, drop_rate=0.0,
         totals={"ingested": 233100.0, "persisted": 233100.0},
@@ -145,6 +149,11 @@ def test_the_snapshot_carries_what_each_zoom_level_needs(monkeypatch):
     # …and which signal type each rejection was, which is what colours the falling dot.
     # Losing this field would silently repaint every rejection as one arbitrary type.
     assert d["reject_matrix"]["contract"]["logs"] == 0.4
+    # contract board — who violated, which the collector's counters cannot say (no service
+    # label). `violating` is rows, not the sum of per-key counts, so it can be a share.
+    v = d["contract_violations"][0]
+    assert v["service"] == "third-party-agent" and v["violating"] <= v["rows"]
+    assert "sentinel.run_id" in v["missing"]
     # health — batches lost, which is a different granularity from signals dropped
     assert "export_errors" in d
     assert "persisted" in d["totals"]

@@ -83,6 +83,16 @@ so more dots would be a lie dressed as detail.
 - **`.hit`** — a clickable node. `pointer-events` is `all` on the group and on the rect,
   and **`none` on every child**, so a click on a label can never land on a different target
   than a click on the box. Hover brightens the border and the fill; `:active` sinks it.
+  **Hover styling uses `>`, and an open container is exempt from it.** As a descendant
+  selector it matched every `.nd` inside a container, so pointing at one table lit that
+  table, its neighbours and the box around them at once. Worse, `.hit:hover .nd` sets
+  `fill: var(--panel)` and outranks `.nd.open{fill:none}` on specificity — so hovering
+  anywhere inside an open container re-filled it opaque and it painted over the pipes
+  running behind it, which is the exact thing `fill:none` is there to prevent.
+- **`.chrome`** — open, the clickable target is the header strip, not the whole interior.
+  The full-size rect covers everything drawn inside the container, so leaving it
+  hit-testable meant the pointer was over the container even while aiming at something
+  inside it. Closed, the box is a card and the card is the button.
 - **`.pw` / `.pb`** — a pipe: a casing, and inside it a bore painted darker than the stage
   so it reads as hollow. The bore also hides the grid, so the channel looks enclosed rather
   than drawn on top of the board. Signals travel the bore's centreline, which is why a dot
@@ -166,6 +176,13 @@ disturbing the ones already in flight.
 viewport queries — the stage is a component and should reflow by its own width. Tiles fall to
 `minmax(112px, 1fr)`. `prefers-reduced-motion` removes `animateMotion` entirely; the graph and
 every figure survive.
+
+**Height a box grows into is not height its contents may use.** Selecting a service grows
+ORIGIN by 138px to make room for the signal panel, and the node grid — sized as
+`(height − 56) / rows` — spread itself across the taller box and put its lower rows directly
+under the panel, which then covered the very nodes it describes. The grid now lays out in
+`gridH`, the height the container has *without* the panel; the extra belongs to the panel
+alone. Any future panel that grows a container needs the same separation.
 
 ## Assets
 

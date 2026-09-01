@@ -163,6 +163,11 @@
     // three types are a property of every service, not of any one of them.
     const o = boxes.origin, c = boxes.collector, b = boxes.bronze;
     o.out = [0.28, 0.5, 0.72].map((f) => [o.x + o.w, o.y + o.h * f]);
+    // The node grid is laid out in the height the box has WITHOUT the signal panel. Selecting
+    // a service grows the container by 138px to make room for that panel, and spreading the
+    // nodes across the taller box pushed the lower rows straight underneath it — the panel
+    // covered the very nodes it describes. The extra height belongs to the panel alone.
+    o.gridH = SIZE.origin.open[1];
 
     // Stage geometry lives in the layout, not in the body renderer, so the lanes coming
     // from ORIGIN can land on `receive` and the lane leaving for BRONZE can start at
@@ -320,7 +325,7 @@
     t.nodes.forEach((n) => (cols[depth[n.id] ?? 0] ||= []).push(n));
     const NW = 196, NH = 42, pos = {};
     Object.entries(cols).forEach(([d, list]) => list.forEach((n, i) => {
-      const step = (b.h - 56) / list.length;
+      const step = ((b.gridH || b.h) - 56) / list.length;
       pos[n.id] = { x: b.x + 20 + (+d) * (NW + 52), y: b.y + 44 + step * i + (step - NH) / 2 };
     }));
     // Internal edges first, so nodes paint over them.
@@ -397,7 +402,7 @@
 
   function collectorBody(g, b, edges, fx) {
     const r = snap || {};
-    const policy = graph?.contract?.validation || "warn";
+    const policy = policyOf();
     const byReason = r.reject_by_reason || {};
     if (!open.collector) {
       g.append(
@@ -685,7 +690,13 @@
         "aria-label": `${open[id] ? "Collapse" : "Expand"} ${TITLE[id]}` });
       g.dataset.node = id;
       g.append(el("rect", { class: "nd" + (open[id] ? " open" : ""), x: b.x, y: b.y,
-          width: b.w, height: b.h, rx: 5 }),
+          width: b.w, height: b.h, rx: 5 }));
+      // Open, only the header carries the click. The full-size rect covers everything drawn
+      // inside the container, so leaving it hit-testable meant the pointer was always over
+      // the container even while aiming at a table inside it.
+      if (open[id]) g.append(el("rect", { class: "chrome", x: b.x, y: b.y,
+        width: b.w, height: 38, rx: 5 }));
+      g.append(
         el("text", { class: "lbl", x: b.x + 18, y: b.y + 26 }, TITLE[id]),
         el("text", { class: "cue", x: b.x + b.w - 18, y: b.y + 26,
           style: "text-anchor:end" }, open[id] ? "CLOSE ▾" : "OPEN ▸"));
@@ -849,7 +860,9 @@
       parent.append(el("text", { class: "sub", x, y: y + h / 2 }, "collecting…"));
       return 0;
     }
-    const vals = pts.map((p) => p[key] || 0);
+    // `key` may be a field name or a reader, because the contract board charts one slot
+    // of an array (`rc`/`rb` carry the per-signal split) and a field name cannot say that.
+    const vals = pts.map(typeof key === "function" ? key : (p) => p[key] || 0);
     const max = Math.max(...vals, 1e-9);
     const step = w / (pts.length - 1);
     const yy = (v) => y + h - (v / max) * h;
@@ -975,6 +988,285 @@
       <span>counts are <b>aggregate</b>, never per trace</span>`;
   }
 
+  /** The receive-boundary policy, or `unknown` — never a guess. `warn` is the collector's
+   *  own default, which makes it precisely the wrong fallback: a board showing `warn`
+   *  because it has not loaded `/api/graph` yet is indistinguishable from one reading a
+   *  real `warn`, and knowing which is the entire point of the panel. */
+  const policyOf = () => graph?.contract?.validation || "unknown";
+
+  /** Whichever board is visible, redrawn. Adding a third panel to three separate
+   *  `hidden` tests is how one of them gets forgotten. */
+  const drawBoards = () => {
+    if (!$("v-health").hidden) renderHealth();
+    if (!$("v-contract").hidden) renderContract();
+    if (!$("v-watch").hidden) renderWatch();
+  };
+
+  /* ── contract board ────────────────────────────────────────
+   *
+   * V2.1. The receive boundary is the one place in this pipeline where a contract is
+   * actually enforced, and until now nothing rendered it. Two sources, and the split
+   * between them is the whole design:
+   *
+   *   the collector  knows HOW MANY violated and HOW (`signals_rejected_total{signal,
+   *                  reason}`) but not WHO — its counters carry no service label.
+   *   bronze         knows WHO, because under the default `warn` policy a violating
+   *                  signal is exported anyway and the evidence lands in the table.
+   *
+   * One thing V2.1 asked for is NOT here and cannot be: contract-version adoption per
+   * producer. `collector-rust/src/otlp.rs` injects `CONTRACT_VERSION` into every signal it
+   * builds — "OTLP carries no contract_version field" — so every producer reads back the
+   * collector's own constant. The panel would show 1.0.0 for everyone and mean nothing.
+   */
+  function renderContract() {
+    const r = snap || {};
+    const policy = policyOf();
+    const svg = el("svg", { viewBox: `0 0 ${VW} ${VH}`, preserveAspectRatio: "xMidYMid meet" });
+    const byReason = r.reject_by_reason || {};
+    const contract = byReason.contract || 0;
+    const ingest = Object.values(r.ingest_rate || {}).reduce((a, z) => a + z, 0);
+
+    // ── the counterfactual, as the headline ──
+    //
+    // Under `warn` the collector counts what it would have dropped and exports it anyway,
+    // so this number IS the answer to "what happens if we promote to strict" — measured,
+    // not modelled. Under `off` the same counter reads zero for a completely different
+    // reason, and saying so is the difference between evidence and a false all-clear.
+    const off = policy === "off", strict = policy === "strict";
+    const unknown = policy === "unknown";
+    // Three different reasons this number can be zero, and only one of them is good news.
+    // `off` means nothing is checked; `idle` means nothing arrived to check; clean means
+    // traffic came through and passed. Collapsing them into one green headline is the
+    // false all-clear this board exists to prevent.
+    const idle = ingest <= 0;
+    const clean = !off && !unknown && !idle && contract <= 0;
+    const tone = off || unknown || idle ? "var(--dim2)" : contract > 0 ? "var(--sec)" : "var(--pri)";
+    const head = unknown ? "POLICY UNREADABLE"
+      : off ? "NOT MEASURED"
+      : idle ? "NO TRAFFIC"
+      : strict ? `${fmt(contract)}/s discarded at the boundary`
+      : `${fmt(contract)}/s would be dropped under strict`;
+    const note = unknown
+      ? "the collector config is not mounted — the counters below are real, the policy is not known"
+      : off
+        ? "validation is off — this zero means nothing is checked, not that nothing is wrong"
+      : idle
+        ? "nothing is arriving, so nothing is being validated — the series below still hold the window"
+      : strict ? "already dropping. flip to warn to keep the data while you fix producers"
+      : clean
+        ? "traffic is flowing and passing · this is the only zero that is good news"
+        : `flagged and exported anyway · ${(contract / ingest * 100).toFixed(2)}% of throughput`;
+    svg.append(el("rect", { class: "nd", x: 30, y: 26, width: 940, height: 62, rx: 5,
+        style: `stroke:${tone}` }),
+      el("text", { class: "lbl", x: 52, y: 46 }, "GRPC_VALIDATION"),
+      el("text", { class: "vtitle", x: 52, y: 70, style: `fill:${tone}` }, policy.toUpperCase()),
+      el("text", { class: "big", x: 950, y: 56, style: `text-anchor:end;fill:${tone}` }, head),
+      el("text", { class: "sub", x: 950, y: 74, style: "text-anchor:end" }, note));
+
+    // ── violation rate over the window, per signal ──
+    //
+    // Split by type rather than totalled: `signals_rejected_total` is labelled by both
+    // `signal` and `reason`, so "which type is failing" is measured. A single line would
+    // throw away the only thing that tells a metrics problem from a logs problem.
+    const cols = [
+      ["FAILING THE CONTRACT", "rc", "contract", 30,
+       "at validate · under warn these still reach bronze"],
+      ["REFUSED BY THE BUFFER", "rb", "backpressure", 520,
+       "backpressure · the producer was told to retry"],
+    ];
+    cols.forEach(([title, key, reason, x, sub]) => {
+      svg.append(el("text", { class: "lbl", x, y: 116 }, title),
+        el("text", { class: "sub", x, y: 130 }, sub));
+      LANES.forEach(([name, cls], i) => {
+        const colour = { p1: "var(--pri)", p2: "var(--ter)", p3: "var(--sec)" }[cls];
+        const y = 146 + i * 34;
+        const now = ((r.reject_matrix || {})[reason] || {})[name] || 0;
+        svg.append(el("text", { class: "sub", x, y: y + 20 }, name));
+        // `spark` returns the peak it scaled to. Without it the shape has no units: a hump
+        // reads the same at 4/s and 4000/s, and the figure beside it is the tick, not the
+        // window. Two numbers, and the labels say which is which.
+        const peak = spark(svg, x + 66, y, 250, 26, (p) => (p[key] || [])[i] || 0, colour);
+        svg.append(el("text", { class: "val", x: x + 372, y: y + 20,
+            style: `fill:${colour}` }, fmt(now) + "/s"),
+          el("text", { class: "sub", x: x + 380, y: y + 20 },
+            peak > 1e-6 ? `peak ${fmt(peak)}` : ""));
+      });
+    });
+
+    // ── who, from bronze ──
+    svg.append(el("text", { class: "lbl", x: 30, y: 272 }, "WHO IS VIOLATING"),
+      el("text", { class: "sub", x: 168, y: 272 },
+        "from bronze — the rows that landed anyway, so the evidence outlives the tick"));
+    const rows = r.contract_violations || [];
+    if (!rows.length) {
+      svg.append(el("text", { class: "sub", x: 30, y: 300 },
+        graph ? "no producer is missing a required key" : "collecting…"));
+    }
+    rows.slice(0, 4).forEach((v, i) => {
+      const y = 286 + i * 38;
+      // Share of that producer's ROWS, not of its key slots. The sum of per-key counts
+      // over-counts a row missing four keys as four, which read as "80%" for a producer
+      // whose every row is bad.
+      const share = v.rows > 0 ? (v.violating / v.rows) * 100 : 0;
+      const keys = Object.keys(v.missing);
+      svg.append(el("rect", { class: "nd sub-nd", x: 30, y, width: 940, height: 32, rx: 3,
+          style: "stroke:var(--sec)" }),
+        el("text", { class: "txt", x: 44, y: y + 20 }, clip(v.service, 26)),
+        el("text", { class: "sub", x: 260, y: y + 20 },
+          `${fmt(v.violating)} of ${fmt(v.rows)} rows`),
+        el("text", { class: "sub", x: 396, y: y + 20, style: "fill:var(--sec)" },
+          `${keys.length} of 5 keys missing · ` + keys.join(" · ")),
+        el("text", { class: "val", x: 956, y: y + 20, style: "fill:var(--sec)" },
+          share.toFixed(0) + "%"));
+    });
+
+    $("stage-c").replaceChildren(svg);
+    // The mode has no timeline because it has no history: `grpc_validation` is read from
+    // the collector's config at startup and is not exposed as a metric, so it cannot
+    // change without a restart. Drawing a state strip over a constant would invent one.
+    $("legend-c").innerHTML = `<span class="on" style="color:${tone}">● policy <b>${policy}</b></span>
+      <span>set at collector startup · not a metric, so it cannot change mid-window</span>
+      <span class="sp">series are a <b>${Math.min(hist.length, 120)}s window</b></span>
+      <span>producer rows refresh every <b>30s</b></span>`;
+  }
+
+  /* ── watchers board ────────────────────────────────────────
+   *
+   * V2.2, volume. Every competitor surveyed keeps its estimator private; the one credible
+   * wedge available to an open project is to publish the algorithm, the window and the
+   * meaning of the threshold — so the header states all three rather than saying
+   * "ML-powered".
+   *
+   * The band drawn here IS the alerting rule: both come from `volume_state`, one place, one
+   * set of numbers. Metaplane shipped a version where they were computed separately and
+   * publicly called reconciling them a simplification.
+   */
+  //: Rank, tone, label. The two alerting severities used to differ ONLY by colour — both
+  //: read "alerting" — which this repo's own rule forbids: colour is never the sole carrier.
+  //: The label now names the threshold that was crossed, which doubles as publishing the
+  //: rule on every row.
+  const WSTATE = {
+    fail:        [0, "var(--alarm)", "alerting ≥5σ"],
+    warn:        [1, "var(--sec)",   "alerting ≥3σ"],
+    unmonitored: [2, "var(--dim2)",  "not monitored"],
+    passing:     [3, "var(--pri)",   "passing"],
+  };
+
+  /** One producer's series with its band behind it. The band is a filled region, not a pair
+   *  of lines, because it is a region: "inside" is the whole claim. */
+  function bandSpark(parent, x, y, w, h, v) {
+    const pts = v.series || [];
+    const vals = pts.map((p) => p[1]);
+    const lo = Math.min(v.lo, ...vals, v.median), hi = Math.max(v.hi, ...vals, v.median);
+    const span = Math.max(hi - lo, 1e-9);
+    const yy = (n) => y + h - ((n - lo) / span) * h;
+    const mon = v.state !== "unmonitored";
+    if (mon) {
+      parent.append(el("rect", { x, y: yy(v.hi), width: w, height: Math.max(1, yy(v.lo) - yy(v.hi)),
+        fill: "var(--pri)", opacity: .10 }));
+      parent.append(el("line", { x1: x, y1: yy(v.median), x2: x + w, y2: yy(v.median),
+        stroke: "var(--dim2)", "stroke-width": 1, "stroke-dasharray": "3 4", opacity: .7 }));
+    }
+    if (pts.length < 2) return;
+    // Buckets are plotted on their own timestamps, so a gap in the series is a gap on the
+    // chart — a producer that went quiet leaves a hole rather than a straight line across
+    // the absence, which is exactly the thing being measured.
+    const t0 = pts[0][0], t1 = pts[pts.length - 1][0], dt = Math.max(t1 - t0, 1);
+    const px = (t) => x + ((t - t0) / dt) * w;
+    parent.append(el("path", { fill: "none", stroke: mon ? "var(--txt)" : "var(--dim2)",
+      "stroke-width": 1.3, "stroke-linejoin": "round",
+      d: pts.map((p, i) => `${i ? "L" : "M"}${px(p[0]).toFixed(1)} ${yy(p[1]).toFixed(1)}`).join(" ") }));
+    // Only the points the rule would actually alert on are marked, so the dots and the
+    // band can never disagree about what counts as an exception.
+    if (mon) pts.filter((p) => p[1] < v.lo || p[1] > v.hi).forEach((p) =>
+      parent.append(el("circle", { cx: px(p[0]), cy: yy(p[1]), r: 2.4, fill: "var(--alarm)" })));
+  }
+
+  function renderWatch() {
+    const r = snap || {};
+    const rows = r.volume || [];
+    const svg = el("svg", { viewBox: `0 0 ${VW} ${VH}`, preserveAspectRatio: "xMidYMid meet" });
+
+    // ── the method, published ──
+    svg.append(el("rect", { class: "nd", x: 30, y: 18, width: 940, height: 58, rx: 5 }),
+      el("text", { class: "lbl", x: 48, y: 36 }, "VOLUME · ROWS PER MINUTE, PER PRODUCER"),
+      el("text", { class: "sub", x: 48, y: 52 },
+        "median ± 3σ, σ from MAD × 1.4826 · stddev only where MAD collapses · "
+        + "60-minute sliding window · 1-minute buckets, current one excluded (partial) · "
+        + "warn 3σ · fail 5σ"),
+      // Two different time scopes on one row, and a row marked PASSING with red points on
+      // its series is unreadable until you are told which is which.
+      el("text", { class: "sub", x: 48, y: 66 },
+        "the verdict is the LATEST complete bucket · marked points are every bucket in the "
+        + "window the same rule would have alerted on"));
+
+    if (!rows.length) {
+      svg.append(el("text", { class: "sub", x: 30, y: 140 },
+        graph ? "no producer has enough buckets yet" : "collecting…"));
+    }
+    // Severity first, then a producer that went silent, then size. A watcher board sorted by
+    // volume buries its one interesting row among seven identical ones; median stays as the
+    // tiebreak so the order is otherwise stable tick to tick.
+    const ranked = [...rows].sort((a, z) =>
+      (WSTATE[a.state] || WSTATE.unmonitored)[0] - (WSTATE[z.state] || WSTATE.unmonitored)[0]
+      || (z.absent > 0) - (a.absent > 0) || z.median - a.median);
+    // What the eight rows add up to, so the answer does not require counting them.
+    const tally = (f) => ranked.filter(f).length;
+    const alerting = tally((v) => v.state === "warn" || v.state === "fail");
+    const grey = tally((v) => v.state === "unmonitored");
+    const silent = tally((v) => v.absent > 0);
+    const fallback = tally((v) => v.estimator === "stddev");
+    svg.append(el("text", { class: "sub", x: 30, y: 92 },
+      `${ranked.length} producers · ${alerting} alerting · ${grey} not monitored · `
+      + `${silent} silent in some bucket · ${fallback} on the stddev fallback`));
+    // Seven bare figures per row and nothing saying which is which. Every column is named,
+    // and the names carry their units, so a row can be read without the legend.
+    [["PRODUCER", 30, ""], ["LAST 60 MIN · SHADED BAND = THE RULE", 210, ""],
+     ["LATEST", 604, "text-anchor:end"], ["DISTANCE FROM MEDIAN", 616, ""],
+     // "VERDICT · COVERAGE" grew right from 800 into "ESTIMATOR · FIT" growing left from
+     // 956 and the two interleaved. The coverage line under each verdict already carries
+     // its own unit ("34/34 buckets"), so the header does not need to repeat it.
+     ["VERDICT", 800, ""], ["ESTIMATOR · FIT", 956, "text-anchor:end"],
+    ].forEach(([t, x, style]) =>
+      svg.append(el("text", { class: "lbl", x, y: 110, style: style || null }, t)));
+    svg.append(el("line", { x1: 30, y1: 116, x2: 970, y2: 116,
+      stroke: "var(--rule)", "stroke-width": 1 }));
+    ranked.slice(0, 8).forEach((v, i) => {
+      const y = 124 + i * 39, [, tone, label] = WSTATE[v.state] || WSTATE.unmonitored;
+      svg.append(el("text", { class: "txt", x: 30, y: y + 22 }, clip(v.service, 24)));
+      bandSpark(svg, 210, y + 4, 330, 30, v);
+      svg.append(
+        el("text", { class: "val", x: 604, y: y + 22, style: `fill:${tone}` }, fmt(v.latest)),
+        el("text", { class: "sub", x: 616, y: y + 22 },
+          v.state === "unmonitored" ? v.why : `${v.z}σ · median ${fmt(v.median)}`),
+        el("text", { class: "lbl", x: 800, y: y + 18, style: `fill:${tone}` },
+          label.toUpperCase()),
+        // A separate axis from the band: the estate received something in these buckets and
+        // this producer did not. Absence, as a signal — the one a table at rest cannot give.
+        el("text", { class: "sub", x: 800, y: y + 30,
+            style: v.absent > 0 ? "fill:var(--alarm)" : "fill:var(--dim)" },
+          v.absent > 0 ? `silent in ${v.absent} of ${v.estate} buckets`
+                       : `${v.seen}/${v.estate} buckets`),
+        // Which estimator won, and how well its band actually fits the window it was built
+        // from. `oob` is the number that decided: a band rejecting its own training data is
+        // describing one mode of it, not the series.
+        // One line, not two: end-anchored at 956 it ran left into the bucket count growing
+        // right from 800, and they collided into "31/31 bucket5% of window out of band".
+        el("text", { class: "sub", x: 956, y: y + 22, style: "text-anchor:end" },
+          (v.estimator === "none" ? "—" : v.estimator)
+          + (v.oob == null ? "" : ` · ${(v.oob * 100).toFixed(0)}% oob`)));
+    });
+
+    $("stage-w").replaceChildren(svg);
+    $("legend-w").innerHTML =
+      `<span><span class="gl" style="background:var(--pri)"></span>passing</span>
+       <span><span class="gl" style="background:var(--sec)"></span>alerting ≥3σ</span>
+       <span><span class="gl" style="background:var(--alarm)"></span>alerting ≥5σ</span>
+       <span><span class="gl" style="background:var(--dim2)"></span>not monitored — grey is <b>not observed</b>, never fine</span>
+       <span class="sp">the shaded band <b>is</b> the alerting rule</span>
+       <span>bronze event time · <b>not</b> arrival</span>`;
+  }
+
   /* ── per-tick visibility ───────────────────────────────────── */
   function density(s) {
     const ing = s.ingest_rate || {};
@@ -1056,9 +1348,9 @@
     hist.push({ t: s.ts, in: sum2(s.ingest_rate), fl: s.flush_rate, lat: s.export_latency_ms,
       st: s.persist_rate, rj: sum2(s.reject_rate), dr: s.drop_rate, m: s.mode });
     if (hist.length > HIST_MAX) hist.shift();
-    // Health only draws when it is on screen. It has no animation to preserve, but
+    // A board only draws when it is on screen. Neither has animation to preserve, but
     // rebuilding a chart nobody is looking at, once a second, is work for nothing.
-    if (!$("v-health").hidden) renderHealth();
+    drawBoards();
     if (repaint()) return;          // structural only; throughput never rebuilds
     density(s);
   }
@@ -1084,7 +1376,7 @@
       x.tabIndex = on ? 0 : -1;
       $(x.getAttribute("aria-controls")).hidden = !on;
     });
-    if (!$("v-health").hidden) renderHealth();
+    drawBoards();
   }));
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") $("z-home").click();
@@ -1097,7 +1389,7 @@
   fetch("/api/history").then((r) => r.json()).then((h) => {
     hist = h.points || [];
     ceiling = h.ceiling_ms || ceiling;
-    if (!$("v-health").hidden) renderHealth();
+    drawBoards();
   }).catch(() => {});
   fetch("/api/graph").then((r) => r.json()).then((g) => { graph = g; painted = ""; repaint(); fit(); })
     .catch(() => {});

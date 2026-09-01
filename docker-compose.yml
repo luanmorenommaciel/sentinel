@@ -60,6 +60,10 @@ services:
       # Pod 1's declared topology, read-only. The graph is drawn from the producer's
       # own config rather than redrawn here, so the picture cannot drift from it.
       - ./services/generator-python/config:/app/generator-config:ro
+      # The collector's own config, read-only. `contract.grpc_validation` is not exposed as
+      # a metric, so the receive-boundary policy can only be read from the file that sets
+      # it — and the contract board's headline is that policy.
+      - ./services/collector-rust/config.docker.yaml:/app/collector-config.yaml:ro
     ports:
       - "8080:8080"
     depends_on:

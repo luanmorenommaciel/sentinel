@@ -54,3 +54,24 @@ def test_the_empty_tables_carry_a_reason_not_just_a_name():
     for name, why in topology.EMPTY_BY_CONTRACT.items():
         assert name.startswith("otel_metrics_")
         assert "v1.0.0" in why
+
+
+def test_the_validation_policy_is_the_MODE_not_the_config_key():
+    """The regression this exists for: `CONTRACT["validation"]` was hard-coded to the
+    literal string `"grpc_validation"` — the config KEY — and every board rendered it where
+    it meant the mode. A policy board whose headline is the policy cannot guess it."""
+    from flow_ui import topology
+
+    assert topology.grpc_validation() in ("off", "warn", "strict", "unknown")
+    assert topology.CONTRACT["validation"] == topology.grpc_validation()
+    assert topology.CONTRACT["validation"] != "grpc_validation"
+
+
+def test_an_unreadable_collector_config_reports_unknown_not_a_default(monkeypatch, tmp_path):
+    """`warn` is the collector's default, which makes it exactly the wrong thing to assume:
+    a board that shows `warn` when it cannot read the policy is indistinguishable from one
+    reading a real `warn`, and the whole point of the panel is knowing which."""
+    from flow_ui import topology
+
+    monkeypatch.setattr(topology, "_COLLECTOR_CFG", (tmp_path / "nope.yaml",))
+    assert topology.grpc_validation() == "unknown"

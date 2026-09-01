@@ -15,6 +15,8 @@
   <nav class="dash" role="tablist" aria-label="Dashboards">
     <button role="tab" id="d-flow" aria-controls="v-flow" aria-selected="true">Flow</button>
     <button role="tab" id="d-health" aria-controls="v-health" aria-selected="false" tabindex="-1">Health</button>
+    <button role="tab" id="d-contract" aria-controls="v-contract" aria-selected="false" tabindex="-1">Contract</button>
+    <button role="tab" id="d-watch" aria-controls="v-watch" aria-selected="false" tabindex="-1">Watchers</button>
   </nav>
   <div class="meta">
     <span class="st hide" id="m-col" data-up="{{ 'y' if s.collector_up else 'n' }}">collector</span>
@@ -57,6 +59,20 @@
     <span class="esc">outcome per signal</span></div>
   <div class="stage" id="stage-h"></div>
   <div class="legend" id="legend-h"></div>
+</main>
+
+<main id="v-contract" role="tabpanel" aria-labelledby="d-contract" hidden>
+  <div class="crumb"><span class="now">contract health</span>
+    <span class="esc">the receive boundary, made visible</span></div>
+  <div class="stage" id="stage-c"></div>
+  <div class="legend" id="legend-c"></div>
+</main>
+
+<main id="v-watch" role="tabpanel" aria-labelledby="d-watch" hidden>
+  <div class="crumb"><span class="now">volume watcher</span>
+    <span class="esc">the band you see is the threshold</span></div>
+  <div class="stage" id="stage-w"></div>
+  <div class="legend" id="legend-w"></div>
 </main>
 
 <script src="/static/app.js?v={{ asset_v() }}" defer></script>

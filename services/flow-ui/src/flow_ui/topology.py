@@ -32,6 +32,39 @@ _CANDIDATES = (
 )
 
 
+#: The collector's own config, mounted read-only. Same argument as the topology above:
+#: read the policy from the file that sets it, so the board cannot drift from the collector.
+_COLLECTOR_CFG = (
+    Path(os.getenv("COLLECTOR_CONFIG", "/app/collector-config.yaml")),
+    Path(__file__).resolve().parents[3] / "collector-rust" / "config.docker.yaml",
+)
+
+
+def grpc_validation() -> str:
+    """The receive-boundary policy actually in force: `off` / `warn` / `strict`.
+
+    Read from the collector's config because there is nowhere else to read it: the policy
+    is not exposed as a metric, so no amount of scraping recovers it. Returns `"unknown"`
+    rather than a plausible default when the file is absent — a board whose headline is the
+    policy must not invent one, and this field was previously hard-coded to the literal
+    string `"grpc_validation"`, i.e. the config KEY, which rendered as the mode everywhere.
+    """
+    for path in _COLLECTOR_CFG:
+        if not path.is_file():
+            continue
+        try:
+            raw = yaml.safe_load(path.read_text()) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            log.warning("collector config unreadable (%s): %s", path, exc)
+            continue
+        mode = str((raw.get("contract") or {}).get("grpc_validation", "")).strip().lower()
+        if mode in ("off", "warn", "strict"):
+            return mode
+        log.warning("collector config has no usable contract.grpc_validation: %r", mode)
+    log.warning("collector config not found; validation policy unknown")
+    return "unknown"
+
+
 def _config_dir() -> Path | None:
     for p in _CANDIDATES:
         if (p / "topology" / "default.yaml").is_file():
@@ -178,5 +211,7 @@ CONTRACT = {
     "producer_version": "1.0.0",
     "consumer": "collector/v1",
     "consumer_version": "1.0.0.1",
-    "validation": "grpc_validation",
+    # Filled at import from the collector's own config — never hard-coded. It used to be
+    # the literal string "grpc_validation", the config key rather than its value.
+    "validation": grpc_validation(),
 }

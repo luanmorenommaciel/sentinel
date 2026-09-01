@@ -17,6 +17,7 @@ of the table. That gap widens with every row inserted.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import httpx
@@ -29,6 +30,18 @@ log = logging.getLogger("flow_ui.clickhouse")
 #: They are listed separately so the UI can say "empty by contract" rather than draw four
 #: live tables and two dead ones with no explanation.
 LIVE_TABLES = ("otel_logs", "otel_traces", "otel_metrics_gauge", "otel_metrics_sum")
+
+#: The five keys Pod 1 guarantees on every signal, mirrored from the collector's
+#: `REQUIRED_RESOURCE_KEYS` (`collector-rust/src/contract.rs`). Duplicated deliberately:
+#: this is the *reader's* copy, and if the two ever disagree the board should show what
+#: the collector is actually enforcing — so the drift is visible rather than silent.
+REQUIRED_RESOURCE_KEYS = (
+    "sentinel.synthetic",
+    "sentinel.scenario",
+    "sentinel.run_id",
+    "cloud.provider",
+    "service.name",
+)
 EMPTY_BY_CONTRACT = (
     "otel_metrics_histogram",
     "otel_metrics_exponential_histogram",
@@ -157,6 +170,137 @@ class ClickHouse:
                 out.setdefault(svc, {"gauge": [], "sum": []})[tbl].append(name)
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("metric inventory unavailable: %s", exc)
+        return out
+
+    async def contract_violations(self, limit: int = 10) -> list[dict]:
+        """Which producers wrote rows missing a required key, and which key.
+
+        **This is the only per-producer view of contract health that exists.** The
+        collector's `signals_rejected_total` carries `signal` and `reason` but no service
+        label, so it can say *how many* violated and *how*, never *who*. Bronze can,
+        because under the default `warn` policy a violating signal is exported anyway —
+        the evidence lands in the table.
+
+        Two things make it affordable. It probes `ResourceAttributes`, an unindexed Map
+        (§3), so it runs on its own slow cadence and never per tick. And it counts with
+        `countIf` per key rather than `ARRAY JOIN`-ing the five key names: the array form
+        multiplies every row by five *before* filtering, which measured 6.4s against
+        1.26s over the same ~6M rows.
+
+        `violating` counts ROWS missing at least one key, which is not the sum of the
+        per-key counts: a row missing four keys is one bad row, not four. Reporting the sum
+        as a share made a producer missing 4 of 5 keys on every row read "80%", which looks
+        like a row percentage and is not one.
+
+        Returns `[{service, rows, violating, missing: {key: n}, total_missing}]`, worst first.
+        """
+        keys = REQUIRED_RESOURCE_KEYS
+        cols = ",\n".join(
+            f"    countIf(NOT mapContains(ResourceAttributes, '{k}')) AS m{i}"
+            for i, k in enumerate(keys)
+        )
+        has_all = " AND ".join(
+            f"mapContains(ResourceAttributes, '{k}')" for k in keys
+        )
+        cols += f",\n    countIf(NOT ({has_all})) AS bad"
+        per_table = "\n  UNION ALL\n".join(
+            f"  SELECT ServiceName, count() AS rows,\n{cols}\n"
+            f"    FROM {self._db}.{t} GROUP BY ServiceName"
+            for t in LIVE_TABLES
+        )
+        sums = ", ".join(f"sum(m{i}) AS k{i}" for i in range(len(keys))) + ", sum(bad) AS bad"
+        having = " + ".join(f"k{i}" for i in range(len(keys)))
+        sql = f"""
+        SELECT ServiceName, sum(rows) AS rows, {sums}
+        FROM (
+{per_table}
+        )
+        GROUP BY ServiceName
+        HAVING {having} > 0
+        ORDER BY {having} DESC LIMIT {int(limit)} FORMAT TSV
+        """
+        out: list[dict] = []
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                parts = line.split("\t")
+                if len(parts) != 3 + len(keys):
+                    continue
+                missing = {k: int(v) for k, v in zip(keys, parts[2:-1]) if int(v) > 0}
+                out.append({
+                    "service": parts[0],
+                    "rows": int(parts[1]),
+                    "violating": int(parts[-1]),
+                    "missing": missing,
+                    "total_missing": sum(missing.values()),
+                })
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("contract violations unavailable: %s", exc)
+        return out
+
+    async def volume_band(self, minutes: int = 60, limit: int = 8) -> list[dict]:
+        """Per producer: the volume distribution over the window, and the latest bucket.
+
+        Returns the raw statistics, not a verdict — the band and the threshold are computed
+        in one place (`pipeline._volume_state`) so the drawn band and the alerting rule are
+        literally the same numbers. Metaplane shipped a version where they differed and
+        publicly called fixing it a "simplification"; there is no reason to repeat it.
+
+        Three deliberate choices, all cheap because `ServiceName, TimestampDate,
+        TimestampTime` is the sorting key, so the window filter is index-accelerated
+        (measured 0.135s):
+
+        * **The current bucket is excluded.** It is partial, and comparing a half-filled
+          bucket against a band built from full ones alarms on every tick.
+        * **`estate`** is the number of buckets in which *anything at all* landed. A
+          producer whose `seen` is below it was silent while the pipeline was not — which
+          is the one signal a tool that looks at tables at rest cannot produce: it sees a
+          stale table, not a write that failed to happen.
+        * **Both scale estimates are returned.** MAD is the robust one and the reason to
+          prefer this over a plain z-score, but a perfectly regular producer has MAD = 0 and
+          a band of zero width, where every tick is infinitely anomalous. The caller falls
+          back to stddev, and declares the series unmonitorable when both collapse.
+        """
+        win = int(minutes)
+        sql = f"""
+        WITH b AS (
+            SELECT ServiceName AS svc, toStartOfMinute(Timestamp) AS t, count() AS n
+            FROM {self._db}.otel_logs
+            WHERE Timestamp >= now() - INTERVAL {win} MINUTE
+              AND Timestamp < toStartOfMinute(now())
+            GROUP BY svc, t
+        ),
+        est AS (SELECT count(DISTINCT t) AS estate FROM b),
+        m AS (SELECT svc, quantileExact(0.5)(n) AS med, stddevPop(n) AS sd FROM b GROUP BY svc)
+        SELECT b.svc AS svc, m.med AS med,
+               quantileExact(0.5)(abs(b.n - m.med)) AS mad, any(m.sd) AS sd,
+               count() AS seen, any(est.estate) AS estate,
+               argMax(b.n, b.t) AS latest, toUnixTimestamp(max(b.t)) AS latest_t,
+               arraySort(x -> x.1, groupArray((toUnixTimestamp(b.t), b.n))) AS series
+        FROM b INNER JOIN m ON b.svc = m.svc CROSS JOIN est
+        GROUP BY b.svc, m.med
+        ORDER BY m.med DESC LIMIT {int(limit)} FORMAT JSONEachRow
+        """
+        out: list[dict] = []
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                out.append({
+                    "service": r["svc"],
+                    "median": float(r["med"]),
+                    "mad": float(r["mad"]),
+                    "sd": float(r["sd"]),
+                    "seen": int(r["seen"]),
+                    "estate": int(r["estate"]),
+                    "latest": int(r["latest"]),
+                    "latest_t": int(r["latest_t"]),
+                    "series": [[int(t), int(n)] for t, n in r["series"]],
+                })
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            log.warning("volume band unavailable: %s", exc)
         return out
 
     async def scenario(self) -> str:

@@ -44,6 +44,94 @@ BATCH_RECORDS_PER_FLUSH = 1500.0
 
 MODE_IDLE, MODE_STREAM, MODE_BATCH = "idle", "stream", "batch"
 
+#: Volume watcher. The threshold is Elementary's documented one — plain z-score at 3.0 — and
+#: the *estimator* is what changes: median and MAD rather than mean and stddev, so a single
+#: bad bucket does not widen the band that is supposed to catch it. Dual severity, because
+#: one number cannot both page someone and merely be noted.
+Z_WARN, Z_ERROR = 3.0, 5.0
+
+#: Scales MAD into a stddev-equivalent for normally distributed data, so `Z_WARN` keeps its
+#: usual meaning instead of being a magic number tied to a different estimator.
+MAD_TO_SIGMA = 1.4826
+
+#: Below this many buckets there is no distribution to speak of, and a band drawn from three
+#: points is theatre. Reported as unmonitored — Bigeye's grey — never as healthy.
+MIN_BUCKETS = 8
+
+#: A band that rejects more than this share of the window it was BUILT FROM is not describing
+#: the data; it is describing one mode of it. Measured here: a producer alternating between
+#: full minutes (2850 rows) and partial ones (600–1600) has a median on the dominant mode and
+#: a MAD of 50 against a true spread of 699, so the 3σ band excluded 14 of its own 31
+#: training buckets — and then alerted. Three-sigma on a series this estimator actually fits
+#: excludes a few percent; 15% means the model is wrong, not the data.
+MAX_OOB_SHARE = 0.15
+
+
+def _oob_share(series: list, med: float, scale: float) -> float:
+    """Share of the training window that falls outside the band built from it."""
+    if not series:
+        return 0.0
+    lo, hi = med - Z_WARN * scale, med + Z_WARN * scale
+    return sum(1 for _, n in series if n < lo or n > hi) / len(series)
+
+
+def volume_state(row: dict) -> dict:
+    """One producer's volume verdict, and the band it was judged against.
+
+    **The band returned here is the threshold.** Metaplane shipped a version where the drawn
+    area and the alerting rule were computed separately, then publicly called reconciling
+    them a "simplification": *"if you see a value outside the green area, Metaplane sent an
+    alert."* Computing both in one place is how that stays true.
+
+    Four states, not two — the distinction most health widgets lose:
+
+    * `passing`     — inside the band.
+    * `warn`/`fail` — outside it, at 3σ and 5σ.
+    * `unmonitored` — too few buckets, or no dispersion to model at all. A perfectly regular
+      producer has MAD = 0 and a zero-width band in which every value is infinitely
+      anomalous; stddev is tried next, and if that is also flat the series is declared
+      unmodellable rather than alarmed on. Grey means *not observed*, never *fine*.
+
+    `absent` is a separate axis, not a band violation: buckets in which the estate received
+    something and this producer did not. A tool reading a table at rest sees a stale table;
+    only a pipeline-centric one can see the write that never happened.
+    """
+    med, mad, sd = row["median"], row["mad"], row["sd"]
+    seen, estate, latest = row["seen"], row["estate"], row["latest"]
+    series = row.get("series") or []
+    absent = max(0, estate - seen)
+    base = {**row, "absent": absent}
+    grey = {**base, "scale": 0.0, "estimator": "none", "lo": med, "hi": med, "z": 0.0,
+            "state": "unmonitored"}
+
+    if estate < MIN_BUCKETS:
+        return {**grey, "why": f"only {estate} buckets in the window"}
+
+    # A cascade with a validity test at each step, not a switch on `mad > 0`. The switch was
+    # a cliff: MAD crossing zero moved σ from 74 to 699 between two consecutive ticks and
+    # flipped every producer from passing to alerting on one new bucket. Which estimator to
+    # use is not a property of MAD being non-zero — it is whether the band it produces
+    # actually contains the window.
+    for name, scale in (("mad", mad * MAD_TO_SIGMA), ("stddev", sd)):
+        if scale <= 0:
+            continue
+        share = _oob_share(series, med, scale)
+        if share > MAX_OOB_SHARE:
+            continue
+        z = abs(latest - med) / scale
+        state = "fail" if z >= Z_ERROR else "warn" if z >= Z_WARN else "passing"
+        return {**base, "estimator": name, "scale": round(scale, 2), "state": state,
+                "z": round(z, 2), "oob": round(share, 3),
+                "lo": round(med - Z_WARN * scale, 1), "hi": round(med + Z_WARN * scale, 1),
+                "why": f"{z:.1f}σ from a median of {med:.0f}"}
+
+    if mad <= 0 and sd <= 0:
+        return {**grey, "why": "no dispersion to model"}
+    # Both estimators produced a band that rejects its own window. That is a multi-modal
+    # series — here, full minutes and partial ones — which no single band describes. Saying
+    # so is the honest output; alerting eight producers at once is not.
+    return {**grey, "why": "no band fits this window — the series is not single-mode"}
+
 
 @dataclass
 class Snapshot:
@@ -118,6 +206,16 @@ class Snapshot:
     metrics_by_service: dict = field(default_factory=dict)
     scenario: str = "—"
 
+    #: Volume watcher, per producer: the band and the verdict it was judged against.
+    volume: list[dict] = field(default_factory=list)
+
+    #: Contract health, per producer — the one thing the receive boundary cannot answer.
+    #: `signals_rejected_total` has `signal` and `reason` but no service label, so it says
+    #: how many violated and how, never *who*. Bronze can, because under `warn` a violating
+    #: signal is exported anyway and the evidence lands in the table. Slow lane; see
+    #: `Settings.contract_interval_s`.
+    contract_violations: list[dict] = field(default_factory=list)
+
     def as_dict(self) -> dict:
         return asdict(self)
 
@@ -171,6 +269,7 @@ class Poller:
         #: opened now still gets the last few minutes instead of an empty chart, and so
         #: two viewers see the same history.
         self.history: deque[dict] = deque(maxlen=settings.history)
+        self._signals = ("logs", "trace", "metrics")
         self._errors_seen: float = 0.0
         self._policy: str = "warn"
         self._task: asyncio.Task | None = None
@@ -303,12 +402,19 @@ class Poller:
             "lat": snap.export_latency_ms,
             "st": snap.persist_rate,
             "rj": round(sum(snap.reject_rate.values()), 2),
+            # Rejections split by reason AND signal, so the contract board can chart which
+            # type was failing which way over the window. The aggregate `rj` above cannot
+            # be decomposed after the fact.
+            "rc": [snap.reject_matrix.get("contract", {}).get(k, 0.0) for k in self._signals],
+            "rb": [snap.reject_matrix.get("backpressure", {}).get(k, 0.0) for k in self._signals],
             "dr": snap.drop_rate,
             "m": snap.mode,
         })
         snap.lineage = self.latest.lineage
         snap.metrics_by_service = self.latest.metrics_by_service
         snap.scenario = self.latest.scenario
+        snap.contract_violations = self.latest.contract_violations
+        snap.volume = self.latest.volume
         self.latest = snap
         self.broadcaster.publish(snap)
 
@@ -348,15 +454,28 @@ class Poller:
                 lineage = await self._ch.lineage()
                 scenario = await self._ch.scenario()
                 inventory = await self._ch.metric_inventory()
+                band = await self._ch.volume_band(self._s.volume_window_min)
                 self.latest.lineage = lineage
                 self.latest.scenario = scenario
                 self.latest.metrics_by_service = inventory
+                self.latest.volume = [volume_state(r) for r in band]
             except Exception as exc:                      # noqa: BLE001 — never kill the loop
                 log.debug("lineage refresh failed: %s", exc)
             await asyncio.sleep(self._s.lineage_interval_s)
 
+    async def _refresh_contract(self) -> None:
+        """Contract health on its own, slower lane — it scans an unindexed Map across every
+        live table, so it must not share the lineage cadence."""
+        while True:
+            try:
+                self.latest.contract_violations = await self._ch.contract_violations()
+            except Exception as exc:                      # noqa: BLE001 — never kill the loop
+                log.debug("contract refresh failed: %s", exc)
+            await asyncio.sleep(self._s.contract_interval_s)
+
     async def _run(self) -> None:
         asyncio.create_task(self._refresh_lineage())
+        asyncio.create_task(self._refresh_contract())
         while True:
             try:
                 await self._tick()

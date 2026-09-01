@@ -135,3 +135,91 @@ def test_saturation_outranks_a_bad_payload():
                                   ingest_rate={"logs": 1.0},
                                   reject_by_reason={"contract": 9.0, "backpressure": 1.0}))
     assert "saturated" in note
+
+
+def _band(**kw):
+    base = {"service": "s", "median": 100.0, "mad": 0.0, "sd": 0.0,
+            "seen": 30, "estate": 30, "latest": 100, "latest_t": 0, "series": []}
+    return {**base, **kw}
+
+
+def test_the_band_returned_is_the_band_that_decided():
+    """Metaplane shipped a version where the drawn area and the alerting rule were computed
+    separately, then called reconciling them a simplification. One function returns both."""
+    from flow_ui.pipeline import MAD_TO_SIGMA, Z_WARN, volume_state
+
+    v = volume_state(_band(mad=10.0, latest=100))
+    scale = 10.0 * MAD_TO_SIGMA
+    assert v["lo"] == round(100 - Z_WARN * scale, 1)
+    assert v["hi"] == round(100 + Z_WARN * scale, 1)
+    # a value placed just outside the drawn band must be the one that alerts
+    assert volume_state(_band(mad=10.0, latest=int(v["hi"]) + 2))["state"] != "passing"
+    assert volume_state(_band(mad=10.0, latest=int(v["hi"]) - 2))["state"] == "passing"
+
+
+def test_a_perfectly_regular_producer_is_unmonitored_not_healthy():
+    """The degenerate case that makes robust statistics bite: MAD = 0 gives a zero-width
+    band in which every value is infinitely anomalous. Falls back to stddev; if that is flat
+    too the series is declared unmodellable. Grey means *not observed*, never *fine*."""
+    from flow_ui.pipeline import volume_state
+
+    flat = volume_state(_band(mad=0.0, sd=0.0, latest=1_000_000))
+    assert flat["state"] == "unmonitored" and flat["estimator"] == "none"
+    assert flat["why"] == "no dispersion to model"
+
+    fallback = volume_state(_band(mad=0.0, sd=20.0, latest=100))
+    assert fallback["estimator"] == "stddev" and fallback["state"] == "passing"
+
+    assert volume_state(_band(mad=5.0, sd=99.0))["estimator"] == "mad"
+
+
+def test_too_short_a_window_is_unmonitored_rather_than_a_band_drawn_from_three_points():
+    from flow_ui.pipeline import MIN_BUCKETS, volume_state
+
+    v = volume_state(_band(mad=10.0, seen=3, estate=3, latest=99999))
+    assert v["state"] == "unmonitored" and str(MIN_BUCKETS) not in v["service"]
+    assert "buckets in the window" in v["why"]
+
+
+def test_absence_is_its_own_axis_not_a_band_violation():
+    """A producer silent while the estate kept receiving is the write that never happened —
+    a signal a tool reading tables at rest cannot produce. It must not be folded into the
+    band verdict, or a silent producer sitting at its median would read as passing."""
+    from flow_ui.pipeline import volume_state
+
+    v = volume_state(_band(mad=10.0, seen=18, estate=30, latest=100))
+    assert v["state"] == "passing"      # the buckets it DID write were normal
+    assert v["absent"] == 12            # and it missed twelve the estate received
+
+
+def test_the_estimator_is_chosen_by_whether_its_band_fits_not_by_mad_being_nonzero():
+    """The regression: `mad * 1.4826 or sd` was a cliff, not a fallback. On a series that
+    alternates full minutes with partial ones the median sits on the dominant mode, MAD
+    measures that mode's spread against itself (50 against a true 699), and the instant MAD
+    crossed zero σ moved 74 → 699 between two ticks — flipping every producer from passing
+    to alerting on one new bucket. Observed live, not hypothesised."""
+    from flow_ui.pipeline import volume_state
+
+    # 20 full minutes at 2850, 11 partial ones: bimodal, exactly the measured shape
+    series = [[i, 2850] for i in range(20)] + [[20 + i, v] for i, v in
+              enumerate([600, 750, 1000, 1250, 1300, 1600, 1900, 2000, 2200, 2400, 2600])]
+    row = _band(median=2800.0, mad=50.0, sd=699.0, seen=31, estate=31,
+                latest=1600, series=series)
+    v = volume_state(row)
+    # the MAD band would reject nearly half its own window, so it is not the one used
+    assert v["estimator"] == "stddev"
+    assert v["oob"] <= 0.15
+    assert v["state"] == "passing"
+
+
+def test_a_series_no_band_fits_is_unmonitored_rather_than_eight_alerts():
+    """When both estimators produce a band that rejects its own training window, the series
+    is multi-modal and no single band describes it. Grey, with the reason."""
+    from flow_ui.pipeline import volume_state
+
+    # two tight modes far apart: every band either misses one mode or spans nothing
+    series = [[i, 100] for i in range(15)] + [[15 + i, 10_000] for i in range(15)]
+    v = volume_state(_band(median=100.0, mad=0.5, sd=1.0, seen=30, estate=30,
+                           latest=10_000, series=series))
+    assert v["state"] == "unmonitored"
+    assert "not single-mode" in v["why"]

@@ -144,15 +144,28 @@ body{margin:0;background:var(--sunk);color:var(--txt);
 .hit{cursor:pointer;pointer-events:all}
 .hit *{pointer-events:none}
 .hit rect{pointer-events:all}
-.hit:hover .nd{stroke:var(--sec);fill:var(--panel)}
-.hit:active .nd{fill:var(--sunk)}
+/* `>`, not a descendant selector. Without it, hovering anywhere inside a container matched
+   every `.nd` it contains, so aiming at one table lit up the table, its neighbours and the
+   box around them at once. The pointer highlights what it is actually over. */
+.hit:hover > .nd{stroke:var(--sec);fill:var(--panel)}
+.hit:active > .nd{fill:var(--sunk)}
 .hit:focus{outline:none}
-.hit:focus-visible .nd{stroke:var(--sec);stroke-width:2}
+.hit:focus-visible > .nd{stroke:var(--sec);stroke-width:2}
 .nd.sel{stroke:var(--sec)}
 /* An open container is a REGION, not a card: with an opaque fill it painted over the
    last stretch of every lane arriving at `receive`, which made the data look as though it
    entered the box anywhere. `.hit rect{pointer-events:all}` keeps it clickable. */
-.nd.open{fill:none}
+.nd.open{fill:none;pointer-events:none}
+/* ...and it stays a region under the pointer. `.hit:hover > .nd` sets `fill:var(--panel)`
+   and outranks `.nd.open` on specificity, so hovering re-filled the open box opaque and it
+   painted over the pipes running behind it — the whole reason `fill:none` is here. An open
+   container neither fills nor lights: it is not the thing being pointed at. */
+.hit:hover > .nd.open,.hit:active > .nd.open,.hit:focus-visible > .nd.open{
+  fill:none;stroke:var(--rule);stroke-width:1}
+/* Open, the clickable target is the header strip, not the whole interior — the interior
+   belongs to whatever is drawn in it. Closed, the box is a card and the card is the button. */
+.chrome{fill:transparent;transition:fill .16s}
+.chrome:hover{fill:var(--raise)}
 .sub-nd{fill:var(--panel)}
 .sheet{fill:var(--panel)}
 .node > rect{transition:stroke .16s,fill .16s}
