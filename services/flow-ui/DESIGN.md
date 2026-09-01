@@ -89,6 +89,10 @@ so more dots would be a lie dressed as detail.
   `fill: var(--panel)` and outranks `.nd.open{fill:none}` on specificity — so hovering
   anywhere inside an open container re-filled it opaque and it painted over the pipes
   running behind it, which is the exact thing `fill:none` is there to prevent.
+- **One channel each.** The border is INTERACTION — hover and selection — and the mark beside
+  the name is STATE. They were briefly the same channel, in the same `--sec`, and a warning
+  node became indistinguishable from a pointed-at one, which is how a pointer stops meaning
+  anything.
 - **`.chrome`** — open, the clickable target is the header strip, not the whole interior.
   The full-size rect covers everything drawn inside the container, so leaving it
   hit-testable meant the pointer was over the container even while aiming at something

@@ -218,6 +218,21 @@ dashed and dim — declared, never traced — rather than at a width that would 
 **Still not built:** the per-node state timeline needs per-service history, which nothing
 retains, and Grafana node-graph frames.
 
+## Two rules the review and the reader forced out
+
+**One channel each: the border is interaction, the mark is state.** Per-producer health took
+the node border, in the same `--sec` the hover uses, so a warning node and a pointed-at node
+were indistinguishable and the pointer stopped meaning anything. Hover and selection own the
+border; state lives in the mark beside the name.
+
+**Silence has to be material.** `absent > 0` raised every producer to warn, because a run's
+first and last minute are partial and everyone misses a bucket at the edges — seven of seven
+amber over 1 of 14. It now takes at least two buckets *and* 10% of the estate's.
+
+**Only the trunk is the widest thing on the canvas.** Measured edge widths scaled to 20
+against a 13px standard gauge, so a service dependency drew fatter than the feeders and the
+bronze fan. What those edges carry is relative, so the range tops out *at* the standard gauge.
+
 ## Next planned step
 
 Tier 1 is now closed to the limit of the data. What remains:

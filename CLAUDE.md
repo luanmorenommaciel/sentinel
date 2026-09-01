@@ -38,8 +38,8 @@ Makefile                   # one-command UX
 | `make generate-stream DURATION=10m` | Real-time telemetry paced by the wall clock, rather than a backfilled window |
 | `make up / init / generate / logs / down / reset` | Individual pipeline steps |
 | `make build` | Build all service images |
-| `make test` | All unit suites (generator pytest, `cargo test`, `go test`) |
-| `make lint` | ruff + `cargo fmt/clippy` + `go vet` |
+| `make test` | All unit suites (generator pytest, flow-ui pytest, `cargo test`) |
+| `make lint` | ruff (generator + flow-ui) + `cargo fmt/clippy` |
 | `make help` | List targets + active `COLLECTOR/SCENARIO/SEED/WINDOW` |
 
 Variables: `COLLECTOR` (rust\|go, default rust), `SCENARIO`, `SEED`, `WINDOW`.

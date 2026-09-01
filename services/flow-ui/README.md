@@ -81,14 +81,30 @@ docker start sentinel-clickhouse-1
 
 ## Test it
 
+From the repo root, in Docker, with no host toolchain — and wired into the aggregate targets,
+so `make test` and `make lint` cover this service too:
+
+```bash
+make test-flow-ui     # 57 tests
+make lint-flow-ui     # ruff over src, tests and scripts
+```
+
+Or against a local venv, which is faster to iterate with:
+
 ```bash
 cd services/flow-ui
 uv venv && uv pip install -e . && uv pip install pytest pytest-asyncio
 .venv/bin/python -m pytest tests -q
 ```
 
-The suite covers the parsing, the poller's inferences and the pure verdict logic. It does
-**not** cover SVG geometry — where things land on the canvas is checked by looking.
+The suite covers the parsing, the poller's inferences and the pure verdict logic — including
+the cases that are easy to get confidently wrong: a band whose estimator collapses, a producer
+whose every row violates the contract, an estimator chosen by whether its band fits rather
+than by MAD being non-zero.
+
+It does **not** cover SVG geometry. Where things land on the canvas is checked by looking, and
+that gap has cost real defects: a detail panel drawn over the nodes it describes, two header
+collisions, and a pipe routed out from under the box it was meant to reach.
 
 ## What it does
 
