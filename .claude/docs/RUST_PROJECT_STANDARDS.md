@@ -1,6 +1,6 @@
 # Rust Project Standards — the UV-equivalent setup for Sentinel
 
-> Last updated: 2026-06-01
+> Last updated: 2026-08-18
 > Goal: deliver the same simple, standardized contributor experience for Rust services in Sentinel that `uv` delivers for our Python projects.
 
 ## Why this doc exists
@@ -20,14 +20,14 @@ Rust delivers the same posture differently: most of it is built into `cargo` fro
 
 ## Scoping principle (polyglot monorepo)
 
-Sentinel is a **polyglot monorepo**: the Collector (Rust) is one of N peer components alongside `services/generator/` (Python/UV), `services/collector-go/` (Go), future watchers, the action dispatcher, and `infra/`. The scoping rule:
+Sentinel is a **polyglot monorepo**: the Collector (Rust) is one of N peer components alongside `services/generator-python/` (Python/UV), future watchers, the action dispatcher, and `infra/`. (A Go collector was a peer during the bake-off; Rust was selected and `services/collector-go/` was removed in PR #28, merged 2026-08-12. The scoping rule below is language-count-agnostic — it still governs the next component in any language.) The scoping rule:
 
-- **Language-specific config lives inside the component directory it governs** — `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`, `deny.toml` live at `services/collector-rust/`. Same pattern for `pyproject.toml`/`uv.lock` at `services/generator/` and `go.mod` at `services/collector-go/`.
+- **Language-specific config lives inside the component directory it governs** — `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`, `deny.toml` live at `services/collector-rust/`. Same pattern for `pyproject.toml`/`uv.lock` at `services/generator-python/`, and for whatever manifest the next component's language uses.
 - **Cross-cutting config lives at the repo root** — `justfile` (delegates per-language), `.pre-commit-config.yaml` (multi-language hooks), `.markdownlint.json`, `.editorconfig`, `.github/workflows/`, top-level `README.md`, `docs/`, `infra/`.
 
-This keeps every component self-contained (`cd services/X && just ci` always works) while letting the root coordinate (`just ci` at root walks every component). It also lets `.github/workflows/rust-ci.yml` use `paths: [services/collector-rust/**]` so a Python-only PR doesn't trigger Rust builds.
+The intent: every component self-contained (`cd services/X && just ci`) while the root coordinates (`just ci` at root walking every component). **Today only `services/collector-rust/justfile` exists** — the root delegator is still to be written, so cross-component coordination goes through the root `Makefile` instead. It also lets `.github/workflows/rust-ci.yml` use `paths: [services/collector-rust/**]` so a Python-only PR doesn't trigger Rust builds.
 
-> **Note on `rust-toolchain.toml`:** `rustup` walks *up* the directory tree to find it. Keeping it at `services/collector-rust/` scopes the pinned 1.83.0 toolchain to that subtree only — an adjacent Rust tool elsewhere in the repo picks its own toolchain.
+> **Note on `rust-toolchain.toml`:** `rustup` walks *up* the directory tree to find it. Keeping it at `services/collector-rust/` scopes the pinned 1.96.0 toolchain to that subtree only — an adjacent Rust tool elsewhere in the repo picks its own toolchain.
 
 > **Note on Cargo workspaces:** Today there is exactly one Rust crate, so a workspace adds zero value. When a second Rust crate appears, promote `services/collector-rust/Cargo.toml` to a `[workspace]` in place, or create `services/Cargo.toml` as a workspace governing multiple Rust members — defer the choice until you actually have N≥2 crates (YAGNI).
 
@@ -60,16 +60,19 @@ All paths below are relative to `services/collector-rust/` unless noted as **(re
 
 For any Rust service in this repo (`services/collector-rust/`, future `services/X-rust/`):
 
+> ⚠️ **This is the TARGET layout, not the current one.** Every root-level file below is
+> marked with its real status; only the ones marked ✅ exist today. Don't cite the missing
+> ones as if they were in place.
+
 ```text
 sentinel/
-├── justfile                         # ROOT — cross-cutting task runner (delegates per-language)
-├── .pre-commit-config.yaml          # ROOT — multi-language hooks (Rust + Python + markdown)
-├── .markdownlint.json               # ROOT — cross-cutting
-├── .editorconfig                    # ROOT — cross-cutting
+├── justfile                         # ROOT — cross-cutting task runner   ⛔ NOT YET
+├── .pre-commit-config.yaml          # ROOT — multi-language hooks        ⛔ NOT YET
+├── .markdownlint.json               # ROOT — cross-cutting               ⛔ NOT YET (WoW lists it as a gate)
+├── .editorconfig                    # ROOT — cross-cutting               ⛔ NOT YET
 ├── .github/workflows/
-│   ├── rust-ci.yml                  # paths: [services/collector-rust/**]
-│   ├── python-ci.yml                # paths: [services/generator/**]
-│   └── go-ci.yml                    # paths: [services/collector-go/**]
+│   ├── rust-ci.yml                  # paths: [services/collector-rust/**]  ✅ EXISTS
+│   └── python-ci.yml                # paths: [services/generator-python/**]  ⛔ NOT YET
 └── services/
     ├── collector-rust/              # ── Rust component, fully self-contained ──
     │   ├── Cargo.toml               # package manifest (becomes [workspace] if Rust grows to N≥2 crates)
@@ -78,7 +81,7 @@ sentinel/
     │   ├── rustfmt.toml             # format rules
     │   ├── clippy.toml              # extra lint config (when needed)
     │   ├── deny.toml                # cargo-deny: license + security policy
-    │   ├── justfile                 # Rust-specific recipes, invoked by root justfile
+    │   ├── justfile                 # Rust-specific recipes                ✅ EXISTS
     │   ├── src/
     │   │   ├── main.rs              # binary entry
     │   │   ├── lib.rs               # library entry (for testability)
@@ -88,14 +91,10 @@ sentinel/
     │   ├── benches/                 # criterion benchmarks (opt-in)
     │   │   └── ingest_throughput.rs
     │   └── README.md
-    ├── collector-go/                # ── Go component, sibling (post-bake-off) ──
-    │   ├── go.mod / go.sum
-    │   ├── .golangci.yml
-    │   └── justfile
-    └── generator/                   # ── Python component (Pod 1) ──
-        ├── pyproject.toml
-        ├── uv.lock
-        └── justfile
+    └── generator-python/            # ── Python component (Pod 1) ──
+        ├── pyproject.toml                                                  ✅ EXISTS
+        ├── uv.lock                                                         ✅ EXISTS
+        └── justfile                                                        ⛔ NOT YET
 ```
 
 Mirrors the Python layout: `src/<pkg>/` is `services/<name>/src/`; `tests/` at the service root is `services/<name>/tests/`. Every component is self-contained — `cd services/X && just ci` works without the root being involved.
@@ -233,11 +232,11 @@ workspace = true
 
 ## `services/collector-rust/rust-toolchain.toml` — the `.python-version` equivalent
 
-Lives at `services/collector-rust/` (not the repo root) so the toolchain pin scopes to this component's subtree only. `rustup` walks *up* the directory tree to find it, so any `cargo` command run inside `services/collector-rust/` (or below) picks up Rust 1.83.0 automatically; commands elsewhere in the repo use whatever the contributor's default toolchain is.
+Lives at `services/collector-rust/` (not the repo root) so the toolchain pin scopes to this component's subtree only. `rustup` walks *up* the directory tree to find it, so any `cargo` command run inside `services/collector-rust/` (or below) picks up Rust 1.96.0 automatically; commands elsewhere in the repo use whatever the contributor's default toolchain is.
 
 ```toml
 [toolchain]
-channel = "1.83.0"                   # pin the Rust version exactly
+channel = "1.96.0"                   # pin the Rust version exactly
 components = [
     "rustfmt",
     "clippy",
@@ -248,7 +247,7 @@ targets = ["x86_64-unknown-linux-musl"]  # for distroless container builds
 profile = "minimal"
 ```
 
-A contributor running `cd sentinel/services/collector-rust && cargo build` automatically gets Rust 1.83.0 installed by `rustup`. No "what version are you running?" debates.
+A contributor running `cd sentinel/services/collector-rust && cargo build` automatically gets Rust 1.96.0 installed by `rustup`. No "what version are you running?" debates.
 
 ## `services/collector-rust/rustfmt.toml` — formatting
 

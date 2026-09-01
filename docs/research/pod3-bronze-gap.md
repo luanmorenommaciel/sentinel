@@ -1,5 +1,12 @@
 # POD2 (Rust collector) → POD3 Bronze — Schema Gap Analysis
 
+> **HISTORICAL (gap closed).** This analysis documented the gap between the collector's
+> normalized `default.*` output and Pod 3's bronze landing. The gap is **closed**: the Rust
+> collector now writes the bronze schema directly (database `bronze`, renamed from `sentinel`
+> per [ADR-0007](../adr/0007-bronze-canonical-contract.md)'s 2026-07-21 amendment). Kept as
+> the decision rationale. References below to `default.*`, the Go collector, or
+> `make COLLECTOR=rust e2e` describe the repo as it was — none of them exist today.
+
 | Field | Value |
 |---|---|
 | Status | **Research / decision-input — not a decision** |
