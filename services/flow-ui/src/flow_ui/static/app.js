@@ -342,6 +342,13 @@
     return [...seen].filter((n) => n && !declared.has(n)).sort();
   };
 
+  //: Silence has to be MATERIAL before it counts. `absent > 0` fired on every producer:
+  //: a run's first and last minute are partial, so everyone misses a bucket at the edges,
+  //: and seven of seven nodes went amber over 1 of 14. A share with a floor of two buckets
+  //: keeps the edges quiet and still catches a producer that stopped — measured here,
+  //: `third-party-agent` at 13 of 14.
+  const ABSENT_SHARE = 0.1, ABSENT_MIN = 2;
+
   const HRANK = { fail: 0, warn: 1, unmonitored: 2, unknown: 3, passing: 4 };
   const HTONE = { fail: "var(--alarm)", warn: "var(--sec)", unmonitored: "var(--dim2)",
                   unknown: "var(--dim)", passing: "var(--pri)" };
@@ -355,7 +362,8 @@
     if (v && (v.state === "warn" || v.state === "fail")) why.push(`volume ${v.z}σ off median`);
     // Silence is not a band violation — a producer sitting at its median while writing
     // nothing at all would read as passing — so it raises the state on its own axis.
-    if (v && v.absent > 0) { worse("warn"); why.push(`silent in ${v.absent} of ${v.estate} buckets`); }
+    const silent = v && v.absent >= ABSENT_MIN && v.absent >= v.estate * ABSENT_SHARE;
+    if (silent) { worse("warn"); why.push(`silent in ${v.absent} of ${v.estate} buckets`); }
     if (c && c.violating > 0) {
       worse("warn");
       why.push(`${fmt(c.violating)} rows missing ${Object.keys(c.missing).length} of 5 contract keys`);
@@ -426,9 +434,14 @@
       const a = pos[e.from], z = pos[e.to];
       if (!a || !z) return;
       const m = measured[`${svc[e.from]}\u0000${svc[e.to]}`];
-      // Width from the share of the busiest edge, on a root so a 100x range stays legible;
-      // colour from the error rate on that edge, at the thresholds printed in the legend.
-      const w = m ? 8 + Math.sqrt(m.spans / peak) * 12 : 5;
+      // Width from the share of the busiest edge, on a root so a 100x range stays legible.
+      // The range tops out AT the standard 13px gauge and never above it: what these edges
+      // carry is relative — which one moves more than which — and letting the busiest reach
+      // 20 made ORIGIN's internal dependencies fatter than the feeders and the bronze fan,
+      // so the board read as though a service call outweighed the pipeline it feeds. Only
+      // the trunk is allowed to be the widest thing on the canvas, because only it carries
+      // whole batches.
+      const w = m ? 6 + Math.sqrt(m.spans / peak) * 7 : 4;
       const err = m && m.spans ? m.errors / m.spans : 0;
       const tone = !m ? "var(--dim)"
         : err >= 0.05 ? "var(--alarm)" : err >= 0.01 ? "var(--sec)" : null;
@@ -454,12 +467,12 @@
       // Name on its own line, figure on the next: at 196px a 24-character service name
       // and a right-aligned count were landing on the same pixels.
       node.append(
+        // The border belongs to INTERACTION — hover and selection — and nothing else.
+        // Health took it too, in the same `--sec` the hover uses, so a warning node and a
+        // pointed-at node were indistinguishable and the pointer stopped meaning anything.
+        // State lives in the mark below; one channel each.
         el("rect", { class: "nd sub-nd" + (sel ? " sel" : ""), x: p.x, y: p.y,
-          width: NW, height: NH, rx: 3,
-          // Selection wins the border — it is a thing the reader just did. Health takes the
-          // border only when it has something to say and the node is not selected.
-          style: !sel && h.state !== "passing" && h.state !== "unknown"
-            ? `stroke:${h.tone}` : null }),
+          width: NW, height: NH, rx: 3 }),
         // A status mark on every node, including the healthy ones: a dot that appears only
         // when something is wrong cannot be told from a node nobody is watching.
         el("circle", { class: "hmark", cx: p.x + 6, cy: p.y + NH / 2, r: 3, fill: h.tone }),
