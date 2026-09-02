@@ -219,6 +219,43 @@ Every work item — feature, bug, spike, or research task — lives as a GitHub 
 - Issues are closed by a merged PR, not by hand.
 - `good-first-issue` is the sacred tag. Captain pre-tags 5-10 per sprint before the Tuesday sync. These are the entry points for Astronautas picking up new work.
 
+### Anatomy
+
+Derived from the Commander's own issues (#4–#23, 2026-05-26), which are the only worked
+examples the repo has. Recorded here because it was practice and nowhere written, so anyone
+opening the twentieth issue had to reverse-engineer it from the first nineteen.
+
+**Title** — `[TYPE] Short imperative description`, where TYPE is `EPIC`, `FEATURE`,
+`COMPONENT`, `ADR-NNN`, `CA` (Commander Attention) or `BLOCKER`.
+
+**Labels — four axes, always all four:**
+
+| Axis | Values |
+|---|---|
+| crew | `crew-a` … `crew-d` |
+| type | `type:epic` · `type:feature` · `type:component` · `type:task` · `type:adr` · `type:blocker` · `type:commander-attention` |
+| priority | `priority:p0` · `priority:p1` · `priority:p2` |
+| phase | `phase:backlog` · `phase:spec` · `phase:design` · `phase:build` · `phase:review` · `phase:ship` |
+
+Plus `blocked` when something external is holding it.
+
+**Body** — two header lines, then prose:
+
+```markdown
+**Feature:** <the feature or area this belongs to>
+**Parent Epic:** https://github.com/luanmorenommaciel/sentinel/issues/4
+
+<What and why, in a few sentences. Evidence or a quote where it decides something.>
+```
+
+**Bodies are short.** #19 is three sentences; #21 is a quoted example plus one line. An issue
+states *what* and *why*; *how* belongs in the PR that closes it. Decision issues (`ADR-NNN`,
+`CA`) add a `## Decision` or `## Decision Required` heading and nothing else.
+
+**Issues are closed by a merged PR, not by hand** — restated here because it is the rule most
+often broken when an issue has drifted rather than been delivered. An issue that no longer
+makes sense is closed with the reason, not silently.
+
 ---
 
 ## Lego Principle
