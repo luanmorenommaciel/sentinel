@@ -404,6 +404,47 @@ class ClickHouse:
             log.info("silver service health unavailable (is silver deployed?): %s", exc)
         return out
 
+    #: Silver's three physical models, in the order the pipeline fills them.
+    SILVER_MODELS = ("operation_executions", "log_events", "metric_observations")
+
+    async def silver_state(self) -> dict:
+        """What Silver holds, and whether it is there at all.
+
+        Row counts come from `system.tables`, which is metadata — the same reason
+        :meth:`counts` reads `count()` rather than a windowed query. Cheap enough for the
+        slow lane and never scans a row.
+
+        `present` is the distinction the board needs: a ClickHouse volume created before the
+        Silver DDL landed has no `silver` database, and an empty Silver is a different
+        statement from an absent one. Both are normal — the DDL runs on ClickHouse boot, so a
+        fresh `make up` has Silver from the start and it stays empty until a stream runs,
+        because ADR-0010's materialized views do not `POPULATE`.
+        """
+        out = {"present": False, "models": {}, "views": [], "mvs": 0}
+        try:
+            rows = await self._query(
+                "SELECT engine, name, toUInt64(ifNull(total_rows, 0)) "
+                "FROM system.tables WHERE database = 'silver' FORMAT TSV")
+        except httpx.HTTPError as exc:
+            log.info("silver state unavailable: %s", exc)
+            return out
+        for line in rows.splitlines():
+            if not line.strip():
+                continue
+            try:
+                engine, name, n = line.split("\t")
+            except ValueError:
+                continue
+            out["present"] = True
+            if engine == "MergeTree":
+                out["models"][name] = int(n)
+            elif engine == "View":
+                out["views"].append(name)
+            elif engine == "MaterializedView":
+                out["mvs"] += 1
+        out["views"].sort()
+        return out
+
     async def scenario(self) -> str:
         """The most recent run's scenario, for the header.
 

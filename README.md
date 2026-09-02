@@ -60,7 +60,7 @@ flowchart TB
         FLOW["flow-ui :8080<br/>four boards · read-only"]
     end
     POD2 -. "/metrics :9090" .-> FLOW
-    STORE -. "bronze.* read-only" .-> FLOW
+    STORE -. "bronze.* + silver.* read-only" .-> FLOW
 
     classDef contract fill:#fde68a,stroke:#b45309,stroke-width:4px,color:#3a2f00;
     classDef zone fill:#f1f5f9,stroke:#94a3b8,color:#0f172a;
@@ -162,6 +162,7 @@ sentinel/
 │   ├── collector-rust/            #   Pod 2 — selected Rust collector. Cargo/Docker/tests ✅
 │   ├── generator-python/          #   Pod 1 — Python telemetry generator (otelgen)
 │   └── flow-ui/                   #   the pipeline watching itself — four boards, read-only
+│       └── ARCHITECTURE.md      #     how it is built (FastAPI + SSE + no-framework SVG)
 │
 ├── .github/
 │   ├── PULL_REQUEST_TEMPLATE.md   # what · why (the linked issue) · tests/evidence

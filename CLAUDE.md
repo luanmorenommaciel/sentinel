@@ -22,7 +22,8 @@ contracts/                 # SSOT contract registry, namespaced by producing Pod
 services/
   generator-python/        # POD 1 — synthetic OTLP generator (otelgen CLI); config/ holds scenarios/topology/provider_profiles
   collector-rust/          # POD 2 — OTLP→ClickHouse collector (Rust), the selected implementation
-  flow-ui/                 # the pipeline watching itself — four boards over /metrics + bronze
+  flow-ui/                 # the pipeline watching itself — four boards over /metrics + bronze/silver
+                           #   ARCHITECTURE.md = stack + cadences + module map (Mermaid)
 infra/                     # ClickHouse bootstrap (users/db init + users.d network override + bronze DDL in init.d/)
 docs/                      # shared docs (ADRs, research, proposals)
                            #   research/ holds the V2 product roadmap for flow-ui:

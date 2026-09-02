@@ -37,6 +37,7 @@
     origin:    { closed: [212, 196], open: [742, 248], openSel: [742, 386] },
     collector: { closed: [252, 152], open: [500, 344] },
     bronze:    { closed: [176, 136], open: [318, 252] },
+    silver:    { closed: [186, 136], open: [268, 252] },
   };
 
   let graph = null, snap = null, table = "otel_logs";
@@ -45,7 +46,7 @@
   //: label, so per-service throughput simply does not exist upstream of ClickHouse. The
   //: legend says so rather than letting the lanes imply otherwise.
   let service = null;
-  const open = { origin: false, collector: false, bronze: false };
+  const open = { origin: false, collector: false, bronze: false, silver: false };
   let painted = "", pools = {};
   const view = { k: 1, x: 0, y: 0 };   // viewport transform
   let root = null;                      // the <g> everything pans inside
@@ -164,12 +165,16 @@
     const CY = 220;
     const boxes = {};
     let x = 40;
-    for (const id of ["origin", "collector", "bronze"]) {
+    //: Silver sits close to bronze rather than a full GAP away, because nothing travels
+    //: between them: the materialized views fire inside ClickHouse on the same insert that
+    //: writes bronze. A long run would draw transport that does not happen.
+    const DERIVE_GAP = 52;
+    for (const id of ["origin", "collector", "bronze", "silver"]) {
       const key = !open[id] ? "closed"
         : (id === "origin" && service && SIZE[id].openSel) ? "openSel" : "open";
       const [w, h] = SIZE[id][key];
       boxes[id] = { id, x, y: CY - h / 2, w, h };
-      x += w + GAP;
+      x += w + (id === "bronze" ? DERIVE_GAP : GAP);
     }
     // Signal lanes leave the origin container's right edge, not individual services: the
     // three types are a property of every service, not of any one of them.
@@ -686,6 +691,51 @@
     });
   }
 
+  /** SILVER — what Bronze becomes, not where Bronze goes.
+   *
+   *  The link from bronze is NOT a pipe, and that is the point. Everything else on this
+   *  canvas transports something: signals move along a bore from one component to another.
+   *  Bronze to Silver moves nothing — ADR-0010's materialized views fire inside ClickHouse
+   *  on the same insert that writes bronze. Drawing a run between them would claim a hop
+   *  that never happens, so it is drawn as a derivation: a short double bar, no particles.
+   */
+  function silverBody(g, b, edges, fx) {
+    const sv = snap?.silver || {};
+    if (!sv.present) {
+      g.append(el("text", { class: "txt", x: b.x + 18, y: b.y + 66 }, "not deployed"),
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 88 }, "the DDL applies on"),
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 102 }, "ClickHouse boot — a volume"),
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 116 }, "older than it has no silver"));
+      return;
+    }
+    const models = sv.models || {}, total = Object.values(models).reduce((a, z) => a + z, 0);
+    if (!open.silver) {
+      g.append(el("text", { class: "txt", x: b.x + 18, y: b.y + 66 }, fmt(total) + " rows"),
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 88 },
+          `${Object.keys(models).length} models · ${(sv.views || []).length} read views`),
+        // Empty is the normal state of a stack nobody has streamed into yet, and it is a
+        // different statement from absent. Saying which keeps the box honest.
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 106 },
+          total ? `${sv.mvs} materialized views feeding` : "empty — run a stream"));
+      return;
+    }
+    const names = Object.keys(models), TW = 218, TH = 34;
+    names.forEach((n, i) => {
+      const y = b.y + 46 + i * (TH + 6), x = b.x + 26;
+      g.append(el("rect", { class: "nd sub-nd", x, y, width: TW, height: TH, rx: 3 }),
+        el("text", { class: "txt", x: x + 10, y: y + 15 }, clip(n, 24)),
+        el("text", { class: "val", x: x + TW - 10, y: y + 15 }, fmt(models[n])),
+        el("text", { class: "sub", x: x + 10, y: y + 28 }, "one row per bronze record"));
+    });
+    const vy = b.y + 46 + names.length * (TH + 6) + 10;
+    g.append(el("text", { class: "lbl", x: b.x + 26, y: vy }, "READ VIEWS"));
+    (sv.views || []).forEach((v, i) => g.append(
+      el("text", { class: "sub", x: b.x + 26 + (i % 2) * 118, y: vy + 15 + Math.floor(i / 2) * 12,
+        // The one flow-ui actually consumes today, so the panel does not imply it uses six.
+        style: v === "service_health_1m" ? "fill:var(--sec)" : null },
+        (v === "service_health_1m" ? "▸ " : "· ") + clip(v, 17))));
+  }
+
   function bronzeBody(g, b, edges, fx) {
     const r = snap || {}, tables = graph?.tables || {};
     const total = Object.values(r.bronze || {}).reduce((a, z) => a + z, 0);
@@ -761,7 +811,8 @@
   }
 
   /* ── render ────────────────────────────────────────────────── */
-  const TITLE = { origin: "ORIGIN", collector: "COLLECTOR-RUST", bronze: "BRONZE" };
+  const TITLE = { origin: "ORIGIN", collector: "COLLECTOR-RUST", bronze: "BRONZE",
+                  silver: "SILVER" };
 
   function render() {
     const stage = $("stage");
@@ -786,6 +837,8 @@
     svg.append(defs);
 
     root = el("g", { id: "vp" });
+    //: Captions that must sit above the edge layer but are not part of any node.
+    const nodesLater = [];
     const edges = el("g", { class: "ed-layer" });
     vias = el("g", { class: "via" });
     const fx = el("g", { filter: "url(#bloom)" });
@@ -806,6 +859,21 @@
       route(B.collector.out[0], B.collector.out[1], B.bronze.in[0], B.bronze.in[1]), "trunk");
     mouth(B.collector.out[0], B.collector.out[1], 24);
     mouth(B.bronze.in[0], B.bronze.in[1], 24);
+
+    // BRONZE ⇒ SILVER. Not a pipe, and no mouths: nothing travels here. ADR-0010's
+    // materialized views fire inside ClickHouse on the same insert that writes bronze, so a
+    // run with dots in it would draw a hop that never happens. A double bar is the derivation
+    // mark — the two rules a reader has to keep apart are "moved" and "derived from".
+    const sb = B.bronze, sv = B.silver, dy = 5;
+    const x1 = sb.x + sb.w, x2 = sv.x, my = sb.y + sb.h / 2;
+    [-dy, dy].forEach((o) => edges.append(el("path", { class: "derive",
+      d: `M${x1} ${my + o} L${x2} ${my + o}` })));
+    edges.append(el("path", { class: "derive tip", "marker-end": "url(#arrow-tap)",
+      d: `M${x2 - 12} ${my} L${x2 - 1} ${my}` }));
+    nodesLater.push(el("text", { class: "sub", x: (x1 + x2) / 2, y: my - 12,
+      style: "text-anchor:middle" }, "derived"),
+      el("text", { class: "sub", x: (x1 + x2) / 2, y: my + 20,
+        style: "text-anchor:middle" }, "on insert"));
     // Three batches in flight, evenly spaced. Each one's ARRIVAL time is what the burst
     // and the per-table fan below are keyed to, so the unpacking is not decorative timing
     // — it happens when the batch actually gets there.
@@ -835,7 +903,7 @@
     }
     pools.__batch = { dur: BATCH_DUR, n: IN_FLIGHT };
 
-    for (const id of ["origin", "collector", "bronze"]) {
+    for (const id of ["origin", "collector", "bronze", "silver"]) {
       const b = B[id];
       const g = el("g", { class: "hit node", tabindex: "0", role: "button",
         "aria-expanded": String(open[id]),
@@ -853,9 +921,11 @@
         el("text", { class: "cue", x: b.x + b.w - 18, y: b.y + 26,
           style: "text-anchor:end" }, open[id] ? "CLOSE ▾" : "OPEN ▸"));
       nodes.append(g);
-      ({ origin: originBody, collector: collectorBody, bronze: bronzeBody }[id])(g, b, edges, fx);
+      ({ origin: originBody, collector: collectorBody, bronze: bronzeBody,
+         silver: silverBody }[id])(g, b, edges, fx);
     }
     if (open.bronze) datasheet(nodes, B.bronze);
+    nodesLater.forEach((n) => nodes.append(n));
     // The burst only means something when a batch is actually arriving.
     show("burst", 0);
 
@@ -1500,8 +1570,11 @@
 
   /* ── structural repaint ────────────────────────────────────── */
   function repaint() {
+    // Every box that can expand belongs in this key. Leaving one out does not fail loudly:
+    // the click flips `open[id]`, the key does not change, repaint returns early and the box
+    // simply never opens. `silver` was missing and the bug looked like a dead click.
     const key = [snap?.mode || "", graph ? 1 : 0, open.origin, open.collector, open.bronze,
-                 table, service].join("|");
+                 open.silver, table, service].join("|");
     if (key === painted) return false;
     const first = painted === "";
     painted = key;

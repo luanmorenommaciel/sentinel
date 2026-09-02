@@ -1,20 +1,13 @@
 # flow-ui — working state
 
-*2026-09-01 · branch `feat/flow-ui` · **nothing committed***
+*2026-09-02 · branch `feat/flow-ui-silver-read` · V1–V2.3 merged to `main` in PR #31*
 
 ## Where things are
 
-Working tree only. `git status`:
-
-```
- M Makefile                    generate-stream + ui targets
- M docker-compose.yml          flow-ui service + generator-config mount
-?? services/flow-ui/           the whole service
-   docs/research/data-observability-competitive-landscape.md   (the V2 roadmap)
-```
+On `main` since PR #31. In flight on this branch: Silver as the fourth box on the Flow board.
 
 Run: `make up` → `make ui` → `make generate-stream DURATION=20m`.
-Tests: `cd services/flow-ui && .venv/bin/python -m pytest tests -q` → 47 passing.
+Tests: `cd services/flow-ui && .venv/bin/python -m pytest tests -q` → 63 passing.
 
 ## What V1 does
 
@@ -258,6 +251,31 @@ retained Map either way.
 stack whose ClickHouse volume predates the DDL. The node then shows the declared figure
 alone, as it always did.
 
+## Shipped: Silver on the graph — and drawn as a derivation, not a hop
+
+Silver was being *read* and was nowhere on the picture, so the one board people look at
+claimed the pipeline ended at bronze. It is now the fourth box, and the link into it is
+deliberately **not a pipe**.
+
+Everything else on this canvas transports something: a pipe has a casing, a bore, mouths at
+both ends, and particles inside it, because a signal really does leave one place and arrive at
+another. Bronze to Silver moves nothing — ADR-0010's materialized views fire *inside*
+ClickHouse on the same insert that writes bronze. Drawing a run between them would claim a hop
+that never happens and invite the question that follows from it ("what is the latency of that
+hop?"), which has no answer. So it is a short double bar with a tip, captioned `derived` /
+`on insert`, and no particle ever enters it.
+
+**Three states, and the box says which.** Absent (no `silver` database — a volume older than
+the DDL), present and empty (the normal state of a stack nobody has streamed into: the MVs do
+not `POPULATE`), and populated. `silver_state()` reads `system.tables`, so it is metadata —
+0.025 s, never scans a row — and the same distinction `counts()` makes for the same reason.
+
+Open, it lists the three models with their row counts and the six read views, with
+`service_health_1m` marked as the only one this service actually consumes — so the panel does
+not imply flow-ui reads six things it does not read. Six tests pin the parsing, including the
+present-but-empty vs absent split and an unreachable ClickHouse reading as absent rather than
+taking the board down.
+
 ## Next planned step
 
 Tier 1 is now closed to the limit of the data. What remains:
@@ -268,7 +286,7 @@ Tier 1 is now closed to the limit of the data. What remains:
 * **V2.4 · freshness/arrival lag** and the **Arrival watcher**, both blocked on the same
   prerequisite: an arrival timestamp at the collector's write path. Worth an ADR, not UI work.
 * A **geometry test**. Two layout collisions and one overlap reached the reader today; the
-  57 tests cover the backend and the pure logic and nothing about where things land.
+  63 tests cover the backend and the pure logic and nothing about where things land.
 * **The rest of V2.3**, which is two pieces, not four: a per-node state timeline (needs
   per-service history retained, which nothing does today) and Grafana node-graph frames.
   Edge thickness by throughput and edge colour by violation rate are not pending — there is

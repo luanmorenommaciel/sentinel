@@ -206,6 +206,12 @@ class Snapshot:
     metrics_by_service: dict = field(default_factory=dict)
     scenario: str = "—"
 
+    #: What Silver holds — `{present, models, views, mvs}`. `present` is load-bearing: a
+    #: volume created before the Silver DDL has no `silver` database, and an absent Silver is
+    #: a different statement from an empty one. Empty is normal on a fresh stack, because the
+    #: MVs do not `POPULATE` and only see inserts made after the DDL was applied.
+    silver: dict = field(default_factory=dict)
+
     #: Per-producer latency and error rate, read from `silver.service_health_1m`. The first
     #: thing this service reads out of Silver rather than deriving from Bronze — and an
     #: addition, not a migration: Silver's MVs do not `POPULATE`, so it only knows what
@@ -445,6 +451,7 @@ class Poller:
         snap.volume = self.latest.volume
         snap.call_edges = self.latest.call_edges
         snap.service_health = self.latest.service_health
+        snap.silver = self.latest.silver
         self.latest = snap
         self.broadcaster.publish(snap)
 
@@ -488,12 +495,14 @@ class Poller:
                 band = await self._ch.volume_band(self._s.volume_window_min)
                 edges = await self._ch.call_edges()
                 health = await self._ch.service_health()
+                silver = await self._ch.silver_state()
                 self.latest.lineage = lineage
                 self.latest.scenario = scenario
                 self.latest.metrics_by_service = inventory
                 self.latest.volume = [volume_state(r) for r in band]
                 self.latest.call_edges = edges
                 self.latest.service_health = health
+                self.latest.silver = silver
             except Exception as exc:                      # noqa: BLE001 — never kill the loop
                 log.debug("lineage refresh failed: %s", exc)
             await asyncio.sleep(self._s.lineage_interval_s)

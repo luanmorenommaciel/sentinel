@@ -225,6 +225,13 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
 /* Same 1.5px wall. Only the bore grows, because only the payload did. */
 .pw.trunk{stroke-width:24}
 .pb.trunk{stroke-width:21}
+/* BRONZE ⇒ SILVER is a DERIVATION, not a run. Everything else on the canvas transports
+   something along a bore; this moves nothing — the materialized views fire inside ClickHouse
+   on the same insert. A double bar says "what this becomes", a pipe would say "where this
+   goes", and only one of those is true. No mouths, no particles, on purpose. */
+.derive{fill:none;stroke:var(--rule-arrow);stroke-width:1.6;opacity:.75}
+.derive.tip{opacity:1}
+
 /* A mouth is a LIP, and a lip is pipe-shaped: a short section perpendicular to the run,
    wider than the casing it caps. It was a circle, which read as a bead threaded onto the
    line — the one shape that says "not a pipe". Sized to the casing at each site, so the
