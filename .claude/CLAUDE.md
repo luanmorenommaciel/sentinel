@@ -36,7 +36,7 @@ Three services and two data layers, all verified running:
 |---|---|---|
 | `services/generator-python` | Pod 1 — OTLP generator | 178 pytest |
 | `services/collector-rust` | Pod 2 — OTLP → `bronze.*` | 92 inline + 4 integration |
-| `services/flow-ui` | the pipeline watching itself · `:8080` · read-only | 57 pytest |
+| `services/flow-ui` | the pipeline watching itself · `:8080` · read-only | 63 pytest |
 | `bronze.*` | ADR-0007 · 4 live tables + 3 empty by contract | applied on ClickHouse boot |
 | `silver.*` | ADR-0010 · 3 typed models + 6 read views | 60 SQL asserts |
 
@@ -44,8 +44,15 @@ Three services and two data layers, all verified running:
 view of bronze: *Flow* (the path, expandable in place), *Health*, *Contract* (what would be
 dropped under `strict`, and which producers violate), *Watchers* (rows/min per producer against
 a band, where the band drawn **is** the alerting rule). Nothing in the pipeline depends on it.
-It re-derives from Bronze several things Silver was built to serve —
-[#37](https://github.com/luanmorenommaciel/sentinel/issues/37).
+It now reads `silver.service_health_1m` for per-producer latency and error rate — drawn on
+each ORIGIN node as **declared → measured**, beside the latency `topology.yaml` claims — and
+draws Silver itself as the fourth box on the Flow board, linked to Bronze by a **derivation,
+not a pipe**: ADR-0010's materialized views fire inside ClickHouse on the same insert, so
+there is no hop to draw. It still derives contract violations, volume bands and call edges
+from Bronze: those MVs do not `POPULATE`, so moving them across would drop the history they
+depend on ([#37](https://github.com/luanmorenommaciel/sentinel/issues/37)).
+How it is built — stack, cadences, module map, six Mermaid diagrams — is
+[`services/flow-ui/ARCHITECTURE.md`](../services/flow-ui/ARCHITECTURE.md).
 
 **Silver is defined but not necessarily deployed**: the DDL runs on ClickHouse boot, so a
 volume older than the merge will not have it, and the MVs do not `POPULATE` — they see new

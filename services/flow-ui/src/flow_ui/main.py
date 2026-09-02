@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from flow_ui import topology
-from flow_ui.clickhouse import EMPTY_BY_CONTRACT
+from flow_ui.clickhouse import EMPTY_BY_CONTRACT, ClickHouse
 from flow_ui.config import settings
 from flow_ui.pipeline import Poller
 
@@ -145,13 +145,20 @@ def snapshot() -> dict:
 
 
 @app.get("/api/graph")
-def graph() -> dict:
+async def graph() -> dict:
     """The static half of the picture: the producer's declared topology and what each
-    bronze table holds. Cheap and unchanging, so the page fetches it once at load and the
-    SSE stream carries only the numbers that move."""
+    bronze and silver table holds. Cheap and unchanging, so the page fetches it once at load
+    and the SSE stream carries only the numbers that move.
+
+    Silver's schema belongs here and not in the snapshot for the same reason the bronze
+    datasheets do: three models of seventeen columns each would be ~3 KB repeated on every
+    frame, once a second, to say what it said the tick before.
+    """
     return {
         "topology": topology.service_graph(),
         "tables": topology.TABLE_DOCS,
+        "silver_graph": await poller.clickhouse.silver_graph(),
+        "silver_views": ClickHouse.SILVER_VIEW_DOCS,
         "empty_by_contract": topology.EMPTY_BY_CONTRACT,
         "derived": topology.DERIVED,
         "contract": topology.CONTRACT,

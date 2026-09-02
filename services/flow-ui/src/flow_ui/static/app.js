@@ -30,6 +30,7 @@
   const QUANTUM = 100;            // signals per dot at the overview
   const MAX_DOTS = 14;            // per lane; beyond this the eye reads a line, not a count
   const GAP = 110;                // between columns
+  const SHEET_W = 320;            // the bronze datasheet, which layout() must make room for
 
   //: Collapsed and expanded footprints. Layout is computed from these, so a box growing
   //: pushes its neighbours rather than overlapping them.
@@ -37,19 +38,29 @@
     origin:    { closed: [212, 196], open: [742, 248], openSel: [742, 386] },
     collector: { closed: [252, 152], open: [500, 344] },
     bronze:    { closed: [176, 136], open: [318, 252] },
+    //: SILVER open has no fixed size — `silverSize()` measures the graph. Add a model or
+    //: a view to the DDL and the box grows to hold it.
+    silver:    { closed: [186, 136] },
   };
 
-  let graph = null, snap = null, table = "otel_logs";
+  let graph = null, snap = null, table = null, model = null;
   //: A selected service filters what the graph reports about bronze. It cannot filter the
   //: live rates: `sentinel_signals_ingested_total` carries a `signal` label and no service
   //: label, so per-service throughput simply does not exist upstream of ClickHouse. The
   //: legend says so rather than letting the lanes imply otherwise.
   let service = null;
-  const open = { origin: false, collector: false, bronze: false };
+  const open = { origin: false, collector: false, bronze: false, silver: false };
   let painted = "", pools = {};
+  //: Where an open box's rows meet its edge, so the BRONZE ⇒ SILVER strands can be drawn
+  //: after both bodies have run. Reset on every render; empty whenever a box is closed.
+  let ports = { bronze: {}, silver: {} };
   const view = { k: 1, x: 0, y: 0 };   // viewport transform
   let root = null;                      // the <g> everything pans inside
   let vias = null;                      // the layer mouths are drawn into
+  let sheets = null;                    // the datasheets, redrawn without a full render
+  //: [pathId, silverTableItReads] for each read edge, so the tick can gate each one on the
+  //: growth of the table behind it rather than on the estate.
+  let readEdges = [];
 
   /* ── helpers ───────────────────────────────────────────────── */
   const fmt = (n) => {
@@ -164,12 +175,16 @@
     const CY = 220;
     const boxes = {};
     let x = 40;
-    for (const id of ["origin", "collector", "bronze"]) {
+    //: Silver sits close to bronze rather than a full GAP away, because nothing travels
+    //: between them: the materialized views fire inside ClickHouse on the same insert that
+    //: writes bronze. A long run would draw transport that does not happen.
+    const DERIVE_GAP = open.bronze && open.silver ? 130 : 52;
+    for (const id of ["origin", "collector", "bronze", "silver"]) {
       const key = !open[id] ? "closed"
         : (id === "origin" && service && SIZE[id].openSel) ? "openSel" : "open";
-      const [w, h] = SIZE[id][key];
+      const [w, h] = id === "silver" && open.silver ? silverSize() : SIZE[id][key];
       boxes[id] = { id, x, y: CY - h / 2, w, h };
-      x += w + GAP;
+      x += w + (id === "bronze" ? DERIVE_GAP : GAP);
     }
     // Signal lanes leave the origin container's right edge, not individual services: the
     // three types are a property of every service, not of any one of them.
@@ -207,20 +222,68 @@
     // about 200 of it — on a tall window the graph sat small in the middle of empty space.
     const bs = Object.values(boxes);
     const y0 = Math.min(...bs.map((b) => b.y)), y1 = Math.max(...bs.map((b) => b.y + b.h));
-    // The datasheet is drawn 40px past BRONZE and is 320 wide. It is not a box, so it was
-    // absent from these bounds and `fit()` scaled to a width that did not include it — the
-    // sheet ran off the right edge of the canvas whenever bronze was open.
-    const x1 = (x - GAP) + (open.bronze ? 40 + 320 : 0);
-    return { boxes, x0: 40, y0, width: x1 - 40, height: y1 - y0 };
+    // The datasheet goes BELOW bronze, directly under the table it describes.
+    //
+    // To the right it landed exactly where SILVER now sits and covered it — a detail panel
+    // over the nodes it is meant to explain, the third time that defect has reached the
+    // reader. Past SILVER it cleared the overlap and cost more: at 320 wide it took the
+    // canvas from 1080 to 1682 units, and `fit()` scales to the widest thing, so every box
+    // on the board shrank to 58% to make room for a panel. Below bronze it is 320 against
+    // bronze's own 318, so it adds no width at all — only height, on an arrangement that is
+    // far wider than it is tall and had the room to spare.
+    const sheet = open.bronze && table
+      ? { x: boxes.bronze.x, y: boxes.bronze.y + boxes.bronze.h + 30, w: SHEET_W, h: 236 }
+      : null;
+    // SILVER's sheet sits under SILVER, on the same rule: a sheet exists only while its own
+    // row is selected.
+    // Height follows the content: an MV has no columns of its own, so a 236-tall panel to
+    // hold three lines is mostly empty box.
+    const mDoc = (graph?.silver_graph || {})[model];
+    const mSheet = open.silver && model && mDoc
+      ? { x: boxes.silver.x, y: boxes.silver.y + boxes.silver.h + 30, w: SHEET_W,
+          h: mDoc.kind === "mv" ? 108
+            : 108 + Math.ceil((mDoc.columns?.length || 0) / 2) * 13 }
+      : null;
+    // Not a box, so it was absent from these bounds and `fit()` scaled to an extent that
+    // excluded it — the sheet ran off the canvas whenever bronze was open.
+    const btm = [sheet, mSheet].filter(Boolean);
+    const x1 = Math.max(x - GAP, ...btm.map((z) => z.x + z.w));
+    return { boxes, sheet, mSheet, x0: 40, y0, width: x1 - 40,
+             height: Math.max(y1, ...btm.map((z) => z.y + z.h)) - y0 };
   }
 
   /* ── particle pools ────────────────────────────────────────── */
+  /** A deterministic scatter, keyed by the pool and the dot index.
+   *
+   *  Telemetry does not arrive on a metronome and the board should not draw one. Evenly
+   *  spaced departures read as 1-2-3, 1-2-3 — a rhythm the pipeline does not have — and
+   *  identical durations keep it forever, because every dot returns to its slot each cycle.
+   *
+   *  Seeded rather than `Math.random`, so a pool laid out twice lands the same way: a
+   *  structural repaint must not reshuffle a lane the reader is already watching, which is
+   *  the same reason `order` uses farthest-point insertion instead of a modular stride.
+   */
+  const jitter = (key, i) => {
+    let h = 2166136261;
+    const str = `${key}#${i}`;
+    for (let k = 0; k < str.length; k++) { h ^= str.charCodeAt(k); h = Math.imul(h, 16777619); }
+    return ((h >>> 0) % 10000) / 10000;                       // [0, 1)
+  };
+
+  //: How far a departure may slide inside its own slot, and how much two dots' speeds may
+  //: differ. The spread is what breaks the pattern; the drift is what stops it re-forming,
+  //: because dots at slightly different speeds never return to the same relative positions.
+  const SPREAD = 0.55, DRIFT = 0.14;
+
   const flow = (parent, pathId, key, cls, dur = 2.4, r = 3.2, n = MAX_DOTS) => {
     const pool = [];
     for (let i = 0; i < n; i++) {
+      const slot = dur / n;
+      const off = (jitter(key, i) - 0.5) * SPREAD * slot;
+      const own = dur * (1 + (jitter(key, i + 500) - 0.5) * DRIFT);
       const c = el("circle", { class: cls, r, opacity: 0 });
-      const a = el("animateMotion", { dur: `${dur}s`, repeatCount: "indefinite",
-        begin: `${((dur / n) * i).toFixed(2)}s` });
+      const a = el("animateMotion", { dur: `${own.toFixed(2)}s`, repeatCount: "indefinite",
+        begin: `${Math.max(0, slot * i + off).toFixed(2)}s` });
       a.append(el("mpath", { href: `#${pathId}` }));
       c.append(a); parent.append(c); pool.push(c);
     }
@@ -275,10 +338,15 @@
   const flow3 = (parent, pathId, keyBase, dur = 2.4, r = 3.2, n = 2) =>
     LANES.forEach(([name, cls], k) => {
       flow(parent, pathId, `${keyBase}-${name}`, cls, dur, r, n);
-      // stagger each colour by a third of a slot so they do not overlap exactly
+      // A third of a slot per colour was the other half of the metronome: three colours
+      // marching a fixed distance apart reads as 1-2-3 even once each colour is scattered.
+      // The colour's share of the slot is now scattered too, around that same third.
       (pools[`${keyBase}-${name}`] || []).forEach((c, i) => {
         const a = c.querySelector("animateMotion");
-        if (a) a.setAttribute("begin", `${((dur / n) * i + (dur / n / 3) * k).toFixed(2)}s`);
+        if (!a) return;
+        const slot = dur / n;
+        const lane = slot * (k / LANES.length + (jitter(`${keyBase}${name}`, i) - 0.5) * 0.5);
+        a.setAttribute("begin", `${Math.max(0, slot * i + lane).toFixed(2)}s`);
       });
     });
   /** A batch, drawn as what it contains. The buffer flushes ONE mixed batch — the
@@ -319,8 +387,47 @@
     pools[key] = pool;
   };
 
-  const dots = (rate) => rate <= 0 ? 0
-    : Math.max(1, Math.min(MAX_DOTS, Math.round(Math.pow(rate / QUANTUM, .62) * 2.6)));
+  //: Lane density, smoothed then quantised — and it needs both.
+  //:
+  //: The rate arriving each tick BEATS. The generator emits on a 1s step and the poller
+  //: samples on a 1s interval, so the two drift against each other and a window catches two
+  //: of the generator's ticks or none: `logs` reads a steady 82/s sampled every 2s while the
+  //: per-second series alternates. Drawn straight, the logs lane ran 4,2,4,2,4,2 — dots
+  //: appearing and vanishing on the beat, which is what a reader sees and reports.
+  //:
+  //: An EMA absorbs the beat without hiding a real change; a deadband on top of it stops the
+  //: rounding boundary flickering the last dot. Display only — every figure printed on the
+  //: page is still the raw measurement, and the smoothing never reaches the verdict.
+  const ALPHA = 0.35, DEADBAND = 0.65;
+  const ema = {}, held = {};
+
+  /** Is this lane moving? Same smoothing, for the gates that are on/off rather than a count.
+   *
+   *  `rate > 0` on a beating series reads 0 in whichever window catches none of the
+   *  generator's ticks, so a run went still for one frame and came back — the same defect as
+   *  the flickering dot, in binary. The threshold sits below one signal per second: a lane
+   *  that has genuinely stopped decays past it within a few ticks, one that is merely being
+   *  sampled badly does not.
+   */
+  //: Named `moving`, not `live`: `density` declares its own `const live` for the
+  //: has-any-traffic flag, and a module-level `live` was shadowed by it for that entire
+  //: scope — every call after that line hit a number instead of a function and threw, so
+  //: every gate from BRONZE onward silently stopped. The shows before it kept working,
+  //: which is exactly how it looked from outside.
+  const moving = (key, rate) => {
+    ema[key] = ema[key] === undefined ? rate : ema[key] * (1 - ALPHA) + rate * ALPHA;
+    return ema[key] > 0.5;
+  };
+
+  const dots = (key, rate) => {
+    if (rate <= 0) { ema[key] = 0; held[key] = 0; return 0; }
+    ema[key] = ema[key] === undefined ? rate : ema[key] * (1 - ALPHA) + rate * ALPHA;
+    const raw = Math.max(1, Math.min(MAX_DOTS, Math.pow(ema[key] / QUANTUM, .62) * 2.6));
+    const prev = held[key];
+    const n = prev === undefined || Math.abs(raw - prev) > DEADBAND ? Math.round(raw) : prev;
+    held[key] = n;
+    return n;
+  };
 
   /* ── per-service health, fused ─────────────────────────────
    *
@@ -474,10 +581,19 @@
     t.nodes.forEach((n) => {
       const p = pos[n.id], row = byName[n.service], sel = n.service === service;
       const h = serviceHealth(n.service);
+      //: Declared beside measured. `topology.yaml` says what a component's latency should be;
+      //: Silver's `service_health_1m` says what its operations actually took. The repo's rule
+      //: applies — the two disagreeing is the finding — and this is the first thing drawn from
+      //: `silver.*` rather than derived from Bronze. Absent whenever Silver is not deployed,
+      //: which is any stack whose ClickHouse volume predates the DDL; the node then shows the
+      //: declared figure alone, exactly as it always did.
+      const sh = (snap?.service_health || []).find((r) => r.service === n.service);
       const node = el("g", { class: "hit", tabindex: "0", role: "button",
         "aria-pressed": String(sel),
         // The reason travels with the node for anyone not reading colour.
-        "aria-label": `Trace ${n.service} through the pipeline — ${h.state}: ${h.why}` });
+        "aria-label": `Trace ${n.service} through the pipeline — ${h.state}: ${h.why}`
+          + (sh ? ` · measured p50 ${sh.p50} ms, p99 ${sh.p99} ms, ${(sh.error_rate * 100).toFixed(2)}% errors`
+                : "") });
       node.dataset.service = n.service;
       // Name on its own line, figure on the next: at 196px a 24-character service name
       // and a right-aligned count were landing on the same pixels.
@@ -494,7 +610,10 @@
         el("text", { class: "txt", x: p.x + 16, y: p.y + 17 },
           clip(n.service, n.roots ? 21 : 26)),
         el("text", { class: "sub", x: p.x + 16, y: p.y + 33 },
-          `${n.kind} · ${n.latency_ms ?? "?"} ms`),
+          `${n.kind} · ${n.latency_ms ?? "?"} ms`
+          // Not `fmt()`: it abbreviates 1796.6 to "1.8k", which is coarser than the declared
+          // "1800" it sits beside — and the comparison is the entire point of the pair.
+          + (sh ? ` \u2192 ${Math.round(sh.p50)} ms` : "")),
         el("text", { class: "val", x: p.x + NW - 12, y: p.y + 33 }, row ? fmt(row.total) : "—"));
       if (n.roots) node.append(el("text", { class: "cue end", x: p.x + NW - 12, y: p.y + 17 }, "ROOT"));
       g.append(node);
@@ -674,6 +793,334 @@
     });
   }
 
+  /** Which bronze table each silver model is materialized FROM. Read off the four
+   *  `CREATE MATERIALIZED VIEW ... TO silver.x ... FROM bronze.y` statements in
+   *  `infra/clickhouse/init.d/02-silver-layer.sql`, not inferred from the names — and it is
+   *  not 1:1: gauge and sum both land in `metric_observations`, which is the one thing about
+   *  this layer a reader cannot get from anywhere else on the board.
+   */
+  /** Which signal colour a bronze table carries. Bronze routes on data-point TYPE, so the
+   *  four names are the four types; the fallback exists so an added table is drawn in the
+   *  neutral lane rather than crashing the render or silently reading as logs. */
+  const toneOf = (t) => /log/.test(t) ? "p1" : /trace|span/.test(t) ? "p2"
+    : /metric/.test(t) ? "p3" : "p1";
+
+  /** Every strand from BRONZE into SILVER, READ from the lineage rather than listed here.
+   *
+   *  It is one entry per materialized view that reads a bronze table — which is what a
+   *  strand *is*. Written as a constant it was a fourth copy of the DDL, after the SQL, the
+   *  MV definitions and `system.tables`, and the first thing to go stale the day someone
+   *  adds a model. Add an MV to `02-silver-layer.sql` and a strand appears; nothing here
+   *  needs editing.
+   */
+  const derives = () => {
+    const G = graph?.silver_graph || {};
+    return Object.entries(G)
+      .filter(([, n]) => n.kind === "mv")
+      .flatMap(([name, n]) => (n.sources || [])
+        .filter((src) => src.startsWith("bronze."))
+        .map((src) => [src.split(".")[1], name, toneOf(src.split(".")[1])]))
+      .sort((a, z) => bronzeOrder().indexOf(a[0]) - bronzeOrder().indexOf(z[0]));
+  };
+  //: The order bronze draws its own tables in, so the strands leave in the order they
+  //: arrive. Read from the same `graph.tables` bronzeBody iterates, never listed twice.
+  const bronzeOrder = () => Object.keys(graph?.tables || {});
+
+  const FEEDS_FALLBACK = "bronze";
+
+  /** SILVER — what Bronze becomes, not where Bronze goes.
+   *
+   *  The link from bronze is NOT a pipe, and that is the point. Everything else on this
+   *  canvas transports something: signals move along a bore from one component to another.
+   *  Bronze to Silver moves nothing — ADR-0010's materialized views fire inside ClickHouse
+   *  on the same insert that writes bronze. Drawing a run between them would claim a hop
+   *  that never happens, so it is drawn as a derivation: a short double bar, no particles.
+   */
+  //: Inside SILVER: three columns, one per kind, in the order data reaches them.
+  //: `colGap` is routing room, not decoration: ten table→view edges have to pass between
+  //: those two columns, and at 26 they shared one channel and rendered as a smear.
+  const SB = { w: 180, h: 34, gap: 6, colGap: 72, pad: 26, head: 86 };
+
+  /** SILVER's open footprint, measured from the graph rather than typed in.
+   *
+   *  Three columns because there are three kinds of object in ClickHouse, and that is a
+   *  property of ClickHouse, not of this schema. Height is however many rows the tallest
+   *  column needs. Add a model or a read view to `02-silver-layer.sql` and the box grows to
+   *  hold it with no edit here — which is the whole point of reading `system.tables`
+   *  instead of restating it.
+   */
+  function silverSize() {
+    const lay = silverLayout(graph?.silver_graph || {}, { x: 0, y: 0 });
+    const cols = Math.max(3, lay?.cols || 3), rows = Math.max(1, lay?.rows || 1);
+    return [SB.pad * 2 + SB.w * cols + SB.colGap * (cols - 1),
+            SB.head + rows * (SB.h + SB.gap) + 18];
+  }
+
+  /** SILVER, opened: every object in the database as its own box, and the lineage between.
+   *
+   *  Three kinds live in `silver` and collapsing them was the confusion this fixes — the
+   *  first version drew three boxes and a list of six names, which said nothing about what
+   *  separates them:
+   *
+   *  - **table** (MergeTree) — stores rows. It has a count, a sort key and a TTL.
+   *  - **mv** (MaterializedView) — stores nothing. In ClickHouse this is an *insert
+   *    trigger*, not a stored result set: rows land in its source, it runs its SELECT over
+   *    that block and inserts into its target. It is why Silver holds only what arrived
+   *    after the DDL did.
+   *  - **view** — a named query, run when read. No rows exist until someone asks, so there
+   *    is no count to show and never will be.
+   *
+   *  Which is why the edges are not all the same edge. Bronze → mv → table carries
+   *  particles: rows really do move, on the insert. table → view carries none: nothing
+   *  flows there until a reader runs the query, and animating it would claim a stream that
+   *  does not exist. Colour is the source table's signal type throughout.
+   */
+  function silverBody(g, b, edges, fx) {
+    const sv = snap?.silver || {};
+    if (!sv.present) {
+      g.append(el("text", { class: "txt", x: b.x + 18, y: b.y + 66 }, "not deployed"),
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 88 }, "the DDL applies on"),
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 102 }, "ClickHouse boot — a volume"),
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 116 }, "older than it has no silver"));
+      return;
+    }
+    const models = sv.models || {}, total = Object.values(models).reduce((a, z) => a + z, 0);
+    if (!open.silver) {
+      g.append(el("text", { class: "txt", x: b.x + 18, y: b.y + 66 }, fmt(total) + " rows"),
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 88 },
+          `${Object.keys(models).length} models · ${(sv.views || []).length} read views`),
+        // Empty is the normal state of a stack nobody has streamed into yet, and it is a
+        // different statement from absent. Saying which keeps the box honest.
+        el("text", { class: "sub", x: b.x + 18, y: b.y + 106 },
+          total ? `${sv.mvs} materialized views feeding` : "empty — run a stream"));
+      return;
+    }
+    const G = graph?.silver_graph || {};
+    const lay = silverLayout(G, b);
+    if (!lay) return;
+
+    // A key, not column headings: the columns are DAG depth now, so any of them can hold
+    // any kind. Kind is carried by the border, and a border style nobody explains is a
+    // pattern, not information.
+    // The key is a legend, not a control, and it was being read as three checkboxes: a
+    // 12x12 rounded square beside a label is the shape of something you tick. It is a wide
+    // flat bar now — a miniature of the node it describes, which is what it actually is —
+    // and `pointer-events:none` means it never takes a cursor either.
+    //
+    // It does answer the pointer, though, just from the other end: selecting a node lights
+    // the swatch for that node's kind. The legend stops being dead chrome and starts saying
+    // "the thing you just picked is one of these".
+    const picked = (graph?.silver_graph || {})[model]?.kind;
+    [["k-table", "table", "table", "lit — the rows are in here"],
+     ["k-mv", "mv", "materialized view", "dim — a trigger; rows pass through"],
+     ["k-view", "view", "read view", "dark — a query, run when read"]]
+      .forEach(([k, kind, t, why], i) => {
+        const x = b.x + SB.pad + i * 210, y = b.y + 46, on = kind === picked;
+        // `el`'s third argument is TEXT, not children — passing elements there set the
+        // group's textContent and the swatch was never created at all.
+        const key = el("g", { class: "key" + (on ? " on" : "") });
+        key.append(
+          el("rect", { class: "sw sub-nd " + k, x, y: y - 8, width: 24, height: 11, rx: 2 }),
+          el("text", { class: "sub", x: x + 32, y }, t),
+          el("text", { class: "sub", x: x + 32, y: y + 12, style: "opacity:.5" }, why));
+        g.append(key);
+      });
+
+    // Lineage inside SILVER, drawn before the boxes so the boxes cap the runs. Each read
+    // edge gets its own vertical channel in the gap; sharing one turned ten dependencies
+    // into a single unreadable smear.
+    let lane = 0;
+    for (const [name, n] of Object.entries(lay.nodes)) {
+      for (const up of lay.feeds[name]) {
+        const from = lay.nodes[up];
+        if (!from) continue;
+        const cls = lay.tone[up] || "p1";
+        // An MV WRITING its target is real movement — rows land on that insert — so it gets
+        // a pipe with particles. Everything else here is a READ: a view's source, or an MV's
+        // input, where nothing travels until the query runs. Same lineage, different claim.
+        if (G[up]?.target === name) {
+          const id = `sv-${up}`;
+          pipe(edges, id, fan(from.x + SB.w, from.cy, n.x, n.cy, 12), "", {}, 7);
+          mouth(from.x + SB.w, from.cy, 7);
+          mouth(n.x, n.cy, 7);
+          spawn(fx, id, cls);
+        } else {
+          // `p1..p3` are particle FILL classes; an edge wearing one renders filled.
+          const rid = `rd${lane}`;
+          edges.append(el("path", { id: rid, class: "lin " + cls.replace("p", "e"),
+            d: fan(from.x + SB.w, from.cy, n.x, n.cy, 10 + (lane++ % 10) * 6) }));
+          // Smaller and slower than a pipe's dots, because the claim is different: a view
+          // is read, not fed. The weight carries what the dashed line already says.
+          spawn(fx, rid, cls, 2, 1.9);
+          readEdges.push([rid, up]);
+        }
+      }
+    }
+
+    for (const [name, n] of Object.entries(lay.nodes)) {
+      const kind = G[name].kind, sel = name === model;
+      const node = el("g", { class: "hit", tabindex: "0", role: "button",
+        "aria-label": `${name}, ${KIND_SAYS[kind]}` });
+      node.dataset.model = name;
+      const rows = models[name];
+      node.append(el("rect", { class: "nd sub-nd" + (sel ? " sel" : "") + " k-" + kind,
+          x: n.x, y: n.y, width: SB.w, height: SB.h, rx: 3 }),
+        el("text", { class: "txt", x: n.x + 9, y: n.y + 15, style: "font-size:9px" },
+          clip(name, 28)),
+        el("text", { class: "sub", x: n.x + 9, y: n.y + 27, style: "opacity:.6" },
+          kind === "view" ? (graph?.silver_views?.[name]?.[0] || "query")
+            : kind === "mv" ? "on insert" : "stored"),
+        // Only a table has a count. A view's rows do not exist until it is read, and an MV
+        // holds none at all — printing 0 there would be a different claim from "none".
+        el("text", { class: rows === undefined ? "sub" : "val", x: n.x + SB.w - 9, y: n.y + 21,
+            style: rows === undefined ? "text-anchor:end;opacity:.4" : "text-anchor:end" },
+          rows === undefined ? "—" : fmt(rows)));
+      g.append(node);
+      if (kind === "mv") ports.silver[name] = { x: n.x, y: n.cy };
+    }
+  }
+
+  //: The short form, for the sheet header where there are 320 units to share with a title.
+  const KIND_SHORT = { table: "table", mv: "materialized view", view: "read view" };
+  //: The long form, for the screen reader, which has no width limit and needs the whole
+  //: distinction spelled out — it cannot see the border style that carries it visually.
+  const KIND_SAYS = {
+    table: "a table — stores rows",
+    mv: "a materialized view — an insert trigger, stores nothing",
+    view: "a read view — a query, run when read, stores nothing",
+  };
+
+  //: Particles for one strand, on the batch arrival that feeds it.
+  function spawn(fx, id, cls, r = 2.6, slow = 1) {
+    const { dur, n } = pools.__batch || { dur: 3.2, n: 3 };
+    const pool = [];
+    for (let k = 0; k < n; k++) {
+      const c = el("circle", { class: cls, r, opacity: 0 });
+      const own = dur * 0.55 * slow * (1 + (jitter(id, k + 500) - 0.5) * DRIFT);
+      const off = (jitter(id, k) - 0.5) * SPREAD * (dur / n);
+      const a = el("animateMotion", { dur: `${own.toFixed(2)}s`,
+        repeatCount: "indefinite",
+        begin: `${Math.max(0, k * dur / n + dur + off).toFixed(2)}s` });
+      a.append(el("mpath", { href: `#${id}` }));
+      c.append(a); fx.append(c); pool.push(c);
+    }
+    pools[id] = pool;
+  }
+
+  /** Rows and columns for SILVER's objects, laid out by DEPTH in the DAG, not by kind.
+   *
+   *  Kind decided the column in the first version and it was wrong the moment the schema
+   *  stopped being a straight line. A second-stage MV — one reading a silver table rather
+   *  than a bronze one, which is how you build an hourly rollup — belongs *between* two
+   *  tables; by kind it landed back in column 0 and its edge ran right to left, drawing a
+   *  dependency that reads backwards. A table nothing feeds belongs at the start, not in the
+   *  middle. Depth puts each node after everything it reads, whatever it happens to be, and
+   *  the kind is carried by the border and the sub-label instead.
+   *
+   *  Edges are the dependency, in both directions the DDL states them: an MV *reads* its
+   *  sources and *writes* its target, so a table's producers are the MVs pointing at it.
+   */
+  function silverLayout(G, b) {
+    const names = Object.keys(G);
+    if (!names.length) return null;
+    const bare = (r) => r.split(".")[1];
+
+    // Who feeds whom. A table has no `sources` of its own — it is fed by the MVs whose
+    // `target` it is, so that edge has to be read backwards out of the MV.
+    const feeds = {};
+    names.forEach((n) => { feeds[n] = new Set(); });
+    names.forEach((n) => {
+      (G[n].sources || []).forEach((src) => {
+        if (feeds[bare(src)]) feeds[n].add(bare(src));      // reads a silver object
+      });
+      const t = G[n].target;
+      if (t && feeds[t]) feeds[t].add(n);                   // an MV writes this table
+    });
+
+    // Depth = one past the deepest thing it reads. `busy` guards a cycle: ClickHouse will
+    // let you build one, and an unguarded walk would recurse until the stack gives out.
+    const depth = {}, busy = new Set();
+    const walk = (n) => {
+      if (n in depth) return depth[n];
+      if (busy.has(n)) return 0;
+      busy.add(n);
+      const up = [...feeds[n]].map(walk);
+      busy.delete(n);
+      return (depth[n] = up.length ? Math.max(...up) + 1 : 0);
+    };
+    names.forEach(walk);
+
+    const cols = [];
+    names.forEach((n) => { (cols[depth[n]] ||= []).push(n); });
+    // Within a column, follow the row of whatever feeds you, so runs stay short and mostly
+    // straight — the same rule that took the four bronze strands from crossing to flat.
+    const row = {};
+    cols.forEach((col, c) => {
+      col.sort((a, z) => {
+        const at = (n) => {
+          const up = [...feeds[n]].map((u) => row[u]).filter((r) => r !== undefined);
+          return up.length ? Math.min(...up) : (c === 0 ? -1 : 900);
+        };
+        return at(a) - at(z) || a.localeCompare(z);
+      });
+      col.forEach((n, i) => { row[n] = i; });
+    });
+
+    // Colour is the signal type of the bronze table the chain started from, carried forward
+    // so a rollup three hops down still reads as "this is the metrics lineage".
+    const tone = {};
+    const toneFor = (n) => {
+      if (tone[n]) return tone[n];
+      const ext = (G[n].sources || []).find((s) => s.startsWith("bronze."));
+      if (ext) return (tone[n] = toneOf(bare(ext)));
+      const up = [...feeds[n]];
+      return (tone[n] = up.length ? toneFor(up[0]) : "p1");
+    };
+    names.forEach((n) => { tone[n] = undefined; });
+    names.forEach(toneFor);
+
+    const nodes = {};
+    cols.forEach((col, c) => col.forEach((n, i) => {
+      const x = b.x + SB.pad + c * (SB.w + SB.colGap);
+      const y = b.y + SB.head + i * (SB.h + SB.gap);
+      nodes[n] = { x, y, cy: y + SB.h / 2, col: c, row: i };
+    }));
+    return { nodes, feeds, tone, cols: cols.length,
+             rows: Math.max(...cols.map((c) => c.length)) };
+  }
+
+  /** BRONZE ⇒ SILVER, per table, once both boxes are open.
+   *
+   *  Closed, this is one double bar: the honest summary of a derivation that moves nothing
+   *  across a network. Open, the reader is asking a lineage question — *which table becomes
+   *  which* — and that question has an answer only a drawing gives cheaply, because the
+   *  mapping is not 1:1. `otel_metrics_gauge` and `otel_metrics_sum` both land in
+   *  `metric_observations`; nothing else on this board says so.
+   *
+   *  The strands carry particles and the strands are short, which is the point: the dots
+   *  depart on the SAME batch arrival that fills the bronze row, because ADR-0010's
+   *  materialized views fire inside ClickHouse on that insert. They are not a second hop
+   *  after it. The two vertical channels for the metrics pair are deliberately offset so the
+   *  merge is visible as a merge rather than as one line drawn twice.
+   */
+  function derivations(edges, fx, B) {
+    if (!(open.bronze && open.silver)) return;
+    let seen = 0;
+    derives().forEach(([from, to, cls], i) => {
+      const a = ports.bronze[from], z = ports.silver[to];
+      if (!a || !z) return;
+      const id = `dv${i}`;
+      pipe(edges, id, fan(a.x, a.y, z.x, z.y, 30 + i * 8), "", {}, 7);
+      // Both ends. The collector→bronze trunk has always been capped at departure and
+      // arrival; every run added after it was capped only where it landed, so a pipe grew
+      // out of a flat box edge at one end and met a lip at the other.
+      mouth(a.x, a.y, 7);
+      mouth(z.x, z.y, 7);
+      spawn(fx, id, cls);
+      seen++;
+    });
+  }
+
   function bronzeBody(g, b, edges, fx) {
     const r = snap || {}, tables = graph?.tables || {};
     const total = Object.values(r.bronze || {}).reduce((a, z) => a + z, 0);
@@ -706,6 +1153,7 @@
         el("text", { class: "sub", x: x + 10, y: y + 32 },
           row ? `${service.slice(0, 22)} only` : `${tables[n].section} · +${fmt((r.bronze_rate || {})[n])}/s`));
       g.append(node);
+      ports.bronze[n] = { x: x + TW, y: y + TH / 2 };
       // One lane in, fanning to each table — and each strand carries the colour of what
       // actually lands there. Routing is by data-point TYPE, so a log only ever reaches
       // otel_logs; painting every strand the same colour said the opposite.
@@ -719,9 +1167,14 @@
       const { dur, n: inFlight } = pools.__batch || { dur: 3.2, n: 3 };
       const pool = [];
       for (let k = 0; k < inFlight; k++) {
+        // Scattered like every other lane. This loop builds its circles inline rather than
+        // through `flow`, so it kept marching in lockstep at exactly 3.20s after the others
+        // were broken up — the one lane still running on a metronome.
+        const own = dur * (1 + (jitter(id, k + 500) - 0.5) * DRIFT);
+        const off = (jitter(id, k) - 0.5) * SPREAD * (dur / inFlight);
         const c = el("circle", { class: cls, r: 3.2, opacity: 0 });
-        const a = el("animateMotion", { dur: `${dur}s`, repeatCount: "indefinite",
-          begin: `${(k * dur / inFlight + dur).toFixed(2)}s` });
+        const a = el("animateMotion", { dur: `${own.toFixed(2)}s`, repeatCount: "indefinite",
+          begin: `${Math.max(0, k * dur / inFlight + dur + off).toFixed(2)}s` });
         a.append(el("mpath", { href: `#${id}` }));
         c.append(a); fx.append(c); pool.push(c);
       }
@@ -730,10 +1183,10 @@
   }
 
   /* ── the datasheet, only when bronze is open ───────────────── */
-  function datasheet(parent, b) {
+  function datasheet(parent, sheet) {
     const d = (graph?.tables || {})[table];
-    if (!d) return;
-    const x = b.x + b.w + 40, y = b.y, w = 320, h = b.h;
+    if (!d || !sheet) return;
+    const { x, y, w, h } = sheet;
     parent.append(el("rect", { class: "nd sheet", x, y, width: w, height: h, rx: 4 }),
       el("text", { class: "lbl", x: x + 16, y: y + 24, style: "fill:var(--sec)" },
         table.toUpperCase()));
@@ -748,12 +1201,74 @@
       `TTL ${d.ttl} · ${d.section}`));
   }
 
+  /** The datasheet for a SILVER model — same shape as bronze's, different provenance.
+   *
+   *  Bronze's is hand-written in `topology.TABLE_DOCS` because the read contract makes a
+   *  *subset* claim: only some columns are populated, the rest sit at their ClickHouse
+   *  default by design (§2), and no DDL can express that. Silver makes no such claim — the
+   *  DDL is the whole definition — so its columns are read live from `system.columns` and
+   *  cannot drift from the deployed schema. Only the one-line summary is written by hand,
+   *  because a type is metadata and a purpose is a claim.
+   */
+  function modelsheet(parent, sheet) {
+    const d = (graph?.silver_graph || {})[model];
+    if (!d || !sheet) return;
+    const { x, y, w, h } = sheet;
+    parent.append(el("rect", { class: "nd sheet", x, y, width: w, height: h, rx: 4 }),
+      el("text", { class: "lbl", x: x + 16, y: y + 24, style: "fill:var(--sec)" },
+        model.toUpperCase()),
+      // What KIND it is, because that is the thing a reader gets wrong about a ClickHouse
+      // `silver` database. On its own line: the long form is 53 characters against a
+      // 320-wide sheet, so right-anchored beside the title it ran straight through it.
+      el("text", { class: "sub", x: x + w - 16, y: y + 24, style: "text-anchor:end" },
+        KIND_SHORT[d.kind] || ""));
+    // A view's own purpose comes from its grain and its answer; a table's is written down.
+    const vd = graph?.silver_views?.[model];
+    const say = d.summary || (vd ? `${vd[0]} · ${vd[1]}` : "");
+    (say.match(/.{1,48}(\s|$)/g) || []).slice(0, 2).forEach((line, i) =>
+      parent.append(el("text", { class: "sub", x: x + 16, y: y + 42 + i * 13 }, line.trim())));
+    // Reads above, writes below. Both at the same y drew one on top of the other.
+    if (d.sources?.length)
+      parent.append(el("text", { class: "sub", x: x + 16, y: y + 70, style: "opacity:.6" },
+        "reads " + clip(d.sources.join(", "), 52)));
+    if (d.target)
+      parent.append(el("text", { class: "sub", x: x + 16, y: y + 83, style: "opacity:.6" },
+        `writes silver.${d.target}`));
+    // Two columns: 16 to 19 columns will not fit one, and truncating the list would hide
+    // exactly the normalized fields that are the reason this layer exists.
+    const cols = d.columns || [], half = Math.ceil(cols.length / 2);
+    cols.forEach(([name, type], i) => {
+      const cx = x + 16 + (i < half ? 0 : w / 2 - 8);
+      const cy = y + 90 + (i % half) * 13;
+      parent.append(el("text", { class: "sub", x: cx, y: cy }, clip(name, 20)),
+        el("text", { class: "sub", x: cx + w / 2 - 24, y: cy,
+          style: "text-anchor:end;opacity:.55" }, clip(shortType(type), 13)));
+    });
+    // An MV has no columns and no sort key of its own; saying so beats an empty panel.
+    parent.append(el("text", { class: "sub", x: x + 16, y: y + h - 12 },
+      d.order_by ? `ORDER BY ${clip(d.order_by, 56)}`
+        : d.kind === "mv" ? "no storage of its own — the rows land in its target"
+        : "no sort key — computed at read time"));
+  }
+
+  //: ClickHouse spells types in full; the sheet has 13 characters. The distinction that
+  //: matters to a reader is the family, not the codec or the key type.
+  const shortType = (t) => t
+    .replace(/LowCardinality\((.*)\)/, "$1 (lc)")
+    .replace(/Map\(.*\)/, "Map")
+    .replace(/DateTime64\(\d+\)/, "DateTime64")
+    // Enum8('gauge' = 1, 'sum' = 2) is 30 characters of quoting to say "Enum8".
+    .replace(/Enum(\d+)\(.*\)/, "Enum$1");
+
   /* ── render ────────────────────────────────────────────────── */
-  const TITLE = { origin: "ORIGIN", collector: "COLLECTOR-RUST", bronze: "BRONZE" };
+  const TITLE = { origin: "ORIGIN", collector: "COLLECTOR-RUST", bronze: "BRONZE",
+                  silver: "SILVER" };
 
   function render() {
     const stage = $("stage");
     pools = {};
+    ports = { bronze: {}, silver: {} };
+    readEdges = [];
     const L = layout(), B = L.boxes;
     const svg = el("svg", { viewBox: `0 0 ${VW} ${VH}`, preserveAspectRatio: "xMidYMid meet" });
     const defs = el("defs");
@@ -774,6 +1289,8 @@
     svg.append(defs);
 
     root = el("g", { id: "vp" });
+    //: Captions that must sit above the edge layer but are not part of any node.
+    const nodesLater = [];
     const edges = el("g", { class: "ed-layer" });
     vias = el("g", { class: "via" });
     const fx = el("g", { filter: "url(#bloom)" });
@@ -794,6 +1311,37 @@
       route(B.collector.out[0], B.collector.out[1], B.bronze.in[0], B.bronze.in[1]), "trunk");
     mouth(B.collector.out[0], B.collector.out[1], 24);
     mouth(B.bronze.in[0], B.bronze.in[1], 24);
+
+    // BRONZE ⇒ SILVER. Not a pipe, and no mouths: nothing travels here. ADR-0010's
+    // materialized views fire inside ClickHouse on the same insert that writes bronze, so a
+    // run with dots in it would draw a hop that never happens. A double bar is the derivation
+    // mark — the two rules a reader has to keep apart are "moved" and "derived from".
+    const sb = B.bronze, sv = B.silver, dy = 5;
+    const x1 = sb.x + sb.w, x2 = sv.x, my = sb.y + sb.h / 2;
+    if (!(open.bronze && open.silver)) {
+      [-dy, dy].forEach((o) => edges.append(el("path", { class: "derive",
+        d: `M${x1} ${my + o} L${x2} ${my + o}` })));
+
+      // Lips here too. A lip marks where a run meets a box — it is a termination, not a
+      // claim about what travels — so it does not undo this bar carrying nothing.
+      mouth(x1, my, dy * 2 + 4);
+      mouth(x2, my, dy * 2 + 4);
+      // Dots down the middle of the bar. The rails stay a derivation mark — no casing, no
+      // bore — but rows really do move on that insert, and a still bar between two boxes
+      // whose counts are both climbing says the opposite.
+      edges.append(el("path", { id: "derive-track", class: "track",
+        d: `M${x1} ${my} L${x2} ${my}` }));
+      // `flow3`, not three `spawn`s: it already staggers the three colours by a third of a
+      // slot so they interleave instead of moving in lockstep. The bar stands for all four
+      // materialized views at once, so it carries whatever is actually moving — a single
+      // hardcoded class painted every dot amber, right by accident for metrics and wrong for
+      // the other two, which is the same defect the collector's outcome rows had.
+      flow3(fx, "derive-track", "dt", 2.6, 3, 2);
+      nodesLater.push(el("text", { class: "sub", x: (x1 + x2) / 2, y: my - 12,
+        style: "text-anchor:middle" }, "derived"),
+        el("text", { class: "sub", x: (x1 + x2) / 2, y: my + 20,
+          style: "text-anchor:middle" }, "on insert"));
+    }
     // Three batches in flight, evenly spaced. Each one's ARRIVAL time is what the burst
     // and the per-table fan below are keyed to, so the unpacking is not decorative timing
     // — it happens when the batch actually gets there.
@@ -823,7 +1371,7 @@
     }
     pools.__batch = { dur: BATCH_DUR, n: IN_FLIGHT };
 
-    for (const id of ["origin", "collector", "bronze"]) {
+    for (const id of ["origin", "collector", "bronze", "silver"]) {
       const b = B[id];
       const g = el("g", { class: "hit node", tabindex: "0", role: "button",
         "aria-expanded": String(open[id]),
@@ -841,27 +1389,50 @@
         el("text", { class: "cue", x: b.x + b.w - 18, y: b.y + 26,
           style: "text-anchor:end" }, open[id] ? "CLOSE ▾" : "OPEN ▸"));
       nodes.append(g);
-      ({ origin: originBody, collector: collectorBody, bronze: bronzeBody }[id])(g, b, edges, fx);
+      ({ origin: originBody, collector: collectorBody, bronze: bronzeBody,
+         silver: silverBody }[id])(g, b, edges, fx);
     }
-    if (open.bronze) datasheet(nodes, B.bronze);
+    derivations(edges, fx, B);
+    sheets = el("g", { class: "sheets" });
+    nodes.append(sheets);
+    drawSheets();
+    nodesLater.forEach((n) => nodes.append(n));
     // The burst only means something when a batch is actually arriving.
     show("burst", 0);
 
     stage.replaceChildren(svg);
     stage.querySelectorAll("[data-node]").forEach((n) => {
-      n.addEventListener("click", () => { open[n.dataset.node] = !open[n.dataset.node]; repaint(); });
+      n.addEventListener("click", () => {
+        open[n.dataset.node] = !open[n.dataset.node];
+        repaintNow();
+      });
       n.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); n.click(); }
       });
     });
+    // Both toggle, and both start unselected: a datasheet is the answer to a click, so it
+    // appears on one and goes away on the next. BRONZE used to open with `otel_logs`
+    // selected and no way to deselect it, which made the sheet a permanent fixture of the
+    // open box rather than something the reader asked for.
     stage.querySelectorAll("[data-table]").forEach((n) => {
-      n.addEventListener("click", (e) => { e.stopPropagation(); table = n.dataset.table; repaint(); });
+      n.addEventListener("click", (e) => {
+        e.stopPropagation();
+        table = table === n.dataset.table ? null : n.dataset.table;
+        reselect();
+      });
+    });
+    stage.querySelectorAll("[data-model]").forEach((n) => {
+      n.addEventListener("click", (e) => {
+        e.stopPropagation();
+        model = model === n.dataset.model ? null : n.dataset.model;
+        reselect();
+      });
     });
     stage.querySelectorAll("[data-service]").forEach((n) => {
       const pick = (e) => {
         e.stopPropagation();
         service = service === n.dataset.service ? null : n.dataset.service;
-        repaint();
+        repaintNow();
       };
       n.addEventListener("click", pick);
       n.addEventListener("keydown", (e) => {
@@ -993,10 +1564,9 @@
     $("z-in").addEventListener("click", () => zoomAt(VW / 2, VH / 2, 1.25));
     $("z-out").addEventListener("click", () => zoomAt(VW / 2, VH / 2, 1 / 1.25));
     $("z-home").addEventListener("click", () => {
-      open.origin = open.collector = open.bronze = false;
-      table = "otel_logs";
-      service = null;
-      repaint();
+      open.origin = open.collector = open.bronze = open.silver = false;
+      table = model = service = null;
+      repaintNow();
       fit();
     });
   }
@@ -1434,10 +2004,12 @@
   /* ── per-tick visibility ───────────────────────────────────── */
   function density(s) {
     const ing = s.ingest_rate || {};
-    show("logs", dots(ing.logs || 0));
-    show("trace", dots(ing.trace || 0));
-    show("metrics", dots(ing.metrics || 0));
-    const inFlight = Math.min(3, Math.round((s.flush_rate || 0) * 3.2 / 2));
+    show("logs", dots("logs", ing.logs || 0));
+    show("trace", dots("trace", ing.trace || 0));
+    show("metrics", dots("metrics", ing.metrics || 0));
+    ema.__flush = ema.__flush === undefined ? (s.flush_rate || 0)
+      : ema.__flush * (1 - ALPHA) + (s.flush_rate || 0) * ALPHA;
+    const inFlight = Math.min(3, Math.round(ema.__flush * 3.2 / 2));
     show("blk", inFlight);
     show("burst", inFlight);
     const total = Object.values(ing).reduce((a, z) => a + z, 0);
@@ -1454,7 +2026,50 @@
     // scenario — the same defect as a hard-coded colour, moved into the gate.
     const tnames = Object.keys(graph?.tables || {});
     for (let i = 0; i < 6; i++)
-      show(`be${i}`, ((s.bronze_rate || {})[tnames[i]] || 0) > 0 ? 3 : 0);
+      show(`be${i}`, moving(`be${i}`, (s.bronze_rate || {})[tnames[i]] || 0) ? 3 : 0);
+    // A derivation strand runs on the growth of the bronze table it reads, for the same
+    // reason: the MV fires on that table's insert and on nothing else. A silent source
+    // means a still strand, not a strand animating over nothing.
+    derives().forEach(([from], i) =>
+      show(`dv${i}`, moving(`dv${i}`, (s.bronze_rate || {})[from] || 0) ? 2 : 0));
+    // An MV writing its target is the one real movement inside SILVER, and its pool was
+    // being created and never shown — `spawn` fills `pools`, but nothing here revealed them,
+    // so the run existed with every dot at opacity 0. The gate is the growth of the bronze
+    // table the chain started from, resolved through the graph so a second-stage MV reading
+    // a silver table still finds its root rather than guessing.
+    const SG = graph?.silver_graph || {};
+    const rootRate = (name, seen = new Set()) => {
+      if (seen.has(name)) return 0;
+      seen.add(name);
+      for (const src of (SG[name]?.sources || [])) {
+        const [db, tbl] = src.split(".");
+        if (db === "bronze") return (s.bronze_rate || {})[tbl] || 0;
+        // A silver source is written by whichever MV targets it.
+        const feeder = Object.keys(SG).find((k) => SG[k].target === tbl);
+        if (feeder) return rootRate(feeder, seen);
+      }
+      return 0;
+    };
+    Object.keys(SG).forEach((name) => {
+      if (SG[name].kind === "mv")
+        show(`sv-${name}`, moving(`sv-${name}`, rootRate(name)) ? 2 : 0);
+    });
+    // Each type on the bar runs on the bronze tables that feed ITS materialized views,
+    // read from the graph so a new MV joins the right lane on its own.
+    const byTone = {};
+    derives().forEach(([from, , cls]) => {
+      byTone[cls] = (byTone[cls] || 0) + ((s.bronze_rate || {})[from] || 0);
+    });
+    LANES.forEach(([name, cls]) =>
+      show(`dt-${name}`, moving(`dt-${name}`, byTone[cls] || 0) ? 2 : 0));
+    // A read edge runs on the growth of the table being READ — a view over a silent table
+    // has nothing new to answer with. A silver table grows at the rate of whatever MV
+    // writes it, which resolves back to a bronze table through the same walk.
+    const tableRate = (tbl) => {
+      const feeder = Object.keys(SG).find((k) => SG[k].target === tbl);
+      return feeder ? rootRate(feeder) : 0;
+    };
+    readEdges.forEach(([id, src]) => show(id, moving(id, tableRate(src)) ? 2 : 0));
     // Each tap runs only while its own outcome is happening. A pipeline losing nothing
     // should have three still lines, not three animations implying otherwise.
     //
@@ -1486,10 +2101,56 @@
     show("h-drop", (s.drop_rate || 0) > 0 ? 2 : 0);
   }
 
+  /** Redraw only what a selection changes: the two sheets and which rows read as picked.
+   *
+   *  Selecting a row changes no geometry — the sheets sit below their box and are narrower
+   *  than it, so no box moves — but it used to go through `repaint`, which rebuilds the
+   *  whole stage. Rebuilding recreates every `animateMotion`, and an `animateMotion` keeps
+   *  its progress on the node itself, so every dot on the board jumped back to the mouth of
+   *  its pipe on every click. That invariant is the reason this page has no framework; it
+   *  should not be broken by its own click handler.
+   */
+  function drawSheets() {
+    if (!sheets) return;
+    sheets.replaceChildren();
+    const L = layout();
+    if (L.sheet) datasheet(sheets, L.sheet);
+    if (L.mSheet) modelsheet(sheets, L.mSheet);
+  }
+
+  function reselect() {
+    if (!sheets) return repaint();
+    drawSheets();
+    const stage = $("stage");
+    stage.querySelectorAll("[data-table]").forEach((n) =>
+      n.querySelector("rect")?.classList.toggle("sel", n.dataset.table === table));
+    stage.querySelectorAll("[data-model]").forEach((n) =>
+      n.querySelector("rect")?.classList.toggle("sel", n.dataset.model === model));
+    // The key follows the selection, so it has to be updated with it.
+    const kind = (graph?.silver_graph || {})[model]?.kind;
+    stage.querySelectorAll(".key").forEach((k) =>
+      k.classList.toggle("on",
+        !!kind && k.querySelector(".sw")?.classList.contains("k-" + kind)));
+    fit();
+  }
+
   /* ── structural repaint ────────────────────────────────────── */
+  /** Repaint and immediately re-apply the current density.
+   *
+   *  Anything that rebuilds the stage outside the tick has to do both: `render` creates
+   *  every dot at opacity 0, so a repaint on its own hands back an empty board that stays
+   *  empty until the next frame arrives.
+   */
+  function repaintNow() {
+    if (repaint() && snap) density(snap);
+  }
+
   function repaint() {
+    // Every box that can expand belongs in this key. Leaving one out does not fail loudly:
+    // the click flips `open[id]`, the key does not change, repaint returns early and the box
+    // simply never opens. `silver` was missing and the bug looked like a dead click.
     const key = [snap?.mode || "", graph ? 1 : 0, open.origin, open.collector, open.bronze,
-                 table, service].join("|");
+                 open.silver, service].join("|");
     if (key === painted) return false;
     const first = painted === "";
     painted = key;
@@ -1523,7 +2184,11 @@
     // A board only draws when it is on screen. Neither has animation to preserve, but
     // rebuilding a chart nobody is looking at, once a second, is work for nothing.
     drawBoards();
-    if (repaint()) return;          // structural only; throughput never rebuilds
+    // `density` runs whether or not the stage was rebuilt. It used to be skipped on a
+    // structural repaint — `if (repaint()) return` — and `render` creates every dot at
+    // opacity 0, so opening a box left the whole board blank until the NEXT tick a second
+    // later, then filled it again all at once. That reads as every particle restarting.
+    repaint();
     density(s);
   }
   const sum2 = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
@@ -1570,7 +2235,7 @@
     ceiling = h.ceiling_ms || ceiling;
     drawBoards();
   }).catch(() => {});
-  fetch("/api/graph").then((r) => r.json()).then((g) => { graph = g; painted = ""; repaint(); fit(); })
+  fetch("/api/graph").then((r) => r.json()).then((g) => { graph = g; painted = ""; repaintNow(); fit(); })
     .catch(() => {});
   const es = new EventSource("/stream");
   es.onmessage = (e) => { try { apply(JSON.parse(e.data)); } catch (_) { /* bad frame */ } };

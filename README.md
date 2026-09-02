@@ -9,7 +9,7 @@ Sentinel is an open-source observability + remediation system for data pipelines
 
 ## 1. System architecture
 
-Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling (bronze → silver → read models). **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top. Alongside the path — not in it — **`flow-ui` observes the pipeline** from the collector's `/metrics` and a read-only view of bronze; nothing in the path depends on it being up. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
+Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling (bronze → silver → read models). **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top. Alongside the path — not in it — **`flow-ui` observes the pipeline** from the collector's `/metrics` and read-only views of bronze and silver; nothing in the path depends on it being up. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
 
 ```mermaid
 flowchart TB
@@ -60,7 +60,7 @@ flowchart TB
         FLOW["flow-ui :8080<br/>four boards · read-only"]
     end
     POD2 -. "/metrics :9090" .-> FLOW
-    STORE -. "bronze.* read-only" .-> FLOW
+    STORE -. "bronze.* + silver.* read-only" .-> FLOW
 
     classDef contract fill:#fde68a,stroke:#b45309,stroke-width:4px,color:#3a2f00;
     classDef zone fill:#f1f5f9,stroke:#94a3b8,color:#0f172a;
@@ -162,6 +162,7 @@ sentinel/
 │   ├── collector-rust/            #   Pod 2 — selected Rust collector. Cargo/Docker/tests ✅
 │   ├── generator-python/          #   Pod 1 — Python telemetry generator (otelgen)
 │   └── flow-ui/                   #   the pipeline watching itself — four boards, read-only
+│       └── ARCHITECTURE.md      #     how it is built (FastAPI + SSE + no-framework SVG)
 │
 ├── .github/
 │   ├── PULL_REQUEST_TEMPLATE.md   # what · why (the linked issue) · tests/evidence

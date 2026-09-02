@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from typing import ClassVar
 
 import httpx
 
@@ -352,6 +354,186 @@ class ClickHouse:
                             "spans": int(spans), "errors": int(errors)})
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("call edges unavailable: %s", exc)
+        return out
+
+    async def service_health(self, minutes: int = 30, limit: int = 12) -> list[dict]:
+        """Per-producer latency and error rate, from Silver.
+
+        The first thing this service reads out of `silver.*` rather than deriving from
+        Bronze. It is an **addition, not a migration**: Bronze keeps answering the questions
+        it already answers, because Silver's materialized views do not `POPULATE` (ADR-0010)
+        and only see inserts made after the DDL was applied. Measured on this stack the day
+        Silver landed: `bronze.otel_traces` held 1,703,050 rows going back 36 hours while
+        `silver.operation_executions` held 12,849 going back 12 minutes. Moving the contract
+        and volume queries across today would have silently dropped 36 hours of evidence.
+
+        What it adds is genuinely new: flow-ui had **no per-service latency at all**. The
+        Health board's quantiles are the collector's *export* latency — how long writing to
+        ClickHouse takes — which is a different question from how long a producer's own
+        operations take.
+
+        Returns `[]` when `silver.*` is absent, which is the normal state of any stack whose
+        ClickHouse volume predates the Silver DDL: the boards degrade to what Bronze answers
+        rather than erroring.
+        """
+        sql = f"""
+        SELECT service_name,
+               sum(operation_count) AS ops,
+               sum(error_count) AS errors,
+               round(avg(latency_p50_ms), 1) AS p50,
+               round(max(latency_p95_ms), 1) AS p95,
+               round(max(latency_p99_ms), 1) AS p99,
+               round(max(latency_max_ms), 1) AS worst
+        FROM silver.service_health_1m
+        WHERE window_start >= now() - INTERVAL {int(minutes)} MINUTE
+        GROUP BY service_name ORDER BY ops DESC LIMIT {int(limit)} FORMAT TSV
+        """
+        out: list[dict] = []
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                svc, ops, errs, p50, p95, p99, worst = line.split("\t")
+                ops_i, errs_i = int(ops), int(errs)
+                out.append({
+                    "service": svc, "ops": ops_i, "errors": errs_i,
+                    "error_rate": round(errs_i / ops_i, 5) if ops_i else 0.0,
+                    "p50": float(p50), "p95": float(p95),
+                    "p99": float(p99), "max": float(worst),
+                })
+        except (httpx.HTTPError, ValueError) as exc:
+            # `UNKNOWN_TABLE` arrives here when the Silver DDL was never applied.
+            log.info("silver service health unavailable (is silver deployed?): %s", exc)
+        return out
+
+    #: Silver's three physical models, in the order the pipeline fills them.
+    SILVER_MODELS = ("operation_executions", "log_events", "metric_observations")
+
+    async def silver_state(self) -> dict:
+        """What Silver holds, and whether it is there at all.
+
+        Row counts come from `system.tables`, which is metadata — the same reason
+        :meth:`counts` reads `count()` rather than a windowed query. Cheap enough for the
+        slow lane and never scans a row.
+
+        `present` is the distinction the board needs: a ClickHouse volume created before the
+        Silver DDL landed has no `silver` database, and an empty Silver is a different
+        statement from an absent one. Both are normal — the DDL runs on ClickHouse boot, so a
+        fresh `make up` has Silver from the start and it stays empty until a stream runs,
+        because ADR-0010's materialized views do not `POPULATE`.
+        """
+        out = {"present": False, "models": {}, "views": [], "mvs": 0}
+        try:
+            rows = await self._query(
+                "SELECT engine, name, toUInt64(ifNull(total_rows, 0)) "
+                "FROM system.tables WHERE database = 'silver' FORMAT TSV")
+        except httpx.HTTPError as exc:
+            log.info("silver state unavailable: %s", exc)
+            return out
+        for line in rows.splitlines():
+            if not line.strip():
+                continue
+            try:
+                engine, name, n = line.split("\t")
+            except ValueError:
+                continue
+            out["present"] = True
+            # Same classification as `silver_graph`, and it has to stay the same: matching
+            # the literal "MergeTree" left a SummingMergeTree rollup out of `models`, so the
+            # board drew the table but had no count to put in it.
+            if engine == "MaterializedView":
+                out["mvs"] += 1
+            elif engine == "View":
+                out["views"].append(name)
+            else:
+                out["models"][name] = int(n)
+        out["views"].sort()
+        return out
+
+    #: What each Silver model is *for*. The only hand-written part of its datasheet, and
+    #: deliberately so: a type is metadata, a purpose is a claim, and ClickHouse holds the
+    #: first and not the second.
+    SILVER_SUMMARY: ClassVar[dict[str, str]] = {
+        "operation_executions": "One row per span. Duration is milliseconds, already "
+                                "converted; the hot sentinel.* keys are columns, not Map "
+                                "probes.",
+        "log_events": "One row per log record, with severity normalized and is_error "
+                      "precomputed.",
+        "metric_observations": "One row per data point, gauge and sum unified — metric_kind "
+                               "says which table it came from.",
+    }
+
+    #: What each read view answers, in the words of its own SELECT. A view stores nothing —
+    #: it is a query over the models above, run at read time — and a bare list of six names
+    #: with no explanation is a puzzle, not information.
+    SILVER_VIEW_DOCS: ClassVar[dict[str, tuple[str, str]]] = {
+        "service_health_1m": ("per minute", "op count, error rate, latency p50/p95/p99"),
+        "log_health_1m": ("per minute", "log count, error rate, worst severity"),
+        "metric_rollup_1m": ("per minute", "count, sum, min/max/avg, stddev per name"),
+        "telemetry_coverage_1m": ("per minute", "spans, logs, metrics seen per component"),
+        "trace_summary": ("per trace", "duration, span count, entry/exit service"),
+        "run_summary": ("per run", "services, traces, operations, errors"),
+    }
+
+    async def silver_graph(self) -> dict:
+        """Every object in `silver`, what kind it is, and what it reads — from ClickHouse.
+
+        Three kinds live in that database and they are not the same thing, which is exactly
+        what a reader gets wrong:
+
+        * **MergeTree** — a real table. Stores rows, has a sort key and a TTL.
+        * **MaterializedView** — not a stored result set, the way Postgres uses the word. In
+          ClickHouse it is an *insert trigger*: when rows land in its source it runs its
+          SELECT over that block and inserts into its `TO` target. It stores nothing itself.
+          This is why Silver holds only what arrived after the DDL did — they do not
+          `POPULATE`.
+        * **View** — a named query, run at read time. Stores nothing, and has no row count
+          to show, because the rows do not exist until someone asks.
+
+        Lineage is parsed out of `create_table_query` rather than declared here. `TO x.y` is
+        an MV's target and `FROM x.y` its source; a plain view's sources are every table it
+        names. Written down by hand it would be a second copy of the DDL, free to drift from
+        the one ClickHouse is actually running.
+        """
+        out: dict[str, dict] = {}
+        try:
+            rows = await self._query(
+                "SELECT name, engine, sorting_key, "
+                "replaceRegexpAll(create_table_query, '\\s+', ' ') "
+                "FROM system.tables WHERE database = 'silver' FORMAT TSV")
+            cols = await self._query(
+                "SELECT table, name, type FROM system.columns "
+                "WHERE database = 'silver' ORDER BY table, position FORMAT TSV")
+        except httpx.HTTPError as exc:
+            log.info("silver graph unavailable: %s", exc)
+            return out
+        ref = re.compile(r"\b(bronze|silver)\.([a-z_0-9]+)")
+        for line in rows.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 4:
+                continue
+            name, engine, sort, ddl = parts
+            # Any *MergeTree is a table. Matching the literal string "MergeTree" made a
+            # SummingMergeTree rollup — the obvious engine for exactly this kind of model —
+            # invisible on the board, with its own MV left pointing at nothing. Everything
+            # that is not one of the two view engines stores rows, so it is a table.
+            kind = ("mv" if engine == "MaterializedView"
+                    else "view" if engine == "View" else "table")
+            # `TO silver.x` is where an MV writes; everything else it names, it reads.
+            to = re.search(r"\bTO\s+(?:bronze|silver)\.([a-z_0-9]+)", ddl)
+            target = to.group(1) if to else ""
+            seen = {f"{db}.{tbl}" for db, tbl in ref.findall(ddl)}
+            sources = sorted(r for r in seen
+                             if r.split(".")[1] not in (name, target))
+            out[name] = {"kind": kind, "sources": sources, "target": target,
+                         "order_by": sort, "columns": [],
+                         "summary": self.SILVER_SUMMARY.get(name, "")}
+        for line in cols.splitlines():
+            parts = line.split("\t")
+            # An MV's columns are its target's; listing them would say the same thing twice.
+            if len(parts) != 3 or parts[0] not in out or out[parts[0]]["kind"] == "mv":
+                continue
+            out[parts[0]]["columns"].append([parts[1], parts[2]])
         return out
 
     async def scenario(self) -> str:

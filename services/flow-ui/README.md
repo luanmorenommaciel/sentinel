@@ -5,12 +5,16 @@ and what is landing in `bronze.*`. Two boards — **Flow** (how data moves) and 
 (what is breaking) — over one semantic zoom.
 
 ```
-generator ──OTLP :4317──▶ collector-rust ──HTTP──▶ ClickHouse bronze.*
+generator ──OTLP :4317──▶ collector-rust ──HTTP──▶ ClickHouse bronze.* ⇒ silver.*
                               │ :9090/metrics          │ :8123
                               └──────────┬─────────────┘
                                       flow-ui  ──SSE──▶ browser
                                        :8080
 ```
+
+`⇒` is not a hop: ADR-0010's materialized views fire inside ClickHouse on the same insert
+that writes bronze. The board draws it that way too — see [ARCHITECTURE.md](ARCHITECTURE.md)
+for what this service is made of and how a number reaches the screen.
 
 ## Run it
 
@@ -34,9 +38,12 @@ is something the page does on its own — nothing tells it.
 | | |
 |---|---|
 | **Flow**, closed | three lanes in, one trunk out. One dot is 100 signals of that type |
+| **Flow** → open `ORIGIN`, latency | each producer shows `declared → measured` — `topology.yaml`'s claim beside Silver's observed p50 |
 | **Flow** → open `ORIGIN` | the declared service graph, each producer carrying its fused state; pipe width is what was actually traced on that edge |
 | **Flow** → open `COLLECTOR-RUST` | `receive → validate → buffer`, and the three ways a signal does not simply arrive |
-| **Flow** → open `BRONZE` | the four tables, each strand carrying the type that lands in it |
+| **Flow** → open `BRONZE` | the four tables, each strand carrying the type that lands in it. Pick a table for its datasheet, pick it again to close |
+| **Flow** → open `SILVER` | every object in the database as its own box — materialized views, tables, read views — with the lineage between them |
+| **Flow** → open `BRONZE` **and** `SILVER` | which table becomes which model — 4 → 3, because gauge and sum share one |
 | **Health** | the verdict and the sentence behind it, over a 120s window |
 | **Contract** | the receive boundary: what would be dropped under `strict`, and who is violating |
 | **Watchers** | rows per minute per producer against a band — and the band drawn *is* the alerting rule |
@@ -85,7 +92,7 @@ From the repo root, in Docker, with no host toolchain — and wired into the agg
 so `make test` and `make lint` cover this service too:
 
 ```bash
-make test-flow-ui     # 57 tests
+make test-flow-ui     # 63 tests
 make lint-flow-ui     # ruff over src, tests and scripts
 ```
 
@@ -118,14 +125,17 @@ streaming or backfilling — the buffer's flush cadence is the tell, and the two
 | records per flush | 500–1,000 | ~2,534 |
 | export latency | — | 45.3 ms avg |
 
-**Semantic zoom.** Level 0 is three boxes. Click one and it opens:
+**Semantic zoom.** Level 0 is four boxes. Click one and it opens:
 
 | Level | Shows | Source |
 |---|---|---|
 | **Pipeline** | origin → collector → bronze, three lanes in and one out | `/metrics` |
 | **Origin** | the seven services as a graph, **declared config beside observed row counts** | `topology.yaml` + bronze |
 | **Collector** | where a signal comes from and where it goes, with the three outcomes | `/metrics` |
-| **Bronze** | the tables, and the read contract as each one's datasheet | contract v1.0.0.1 |
+| **Bronze** | the four tables; pick one for the read contract as its datasheet | contract v1.0.0.1 |
+| **Silver** | the whole `silver` DAG, laid out by dependency depth — add an object to the DDL and it finds its own column | `system.tables` |
+| **Silver** → pick any node | what kind it is, what it reads and writes, its columns and sort key | `system.columns` |
+| **Bronze + Silver** | the per-table derivation, drawn from the MV definitions | silver DDL |
 
 `Esc` returns to the overview. The legend at the bottom is rebuilt on every level change,
 because **a particle means something different at each one** — see [DESIGN.md](DESIGN.md).
@@ -211,17 +221,25 @@ not for this service.
   columns §2 guarantees are shown, absent optional IDs are `''` per §4, grouping is by
   `ServiceName` because §5.6 makes that the one index-accelerated axis, and the unindexed
   `ResourceAttributes` Map probes (§3, §6) stay off the per-tick path.
+- **`system.tables` / `system.columns`** — Silver's shape is read from ClickHouse, never
+  restated here: engine gives the kind, `create_table_query` gives the lineage. Add a model or
+  a view to `02-silver-layer.sql` and it appears on the board with no code change.
+- **`silver.service_health_1m`** (ADR-0010) — per-producer latency quantiles and error rate,
+  the *measured* half of each ORIGIN node's `declared → measured`. Read on the slow lane and
+  optional: absent Silver means the node shows the declared figure alone.
 - **`services/generator-python/config/topology/default.yaml`** — the declared service graph.
   Read, not redrawn, so the picture cannot drift from what emits the telemetry. Edges point
   the way data *flows*: `depends_on: [a]` on `b` means the edge is `a → b`.
 
 ## Status
 
-**V2.3.** Pod 2 self-observability plus the bronze read side, four boards, four zoom levels, two
-palettes. 37 tests. Verified end to end against a live pipeline on 2026-09-01: mode detection
-correct across stream, batch and idle; 1,015,100 signals stored, 0 rejected, 0 export errors.
+**V2.3 + Silver.** Pod 2 self-observability plus the bronze read side, four boards, five zoom
+levels, two palettes, and Silver drawn as a derivation of bronze rather than a hop after it.
+63 tests. Verified end to end against a live pipeline on 2026-09-02: mode detection correct
+across stream, batch and idle; 10.1M bronze rows against 536.6k in Silver's three models,
+0 rejected, 0 export errors.
 
 **Known gaps, deliberate:** no language selector yet (V1 ships English; the selector lands with
-the demo) · the *observed* topology is not yet derived from `ParentSpanId` and compared against
-the declared one · the look has not been reviewed by anyone but the owner, because headless
-capture cannot hold an SSE page still.
+the demo) · Silver's three read models are shown but only `service_health_1m` is *consumed* —
+the other Bronze queries stay on Bronze until Silver has history (#37) · the look has not been
+reviewed by anyone but the owner, because headless capture cannot hold an SSE page still.

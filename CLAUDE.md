@@ -22,7 +22,8 @@ contracts/                 # SSOT contract registry, namespaced by producing Pod
 services/
   generator-python/        # POD 1 — synthetic OTLP generator (otelgen CLI); config/ holds scenarios/topology/provider_profiles
   collector-rust/          # POD 2 — OTLP→ClickHouse collector (Rust), the selected implementation
-  flow-ui/                 # the pipeline watching itself — four boards over /metrics + bronze
+  flow-ui/                 # the pipeline watching itself — four boards over /metrics + bronze/silver
+                           #   ARCHITECTURE.md = stack + cadences + module map (Mermaid)
 infra/                     # ClickHouse bootstrap (users/db init + users.d network override + bronze DDL in init.d/)
 docs/                      # shared docs (ADRs, research, proposals)
                            #   research/ holds the V2 product roadmap for flow-ui:
@@ -54,8 +55,8 @@ Variables: `SCENARIO` (default `baseline`), `SEED` (`42`), `WINDOW` (`5m`).
 - **The collector writes the bronze split schema directly into database `bronze`** (`otel_logs / otel_traces / otel_metrics_gauge / otel_metrics_sum`, otel-collector-contrib v0.105.0 style with metrics split by data-point type, Sentinel-enriched via `ResourceAttributes`). The old normalized `default.*` write path and the `otel_metrics_1m` rollup MV are retired; the rollup is now a Pod 3 silver artifact.
 - **The bronze DDL is Pod-3-owned** and auto-applies on ClickHouse boot from `infra/clickhouse/init.d/01-bronze-otel.sql`. The collector issues no DDL — it only `INSERT`s. (The repo calls this policy `create_schema:false`, borrowing the contrib exporter's flag name; it is not a literal key in our Rust config.) The former collector→bronze gap is now closed (historical rationale: [docs/research/pod3-bronze-gap.md](docs/research/pod3-bronze-gap.md)).
 - **flow-ui reads, never writes.** It polls the collector's `/metrics` and queries `bronze.*`
-  read-only, plus Pod 1's `topology/default.yaml` and the collector's `config.docker.yaml`,
-  both mounted read-only — the picture is drawn from the files that define the thing, so it
+  and `silver.*` read-only, plus Pod 1's `topology/default.yaml` and the collector's
+  `config.docker.yaml`, both mounted read-only — the picture is drawn from the files that define the thing, so it
   cannot drift from them. Nothing in the pipeline depends on it being up.
 - **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*. One `git worktree` per agent under `.worktrees/`, branches named `leg/<area>/<task>-v<n>`, and **every leg declares disjoint paths** before it opens. Commands and gotchas: [`.claude/docs/AGENTIC_GITFLOW.md`](.claude/docs/AGENTIC_GITFLOW.md). Export a shared `CARGO_TARGET_DIR` before running a fleet, or N worktrees means N cold Rust builds.
 - **No comments-as-noise**; match each service's existing style. Keep the repo clean for the agentic phase that follows this baseline.

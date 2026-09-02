@@ -1,20 +1,13 @@
 # flow-ui — working state
 
-*2026-09-01 · branch `feat/flow-ui` · **nothing committed***
+*2026-09-02 · branch `feat/flow-ui-silver-read` · V1–V2.3 merged to `main` in PR #31*
 
 ## Where things are
 
-Working tree only. `git status`:
-
-```
- M Makefile                    generate-stream + ui targets
- M docker-compose.yml          flow-ui service + generator-config mount
-?? services/flow-ui/           the whole service
-   docs/research/data-observability-competitive-landscape.md   (the V2 roadmap)
-```
+On `main` since PR #31. In flight on this branch: Silver as the fourth box on the Flow board.
 
 Run: `make up` → `make ui` → `make generate-stream DURATION=20m`.
-Tests: `cd services/flow-ui && .venv/bin/python -m pytest tests -q` → 47 passing.
+Tests: `cd services/flow-ui && .venv/bin/python -m pytest tests -q` → 63 passing.
 
 ## What V1 does
 
@@ -233,6 +226,352 @@ amber over 1 of 14. It now takes at least two buckets *and* 10% of the estate's.
 against a 13px standard gauge, so a service dependency drew fatter than the feeders and the
 bronze fan. What those edges carry is relative, so the range tops out *at* the standard gauge.
 
+## Shipped: Silver, as an addition rather than a migration
+
+`silver.service_health_1m` gives per-producer latency quantiles and error rate, and each
+ORIGIN node now draws **declared → measured**: what `topology.yaml` claims a component's
+latency is, beside what its operations actually took. The two agreeing is the baseline; the
+two diverging is the finding. flow-ui had no per-service latency at all before this — the
+Health board's quantiles are the collector's *export* latency, a different question.
+
+**The three Bronze queries did not move, and should not have.** Measured on the stack the day
+Silver landed: `bronze.otel_traces` held 1,703,050 rows over 36 hours, `silver.
+operation_executions` held 12,849 over 12 minutes, because ADR-0010's materialized views do
+not `POPULATE`. Migrating `contract_violations` would have reported nothing and lost the
+`legacy-billing-api` finding — 104,610 rows missing four required keys. Migrating
+`volume_band` would have left every producer below `MIN_BUCKETS` and shown the whole Watchers
+board grey. #37 stays open for the half that needs a backfill first.
+
+Silver also cannot answer one question Bronze can: `is_synthetic` is materialized as
+`lower(...) = 'true'`, so an **absent** `sentinel.synthetic` key is indistinguishable from an
+explicit `false`. Contract violation counting needs the key's absence, so it belongs on the
+retained Map either way.
+
+`service_health()` returns `[]` when `silver.*` is missing, which is the normal state of any
+stack whose ClickHouse volume predates the DDL. The node then shows the declared figure
+alone, as it always did.
+
+## Shipped: Silver on the graph — and drawn as a derivation, not a hop
+
+Silver was being *read* and was nowhere on the picture, so the one board people look at
+claimed the pipeline ended at bronze. It is now the fourth box, and the link into it is
+deliberately **not a pipe**.
+
+Everything else on this canvas transports something: a pipe has a casing, a bore, mouths at
+both ends, and particles inside it, because a signal really does leave one place and arrive at
+another. Bronze to Silver moves nothing — ADR-0010's materialized views fire *inside*
+ClickHouse on the same insert that writes bronze. Drawing a run between them would claim a hop
+that never happens and invite the question that follows from it ("what is the latency of that
+hop?"), which has no answer. So it is a short double bar with a tip, captioned `derived` /
+`on insert`, and no particle ever enters it.
+
+**Three states, and the box says which.** Absent (no `silver` database — a volume older than
+the DDL), present and empty (the normal state of a stack nobody has streamed into: the MVs do
+not `POPULATE`), and populated. `silver_state()` reads `system.tables`, so it is metadata —
+0.025 s, never scans a row — and the same distinction `counts()` makes for the same reason.
+
+Open, it lists the three models with their row counts and the six read views, with
+`service_health_1m` marked as the only one this service actually consumes — so the panel does
+not imply flow-ui reads six things it does not read. Six tests pin the parsing, including the
+present-but-empty vs absent split and an unreachable ClickHouse reading as absent rather than
+taking the board down.
+
+### Silver is a DAG now, and the DAG is the database's shape — not a list in the code
+
+Three boxes and a list of six names said nothing about what separates them, and the question
+it produced was the right one: *what is the difference between a table and a view?* Every
+object in `silver` is now its own box, in three columns, with the lineage drawn between them.
+
+**Three kinds, and the confusion is worth naming.** ClickHouse puts all three in one database
+and the words mislead:
+
+| | | on the board |
+|---|---|---|
+| **MergeTree** | a table — stores rows, has a sort key and a TTL | solid border, a row count |
+| **MaterializedView** | *not* a stored result set. An **insert trigger**: rows land in its source, it runs its SELECT over that block and inserts into its target. Stores nothing | dashed border, `on insert`, no count |
+| **View** | a named query, run at read time. No rows exist until someone asks | dotted border, its grain, `—` |
+
+That distinction is why Silver only holds what arrived after the DDL did — the MVs do not
+`POPULATE` — and it is the thing this board had been hiding.
+
+**The edges are not all the same edge.** `bronze → mv → table` carries particles, because rows
+really do move on that insert. `table → view` carries none: nothing flows there until a reader
+runs the query, and animating it would draw a stream that does not exist. Colour is the source
+table's signal type throughout, so lineage stays followable either way.
+
+**Nothing here enumerates the schema.** `silver_graph()` reads `system.tables`, classifies by
+engine, and parses lineage out of `create_table_query` — `TO x.y` is an MV's target, every
+other `bronze.`/`silver.` reference is a source. The old `DERIVES` constant, four bronze→model
+pairs typed into `app.js`, was a fourth copy of the DDL after the SQL, the MV definitions and
+`system.tables`; it is now computed. The box's own footprint is measured from the graph rather
+than typed in.
+
+**Columns are DAG depth, not kind.** Kind decided the column first and it was wrong the
+moment the schema stopped being a straight line, which is what "what if a new MV is born in
+the middle?" was really asking. A second-stage MV — one reading a *silver* table rather than a
+bronze one, which is how an hourly rollup is built — belongs between two tables; by kind it
+landed back in column 0 and its edge ran right to left, drawing a dependency that reads
+backwards. Depth puts every node after everything it reads, whatever it happens to be, and the
+kind moved to the border style with a key to explain it. The walk is guarded against cycles:
+ClickHouse will let you build one.
+
+**Verified against the live database three times, by creating the awkward cases and looking:**
+
+| Case | Result |
+|---|---|
+| `CREATE VIEW silver.error_budget_1m … FROM silver.operation_executions` | appeared beside the table it reads, wired in that table's colour, box grown a row — **no code edited** |
+| A second-stage MV: `silver.log_events → silver.log_events_hourly` | landed in a **fourth column** that did not exist before, after the table it reads |
+| A table nothing feeds (`manual_annotations`) | column 0 with the sources, no incoming edge — correct: nothing produces it |
+
+**Kind is on the GROUND, and the first attempt at it was measurably fake.** The channel is
+right — a filled area beats a 1px stroke as a signal, so a reader sees the kind before reading
+the name — but the first version used `--raise` / transparent / `--sunk`, which measure
+**1.03:1 apart**. Three names for one colour, with the border doing all the work while the
+comment claimed otherwise. Contrast ratio is a poor guide this close to black, so the fix was
+picked by rendering candidates and looking, then checked against the numbers:
+
+| | command | substrate |
+|---|---|---|
+| `--k-table` lit — the rows are in here | `#1B2614` | `#12283A` |
+| `--k-mv` dim — a trigger; rows pass through | `#0E1309` | `#0A121C` |
+| `--k-view` dark — a query, run when read | `#050703` | `#020407` |
+
+Hue is still not the channel: `--pri`, `--sec` and `--ter` mean logs, traces and metrics on
+every edge and particle here, and a box borrowing one would make the same channel say two
+things. Border style stays as the redundant second reading, so the distinction survives
+greyscale and a colour-blind reader.
+
+**The key is a legend, and it was being read as three checkboxes.** A 12×12 rounded square
+beside a label is the shape of something you tick, so it invited a click it could not answer.
+It is a wide flat bar now — a miniature of the node it describes, which is what it actually is
+— and `pointer-events:none`, so it never takes a cursor either.
+
+It does answer the pointer, from the other end: **selecting a node lights the swatch for that
+node's kind** in `--sec`, and the other two stay dim. The legend stops being dead chrome and
+starts saying *the thing you just picked is one of these*. Amber because that is already what
+selection means everywhere else here — `.nd.sel`, the hover border, the OPEN/CLOSE cue.
+
+**The first version of that highlight was invisible, and the test said it worked.** It only
+nudged `stroke-width` and the text fill, and the assertion checked that the `.on` class was
+applied — which it was. The class being right is not the question a reader asks. It is now
+verified at the pixel level instead: the swatch's computed stroke goes from `rgb(46,110,136)`
+to `rgb(255,197,61)` and its opacity from 0.5 to 1, while the other two do not move.
+
+**Two bugs a running stream found that a still page could not.**
+
+*The MV → table runs had particles that were never revealed.* `spawn` fills `pools`, and
+nothing in the tick showed the `sv-*` ones, so the one real movement inside SILVER existed
+with every dot at opacity 0 — bronze fed the MVs and then the board went still. The gate is
+the growth of the bronze table the chain started from, resolved **through the graph**, so a
+second-stage MV reading a silver table finds its root instead of guessing.
+
+*Opening a box blacked the board out for a second.* `render` creates every dot at opacity 0
+and the tick read `if (repaint()) return`, skipping the `density` call that reveals them — so a
+structural change left the whole canvas empty until the next frame arrived, then filled it all
+at once. Read as every particle restarting, and reported as exactly that. Every structural
+repaint outside the tick now goes through `repaintNow`, which re-applies the current density
+immediately: 69 dots are visible the instant the click completes, not a second later.
+
+*Clicking a row restarted every dot on the board.* Selection went through `repaint`, which
+rebuilds the whole stage; rebuilding recreates every `animateMotion`, and an `animateMotion`
+keeps its progress on the node itself, so each dot jumped back to the mouth of its pipe. That
+invariant is [the reason this page has no framework](ARCHITECTURE.md) — and it was being broken
+by its own click handler. A selection changes no geometry (the sheets sit below their box and
+are narrower than it, so nothing moves), so it now redraws only the sheet layer, the `.sel`
+classes and the key. Verified by **object identity**, not by counting: the same 89 circle nodes
+survive both a model click and a table click.
+
+**The two still edges now carry dots, which reverses a call I made twice.** The collapsed
+`bronze ⇒ silver` bar and the `table → view` reads were drawn motionless on the argument that
+neither is a hop. The argument holds for the *shape* — the bar keeps its rails and no bore, the
+reads keep their dashes — but not for the stillness: both counts climb while the stream runs,
+and a dead line between two rising numbers says the opposite of what is happening. The bar's
+dots run down a `.track`, a path with no stroke that exists only for `animateMotion` to follow,
+so the rails stay two rails. A read's dots are smaller and slower than a pipe's, so the
+difference in claim survives as a difference in weight. Each read edge is gated on the growth
+of the table being *read*, resolved back to its bronze root: a view over a silent table has
+nothing new to answer with.
+
+**One pool per signal type on the bar**, through the existing `flow3`, each gated on the bronze
+tables feeding *its* materialized views. The first version passed a single hardcoded class and
+every dot came out amber — right by accident for metrics, wrong for logs and traces, and the
+same defect the collector's outcome rows had before `reject_matrix` fixed them. Twice in one
+service, reported both times by the person looking at it.
+
+**The arrowhead came off the bar.** Direction is carried by dots that move, which is the
+stronger of the two ways of saying it; a marker on top of them was the weaker one repeated.
+
+### The lanes stopped running on a metronome
+
+`flow` spaced departures at exactly `dur / n` and `flow3` added exactly a third of a slot per
+colour, so every lane read 1-2-3, 1-2-3 — a rhythm this pipeline does not have. Identical
+durations kept it forever, because every dot returns to its own slot each cycle.
+
+Departures are scattered inside their slot now, and each dot runs at its own slightly different
+speed: the spread breaks the pattern, the drift stops it re-forming, because dots at different
+speeds never return to the same relative positions. Measured on the derivation bar — gaps of
+`0.26 / 0.48 / 0.06 / 0.91 / 0.48` against a constant `0.43` before, and six distinct durations
+where there was one.
+
+The scatter is **seeded on the pool key and the dot index, never `Math.random`**: a structural
+repaint must not reshuffle a lane the reader is already watching. Verified — the same six
+`begin` values survive an open-and-close. Same constraint that made `order` use farthest-point
+insertion rather than a modular stride.
+
+### Dots that vanish and come back: the rate BEATS
+
+Reported as dots leaving, disappearing and reappearing, and it was not the animation. The
+generator emits on a 1s step and the poller samples on a 1s interval, so the two drift against
+each other and a window catches two of the generator's ticks or none. Sampled every 2s `logs`
+reads a steady 82/s; drawn per tick the lane ran **4,2,4,2,4,2**.
+
+A deadband alone could not fix it — a 2× swing is not a rounding boundary. The density is now
+smoothed with an EMA and *then* quantised with a deadband, and the on/off gates use the same
+smoothing: `rate > 0` reads false in whichever window catches nothing, so a run went still for
+one frame and came back — the same defect in binary. **Display only**; every printed figure is
+still the raw measurement and the smoothing never reaches the verdict.
+
+Measured with both boxes open, over 14 ticks: four lanes with a moving count before, one after —
+and that one changes by a single dot three times, which is the metrics rate genuinely drifting
+across a boundary rather than a beat.
+
+**And that fix shipped broken for one commit**, in a way worth writing down. The new helper
+was called `moving` only after the event: it was named `live`, and `density` already declares
+`const live = total > 0 ? 1 : 0` for its has-any-traffic flag. The local shadowed the module
+function for that whole scope, so every call to it hit a number and threw — and the shows
+*before* that line kept working while everything from BRONZE onward went dark. Reported as
+"the dots stopped appearing from bronze onward", which is exactly what it looked like.
+
+Nothing caught it: no exception reached the console capture, the tests do not touch `density`,
+and the pools were being created correctly — three of the four things that usually reveal a
+bug all said the code was fine. What found it was measuring the *inputs* to the gate rather
+than reasoning about the gate: the pools existed, the rates were 82/s, so the only thing left
+was the function itself.
+
+**One lane was still a metronome.** BRONZE's internal fan builds its circles in its own loop
+rather than through `flow`, so the scatter never reached it: all twelve ran at exactly 3.20s
+while every other lane had been broken up. Now 10 distinct durations across 3.00–3.38s.
+
+**Every run is capped at both ends now.** The `collector → bronze` trunk had lips at
+departure and arrival from the start; every run added after it got one only where it landed,
+so a pipe grew out of a flat box edge at one end and met a lip at the other — on the bronze
+tables' exits, on the MVs' exits, and on the collapsed `bronze ⇒ silver` bar, which had none
+at all. A lip marks where a run *meets a box*: it is a termination, not a claim about what
+travels, so putting one on the derivation bar does not undo it carrying nothing. The dashed
+read edges still have none, because they are not pipes.
+
+**And adding the kind strokes silently took the selected border away from every silver node.**
+`.nd.sel` and `.sub-nd.k-mv` are both two classes, so the cascade falls back to source order,
+and the kind rules were written below. Selection now comes after them. The same trap as the
+presentation-attribute-versus-stylesheet one the pipes hit months earlier: equal specificity is
+decided by position, and position is easy to move by accident. The selected border keeps its
+dash pattern, so picking a node does not hide what kind it is.
+
+**A silent failure mode worth knowing:** `el(tag, attrs, text)`'s third argument is text, not
+children. Passing elements there sets the group's `textContent` and the child is never created
+— no error, no warning, just a legend with no swatches in it.
+
+**And it surfaced a contrast bug that predates it.** Substrate's `--dim` was `#3D5A72`, putting
+every `.sub` label at **2.8:1** on the old panel and 2.09 on the new lit ground — under the 3:1
+floor for small text, on labels that are not decoration: `on insert`, `stored`, `per minute`,
+each producer's declared latency, the volume band's reason. Raised to `#57748F`, where the
+worst case on this board is 3.09. Command's was already above the line.
+
+**Kind was on two channels, and neither is hue.** Hue is spoken for: `--pri`, `--sec` and
+`--ter` mean logs, traces and metrics everywhere on this canvas, and a box borrowing one would
+make the same channel say two things. The **ground** was free, and there the difference is
+literal rather than a code to memorise — a table is *filled* because it holds something, an MV
+is *hollow* because rows pass through it and it stores nothing, a view is *sunk* because it is
+a window onto the rows below. Border style is the redundant second channel, so the distinction
+survives a colour-blind reader and greyscale, which this repo's own rule requires. Strokes stay
+inside the structural family (`--dim2` / `--viaS` / `--rule-arrow`), defined per palette, so
+both worlds keep their own version. The key swatches wear the real classes, so the legend
+cannot drift from what it describes.
+
+**Two defects that only a real object could have found**, and they were the same defect twice:
+`SummingMergeTree` — the obvious engine for a rollup — did not match the literal string
+`"MergeTree"`, so the table was **invisible** in `silver_graph` and **absent from `models`** in
+`silver_state`, leaving the board drawing a table it had no count for. Anything that is not one
+of the two view engines stores rows. Both readings now classify identically, and a test pins
+that they agree.
+
+### Silver's models have datasheets too — read from ClickHouse, not restated
+
+Clicking a silver model opens a sheet under the box, the same shape as bronze's. The
+provenance is deliberately different, and the asymmetry is the point:
+
+- **Bronze's sheet is hand-written** in `topology.TABLE_DOCS` because the read contract makes
+  a *subset* claim — only some columns are populated, the rest sit at their ClickHouse default
+  by design (§2) — and no DDL can express that.
+- **Silver makes no such claim.** The DDL is the whole definition, so its columns come live
+  from `system.columns` and cannot drift from the deployed schema. Restating them in Python
+  would only create something to go stale.
+
+Only the one-line purpose per model is written by hand, because a type is metadata and a
+purpose is a claim. An MV's columns are skipped, because they *are* its target's — listing
+them says the same thing twice. (An earlier version tried to filter this in SQL and could not:
+ClickHouse 24.3 rejects `IN (SELECT … FROM system.tables)` with *"Not-ready Set is passed as
+the second argument for function 'in'"*.)
+
+**And the six read views now say what they are.** A bare list of names is a list, not
+information — a reader cannot tell a view from a table, or guess that `run_summary` is one row
+per run. Each carries its grain and what it answers, under a line saying a view stores nothing
+and is a query over the models above. They are on two lines each because side by side a
+22-character name and a 43-character answer need 455 units against 278 of usable width, and
+the first version simply drew them on top of each other.
+
+**Both sheets toggle, and both start closed.** BRONZE opened with `otel_logs` selected and no
+way to deselect it, so its sheet was a permanent fixture of the open box rather than an answer
+to a question the reader asked. Click a row for its sheet, click it again to put it away.
+
+**And ⌂ was resetting a stale list.** It cleared `origin`, `collector`, `bronze` and the table
+selection, and knew nothing about `silver` or the selected model — the same defect as the
+`repaint()` key, in a second hand-maintained list of the same boxes. Both now enumerate every
+expandable box and every selection.
+
+### Open, the derivation becomes per-table — because the mapping is not 1:1
+
+Closed, one double bar is the honest summary. Open, the reader is asking a lineage question —
+*which bronze table becomes which silver model* — and that question has an answer worth
+drawing, because it is 4 → 3:
+
+```
+otel_logs          → log_events
+otel_traces        → operation_executions
+otel_metrics_gauge ─┐
+otel_metrics_sum   ─┴→ metric_observations
+```
+
+Nothing else on the board says that gauge and sum both land in one model. The four strands
+carry particles in the type colours, and each strand runs on the growth of *its own* bronze
+table — a silent source is a still strand, the same rule the bronze fan already follows.
+The dots depart on the same batch arrival that fills the bronze row, because the MVs fire on
+that insert; they are not a second hop after it. The mapping is read off the four
+`CREATE MATERIALIZED VIEW … TO silver.x … FROM bronze.y` statements in the DDL, not inferred
+from the names, and each silver row also states its source in text so a reader who never
+opens both boxes still gets the answer.
+
+**The rows are ordered by their source, not by `system.tables`.** In the catalogue's order
+the four strands crossed inside a 52px gap, and a crossing is a claim about routing this
+mapping does not make. In source order they run essentially straight across, and the two
+metrics strands visibly converge — the merge reads as a merge.
+
+**Three defects this surfaced, all found by looking:**
+
+- **The datasheet covered SILVER.** Drawn 40px right of BRONZE, it landed exactly where the
+  new box sits — a detail panel over the nodes it explains, the third time that class of
+  defect has reached the reader. Moving it past SILVER cleared the overlap and cost more:
+  at 320 wide it took the canvas from 1080 to 1682 units, and `fit()` scales to the widest
+  thing, so every box shrank to 58% to make room for a panel. It now sits **below** BRONZE,
+  directly under the table it describes, where at 320 against bronze's own 318 it adds no
+  width at all.
+- **SILVER's rows did not answer the pointer.** They were plain rects next to a BRONZE box
+  whose every row lit up, so the box read as inert. They are `.hit` groups now, with the
+  source named in the `aria-label`.
+- **`open.silver` was missing from `repaint()`'s key.** The click flipped the state, the key
+  did not change, repaint returned early and the box never opened — a dead click with no
+  error. That key is a dependency list maintained by hand; every expandable box belongs in it.
+
 ## Next planned step
 
 Tier 1 is now closed to the limit of the data. What remains:
@@ -243,7 +582,7 @@ Tier 1 is now closed to the limit of the data. What remains:
 * **V2.4 · freshness/arrival lag** and the **Arrival watcher**, both blocked on the same
   prerequisite: an arrival timestamp at the collector's write path. Worth an ADR, not UI work.
 * A **geometry test**. Two layout collisions and one overlap reached the reader today; the
-  57 tests cover the backend and the pure logic and nothing about where things land.
+  63 tests cover the backend and the pure logic and nothing about where things land.
 * **The rest of V2.3**, which is two pieces, not four: a per-node state timeline (needs
   per-service history retained, which nothing does today) and Grafana node-graph frames.
   Edge thickness by throughput and edge colour by violation rate are not pending — there is

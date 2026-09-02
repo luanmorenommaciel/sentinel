@@ -24,15 +24,23 @@
   --rule-arrow:#4E6B39;
   --grid:rgba(127,224,74,.045); --scan:rgba(127,224,74,.03);
   --knob:#7FE04A;
+  /* Ground per object kind. A filled area is a far stronger channel than a 1px border, so
+     this is where the distinction lives; the border style is the redundant second reading. */
+  --k-table:#1B2614; --k-mv:#0E1309; --k-view:#050703;
 }
 :root[data-world="substrate"]{
   --bg:#04060B; --panel:#070B12; --raise:#091019; --sunk:#03050A;
   --pri:#22D3EE; --sec:#FFC53D; --ter:#DCE9F5; --alarm:#FF5C7A;
-  --txt:#C3D6E6; --dim:#3D5A72; --dim2:#6C8AA6;
+  /* --dim was #3D5A72 and put every small label under 3:1 — 2.8 on the panel, 2.09 on the
+     new lit table ground. `.sub` is not decoration here: it carries "on insert", "stored",
+     "per minute", the volume band's reason and each producer's declared latency. Raised
+     until the worst case on this board clears 3:1. Command's --dim was already above it. */
+  --txt:#C3D6E6; --dim:#57748F; --dim2:#6C8AA6;
   --rule:#153446; --rule2:#0E2230; --via:#0B1B26; --viaS:#1E5468;
   --rule-arrow:#2E6E88;
   --grid:rgba(34,211,238,.05); --scan:rgba(34,211,238,.014);
   --knob:#22D3EE;
+  --k-table:#12283A; --k-mv:#0A121C; --k-view:#020407;
 }
 /* The two reachability LEDs are a semaphore, and a semaphore is not part of a palette.
    Green means reachable and red means not, in BOTH worlds — that convention is older and
@@ -225,6 +233,72 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
 /* Same 1.5px wall. Only the bore grows, because only the payload did. */
 .pw.trunk{stroke-width:24}
 .pb.trunk{stroke-width:21}
+/* BRONZE ⇒ SILVER is a DERIVATION, not a run. Everything else on the canvas transports
+   something along a bore; this moves nothing — the materialized views fire inside ClickHouse
+   on the same insert. A double bar says "what this becomes", a pipe would say "where this
+   goes", and only one of those is true. No mouths, no particles, on purpose. */
+.derive{fill:none;stroke:var(--rule-arrow);stroke-width:1.6;opacity:.75}
+/* A READ dependency, not a run. A view is a query: nothing travels this edge until someone
+   asks, so it gets no casing, no bore and no particles — only the colour of the table it
+   reads, so lineage is still followable. Dashed says "on demand". */
+.lin{fill:none;stroke-width:1.4;opacity:.5;stroke-dasharray:3 3}
+/* A motion track: geometry for `animateMotion` to follow, never drawn. The collapsed
+   BRONZE ⇒ SILVER bar is two rails with nothing between them, and the dots run down the
+   middle — so the path they follow has to exist without being a third rail. */
+.track{fill:none;stroke:none}
+/* Its own tone classes, NOT the particle ones: `.p1{fill:var(--pri)}` is a FILL rule, and
+   a path wearing it renders as a filled triangle rather than a line — ten read edges came
+   out as one solid smear. */
+.lin.e1{stroke:var(--pri)} .lin.e2{stroke:var(--ter)} .lin.e3{stroke:var(--sec)}
+/* Kind is carried by the left edge of the box, so it survives the colour-blind test the
+   particle palette is already held to: three kinds, three border weights, one label each. */
+/* Kind on TWO channels, and neither of them is hue.
+   Hue is spoken for: --pri, --sec and --ter mean logs, traces and metrics everywhere on this
+   canvas, and a box borrowing one would make the same channel say two things. The GROUND is
+   free, and there the difference is literal rather than a code to memorise:
+
+     table  filled and raised   — it holds something
+     mv     hollow              — an insert trigger holds nothing; rows pass through it
+     view   sunk                — a window onto the rows below, computed when looked through
+
+   Border style is the redundant second channel, so the distinction survives a colour-blind
+   reader and a greyscale print, per this repo's own rule against colour-only encoding. The
+   strokes stay inside the structural family (--dim2 / --viaS / --rule-arrow), which is
+   defined per palette, so both worlds keep their own version of it. */
+/* Kind on the GROUND first, border style second — and hue is still not the channel, because
+   --pri/--sec/--ter mean logs, traces and metrics on every edge and particle here.
+
+   The first attempt put kind on --raise / transparent / --sunk and measured 1.03:1 between
+   adjacent grounds: three names for one colour. A filled area beats a 1px stroke as a signal,
+   so the grounds are now stepped far enough apart to actually read, brightest to darkest in
+   the order of how much each thing holds:
+
+     table  lit    — the rows are in here
+     mv     dim    — an insert trigger; rows pass through and it keeps none
+     view   near   — a query, nothing to light up until someone runs it
+
+   Body text stays above 10:1 on all three, and the sub-labels above 3:1, in both worlds. */
+/* The key. Never a target — no cursor, no hover, no hit area — and dimmed until the
+   selection makes one of the three relevant. */
+.key{pointer-events:none;opacity:.5;transition:opacity .16s}
+.key.on{opacity:1}
+/* --sec, because that is already what selection means everywhere else on this board
+   (`.nd.sel`, the hover border, the OPEN/CLOSE cue). The first version only nudged
+   stroke-width and text fill, which passed a test asserting the class was applied and was
+   still invisible to the person looking at it — the class being right is not the question. */
+.key.on .sw{stroke:var(--sec);stroke-width:2}
+.key.on .sub{fill:var(--sec)}
+.sw{stroke-width:1}
+.sub-nd.k-table{fill:var(--k-table);stroke:var(--dim2);stroke-dasharray:none}
+.sub-nd.k-mv{fill:var(--k-mv);stroke:var(--dim);stroke-dasharray:4 3}
+.sub-nd.k-view{fill:var(--k-view);stroke:var(--rule-arrow);stroke-dasharray:1 3}
+/* Selection has to come AFTER the kind rules, not before. `.nd.sel` and `.sub-nd.k-mv` are
+   both two classes, so the cascade falls back to source order — and adding the kind strokes
+   below `.nd.sel` silently took the selected border away from every silver node. Same trap
+   as the presentation-attribute-vs-stylesheet one the pipes hit: equal specificity is decided
+   by position, and position is easy to change by accident. */
+.sub-nd.sel{stroke:var(--sec);stroke-width:1.6}
+
 /* A mouth is a LIP, and a lip is pipe-shaped: a short section perpendicular to the run,
    wider than the casing it caps. It was a circle, which read as a bead threaded onto the
    line — the one shape that says "not a pipe". Sized to the casing at each site, so the
