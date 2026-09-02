@@ -276,10 +276,14 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
    Body text stays above 10:1 on all three, and the sub-labels above 3:1, in both worlds. */
 /* The key. Never a target — no cursor, no hover, no hit area — and dimmed until the
    selection makes one of the three relevant. */
-.key{pointer-events:none;opacity:.62;transition:opacity .16s}
+.key{pointer-events:none;opacity:.5;transition:opacity .16s}
 .key.on{opacity:1}
-.key.on .sw{stroke-width:1.6}
-.key.on .sub{fill:var(--txt)}
+/* --sec, because that is already what selection means everywhere else on this board
+   (`.nd.sel`, the hover border, the OPEN/CLOSE cue). The first version only nudged
+   stroke-width and text fill, which passed a test asserting the class was applied and was
+   still invisible to the person looking at it — the class being right is not the question. */
+.key.on .sw{stroke:var(--sec);stroke-width:2}
+.key.on .sub{fill:var(--sec)}
 .sw{stroke-width:1}
 .sub-nd.k-table{fill:var(--k-table);stroke:var(--dim2);stroke-dasharray:none}
 .sub-nd.k-mv{fill:var(--k-mv);stroke:var(--dim);stroke-dasharray:4 3}

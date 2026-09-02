@@ -347,9 +347,15 @@ It is a wide flat bar now — a miniature of the node it describes, which is wha
 — and `pointer-events:none`, so it never takes a cursor either.
 
 It does answer the pointer, from the other end: **selecting a node lights the swatch for that
-node's kind**, and the other two stay dim. The legend stops being dead chrome and starts saying
-*the thing you just picked is one of these*. Verified across all three kinds and the
-nothing-selected state.
+node's kind** in `--sec`, and the other two stay dim. The legend stops being dead chrome and
+starts saying *the thing you just picked is one of these*. Amber because that is already what
+selection means everywhere else here — `.nd.sel`, the hover border, the OPEN/CLOSE cue.
+
+**The first version of that highlight was invisible, and the test said it worked.** It only
+nudged `stroke-width` and the text fill, and the assertion checked that the `.on` class was
+applied — which it was. The class being right is not the question a reader asks. It is now
+verified at the pixel level instead: the swatch's computed stroke goes from `rgb(46,110,136)`
+to `rgb(255,197,61)` and its opacity from 0.5 to 1, while the other two do not move.
 
 **A silent failure mode worth knowing:** `el(tag, attrs, text)`'s third argument is text, not
 children. Passing elements there sets the group's `textContent` and the child is never created
