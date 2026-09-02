@@ -276,6 +276,31 @@ not imply flow-ui reads six things it does not read. Six tests pin the parsing, 
 present-but-empty vs absent split and an unreachable ClickHouse reading as absent rather than
 taking the board down.
 
+### Silver's models have datasheets too — read from ClickHouse, not restated
+
+Clicking a silver model opens a sheet under the box, the same shape as bronze's. The
+provenance is deliberately different, and the asymmetry is the point:
+
+- **Bronze's sheet is hand-written** in `topology.TABLE_DOCS` because the read contract makes
+  a *subset* claim — only some columns are populated, the rest sit at their ClickHouse default
+  by design (§2) — and no DDL can express that.
+- **Silver makes no such claim.** The DDL is the whole definition, so its columns come live
+  from `system.columns` and cannot drift from the deployed schema. Restating them in Python
+  would only create something to go stale.
+
+Only the one-line purpose per model is written by hand, because a type is metadata and a
+purpose is a claim. `system.columns` is filtered in Python rather than in the query:
+ClickHouse 24.3 rejects `IN (SELECT … FROM system.tables)` with *"Not-ready Set is passed as
+the second argument for function 'in'"*, and unfiltered it returned each model's schema three
+times, once under each materialized view that writes it.
+
+**And the six read views now say what they are.** A bare list of names is a list, not
+information — a reader cannot tell a view from a table, or guess that `run_summary` is one row
+per run. Each carries its grain and what it answers, under a line saying a view stores nothing
+and is a query over the models above. They are on two lines each because side by side a
+22-character name and a 43-character answer need 455 units against 278 of usable width, and
+the first version simply drew them on top of each other.
+
 ### Open, the derivation becomes per-table — because the mapping is not 1:1
 
 Closed, one double bar is the honest summary. Open, the reader is asking a lineage question —

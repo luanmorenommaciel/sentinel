@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import ClassVar
 
 import httpx
 
@@ -443,6 +444,72 @@ class ClickHouse:
             elif engine == "MaterializedView":
                 out["mvs"] += 1
         out["views"].sort()
+        return out
+
+    #: What each Silver model is *for*. The only hand-written part of its datasheet, and
+    #: deliberately so: a type is metadata, a purpose is a claim, and ClickHouse holds the
+    #: first and not the second.
+    SILVER_SUMMARY: ClassVar[dict[str, str]] = {
+        "operation_executions": "One row per span. Duration is milliseconds, already "
+                                "converted; the hot sentinel.* keys are columns, not Map "
+                                "probes.",
+        "log_events": "One row per log record, with severity normalized and is_error "
+                      "precomputed.",
+        "metric_observations": "One row per data point, gauge and sum unified — metric_kind "
+                               "says which table it came from.",
+    }
+
+    #: What each read view answers, in the words of its own SELECT. A view stores nothing —
+    #: it is a query over the models above, run at read time — and a bare list of six names
+    #: with no explanation is a puzzle, not information.
+    SILVER_VIEW_DOCS: ClassVar[dict[str, tuple[str, str]]] = {
+        "service_health_1m": ("per minute", "op count, error rate, latency p50/p95/p99"),
+        "log_health_1m": ("per minute", "log count, error rate, worst severity"),
+        "metric_rollup_1m": ("per minute", "count, sum, min/max/avg, stddev per name"),
+        "telemetry_coverage_1m": ("per minute", "spans, logs, metrics seen per component"),
+        "trace_summary": ("per trace", "duration, span count, entry/exit service"),
+        "run_summary": ("per run", "services, traces, operations, errors"),
+    }
+
+    async def silver_schema(self) -> dict:
+        """Each Silver model's columns and keys, read from ClickHouse rather than restated.
+
+        The asymmetry with :data:`topology.TABLE_DOCS` is the point. Bronze's datasheet is
+        hand-written because the read contract makes a *subset* claim — only some columns are
+        populated, the rest sit at their ClickHouse default by design (§2) — and no DDL can
+        say that. Silver makes no such claim: the DDL is the whole definition, so restating
+        it in Python would only create something that can drift from the deployed schema.
+
+        `system.columns` and `system.tables` are both metadata; this scans no data.
+        """
+        out: dict[str, dict] = {}
+        try:
+            keys = await self._query(
+                "SELECT name, sorting_key, partition_key FROM system.tables "
+                "WHERE database = 'silver' AND engine = 'MergeTree' FORMAT TSV")
+            cols = await self._query(
+                "SELECT table, name, type FROM system.columns "
+                "WHERE database = 'silver' ORDER BY table, position FORMAT TSV")
+        except httpx.HTTPError as exc:
+            log.info("silver schema unavailable: %s", exc)
+            return out
+        for line in keys.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            out[parts[0]] = {"columns": [], "order_by": parts[1], "partition": parts[2],
+                             "summary": self.SILVER_SUMMARY.get(parts[0], "")}
+        # Filtered here, not in the query: ClickHouse 24.3 rejects `IN (SELECT … FROM
+        # system.tables)` with "Not-ready Set is passed as the second argument for function
+        # 'in'". The names are already in hand from the query above, so the filter is free.
+        # It matters — `system.columns` also returns the four materialized views and six read
+        # views, and an MV's columns are its target's, so unfiltered each model's schema came
+        # back three times under three names.
+        for line in cols.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3 or parts[0] not in out:
+                continue
+            out[parts[0]]["columns"].append([parts[1], parts[2]])
         return out
 
     async def scenario(self) -> str:

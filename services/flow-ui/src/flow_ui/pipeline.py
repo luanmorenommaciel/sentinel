@@ -301,6 +301,11 @@ class Poller:
         #: querying an httpx client that had already been closed.
         self._slow: list[asyncio.Task] = []
 
+    @property
+    def clickhouse(self) -> ClickHouse:
+        """The client, for the one route that reads schema rather than a snapshot."""
+        return self._ch
+
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run())
 

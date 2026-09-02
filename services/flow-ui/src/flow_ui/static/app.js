@@ -38,10 +38,10 @@
     origin:    { closed: [212, 196], open: [742, 248], openSel: [742, 386] },
     collector: { closed: [252, 152], open: [500, 344] },
     bronze:    { closed: [176, 136], open: [318, 252] },
-    silver:    { closed: [186, 136], open: [268, 252] },
+    silver:    { closed: [186, 136], open: [330, 392] },
   };
 
-  let graph = null, snap = null, table = "otel_logs";
+  let graph = null, snap = null, table = "otel_logs", model = null;
   //: A selected service filters what the graph reports about bronze. It cannot filter the
   //: live rates: `sentinel_signals_ingested_total` carries a `signal` label and no service
   //: label, so per-service throughput simply does not exist upstream of ClickHouse. The
@@ -228,11 +228,17 @@
     const sheet = open.bronze
       ? { x: boxes.bronze.x, y: boxes.bronze.y + boxes.bronze.h + 30, w: SHEET_W, h: 236 }
       : null;
+    // SILVER's sheet sits under SILVER for the same reason, and only when a model is picked:
+    // bronze always has a selected table, silver starts with none.
+    const mSheet = open.silver && model
+      ? { x: boxes.silver.x, y: boxes.silver.y + boxes.silver.h + 30, w: SHEET_W, h: 236 }
+      : null;
     // Not a box, so it was absent from these bounds and `fit()` scaled to an extent that
     // excluded it — the sheet ran off the canvas whenever bronze was open.
-    const x1 = Math.max(x - GAP, sheet ? sheet.x + sheet.w : 0);
-    return { boxes, sheet, x0: 40, y0,
-             width: x1 - 40, height: Math.max(y1, sheet ? sheet.y + sheet.h : 0) - y0 };
+    const btm = [sheet, mSheet].filter(Boolean);
+    const x1 = Math.max(x - GAP, ...btm.map((z) => z.x + z.w));
+    return { boxes, sheet, mSheet, x0: 40, y0, width: x1 - 40,
+             height: Math.max(y1, ...btm.map((z) => z.y + z.h)) - y0 };
   }
 
   /* ── particle pools ────────────────────────────────────────── */
@@ -756,7 +762,7 @@
     const rank = (n) => { const i = DERIVES.findIndex(([, to]) => to === n);
                           return i < 0 ? DERIVES.length : i; };
     const names = Object.keys(models).sort((a, z) => rank(a) - rank(z) || a.localeCompare(z));
-    const TW = 218, TH = 34;
+    const TW = b.w - 52, TH = 34;
     names.forEach((n, i) => {
       const y = b.y + 46 + i * (TH + 6), x = b.x + 26;
       // A `.hit` group, like BRONZE's tables: the rows are the thing the pointer is for, so
@@ -764,7 +770,9 @@
       // bronze box whose every row lit up.
       const node = el("g", { class: "hit", tabindex: "0", role: "button",
         "aria-label": `${n}, ${fmt(models[n])} rows, derived from ${FEEDS[n] || "bronze"}` });
-      node.append(el("rect", { class: "nd sub-nd", x, y, width: TW, height: TH, rx: 3 }),
+      node.dataset.model = n;
+      node.append(el("rect", { class: "nd sub-nd" + (n === model ? " sel" : ""), x, y,
+          width: TW, height: TH, rx: 3 }),
         el("text", { class: "txt", x: x + 10, y: y + 15 }, clip(n, 24)),
         el("text", { class: "val", x: x + TW - 10, y: y + 15 }, fmt(models[n])),
         el("text", { class: "sub", x: x + 10, y: y + 28 },
@@ -772,18 +780,32 @@
       g.append(node);
       ports.silver[n] = { x, y: y + TH / 2 };
     });
-    const vy = b.y + 46 + names.length * (TH + 6) + 10;
-    g.append(el("text", { class: "lbl", x: b.x + 26, y: vy }, "READ VIEWS"));
-    (sv.views || []).forEach((v, i) => g.append(
-      el("text", { class: "sub", x: b.x + 26 + (i % 2) * 118, y: vy + 15 + Math.floor(i / 2) * 12,
-        // The one flow-ui actually consumes today, so the panel does not imply it uses six.
-        style: v === "service_health_1m" ? "fill:var(--sec)" : null },
-        (v === "service_health_1m" ? "▸ " : "· ") + clip(v, 17))));
+    // READ VIEWS, one per line with what each one answers. Two columns of bare names fit,
+    // and six names with no explanation is a list, not information — a reader cannot tell a
+    // view from a table, or guess that `run_summary` is one row per run.
+    // Name and answer on two lines, not one. Side by side they collided: a 22-character
+    // name and a 43-character answer need 455 units and the box has 278 of usable width, so
+    // the two runs of text overlapped each other and the panel was unreadable.
+    const vd = graph?.silver_views || {};
+    const vy = b.y + 46 + names.length * (TH + 6) + 14;
+    g.append(el("text", { class: "lbl", x: b.x + 26, y: vy }, "READ VIEWS"),
+      el("text", { class: "sub", x: b.x + 26, y: vy + 15 },
+        "stored nowhere — a query over the models above"));
+    (sv.views || []).forEach((v, i) => {
+      const vyy = vy + 37 + i * 25, read = v === "service_health_1m";
+      const [grain, what] = vd[v] || ["", ""];
+      g.append(el("text", { class: "sub", x: b.x + 26, y: vyy,
+          // The one flow-ui actually consumes today, so the panel does not imply it reads six.
+          style: read ? "fill:var(--sec)" : null },
+        (read ? "▸ " : "· ") + clip(v, 26)),
+        el("text", { class: "sub", x: b.x + 38, y: vyy + 12, style: "opacity:.6" },
+          grain ? `${grain} · ${clip(what, 41)}` : ""));
+    });
     // Marking one item in a second colour is a claim, and an unexplained claim is a puzzle.
     // The legend rebuilds per level and this mark only exists here, so it is said here.
     g.append(el("text", { class: "sub", x: b.x + 26,
-      y: vy + 15 + Math.ceil((sv.views || []).length / 2) * 12 + 6,
-      style: "fill:var(--sec)" }, "\u25b8 read by this board"));
+      y: vy + 37 + (sv.views || []).length * 25 + 4,
+      style: "fill:var(--sec)" }, "▸ the only one this board reads"));
   }
 
   /** BRONZE ⇒ SILVER, per table, once both boxes are open.
@@ -899,6 +921,47 @@
     parent.append(el("text", { class: "sub", x: x + 16, y: y + h - 12 },
       `TTL ${d.ttl} · ${d.section}`));
   }
+
+  /** The datasheet for a SILVER model — same shape as bronze's, different provenance.
+   *
+   *  Bronze's is hand-written in `topology.TABLE_DOCS` because the read contract makes a
+   *  *subset* claim: only some columns are populated, the rest sit at their ClickHouse
+   *  default by design (§2), and no DDL can express that. Silver makes no such claim — the
+   *  DDL is the whole definition — so its columns are read live from `system.columns` and
+   *  cannot drift from the deployed schema. Only the one-line summary is written by hand,
+   *  because a type is metadata and a purpose is a claim.
+   */
+  function modelsheet(parent, sheet) {
+    const d = (graph?.silver_tables || {})[model];
+    if (!d || !sheet) return;
+    const { x, y, w, h } = sheet;
+    parent.append(el("rect", { class: "nd sheet", x, y, width: w, height: h, rx: 4 }),
+      el("text", { class: "lbl", x: x + 16, y: y + 24, style: "fill:var(--sec)" },
+        model.toUpperCase()));
+    (d.summary.match(/.{1,48}(\s|$)/g) || []).slice(0, 2).forEach((line, i) =>
+      parent.append(el("text", { class: "sub", x: x + 16, y: y + 42 + i * 13 }, line.trim())));
+    // Two columns: 16 to 19 columns will not fit one, and truncating the list would hide
+    // exactly the normalized fields that are the reason this layer exists.
+    const cols = d.columns || [], half = Math.ceil(cols.length / 2);
+    cols.forEach(([name, type], i) => {
+      const cx = x + 16 + (i < half ? 0 : w / 2 - 8);
+      const cy = y + 78 + (i % half) * 13;
+      parent.append(el("text", { class: "sub", x: cx, y: cy }, clip(name, 20)),
+        el("text", { class: "sub", x: cx + w / 2 - 24, y: cy,
+          style: "text-anchor:end;opacity:.55" }, clip(shortType(type), 13)));
+    });
+    parent.append(el("text", { class: "sub", x: x + 16, y: y + h - 12 },
+      `ORDER BY ${clip(d.order_by, 56)}`));
+  }
+
+  //: ClickHouse spells types in full; the sheet has 13 characters. The distinction that
+  //: matters to a reader is the family, not the codec or the key type.
+  const shortType = (t) => t
+    .replace(/LowCardinality\((.*)\)/, "$1 (lc)")
+    .replace(/Map\(.*\)/, "Map")
+    .replace(/DateTime64\(\d+\)/, "DateTime64")
+    // Enum8('gauge' = 1, 'sum' = 2) is 30 characters of quoting to say "Enum8".
+    .replace(/Enum(\d+)\(.*\)/, "Enum$1");
 
   /* ── render ────────────────────────────────────────────────── */
   const TITLE = { origin: "ORIGIN", collector: "COLLECTOR-RUST", bronze: "BRONZE",
@@ -1019,6 +1082,7 @@
     }
     derivations(edges, fx, B);
     if (open.bronze) datasheet(nodes, L.sheet);
+    if (L.mSheet) modelsheet(nodes, L.mSheet);
     nodesLater.forEach((n) => nodes.append(n));
     // The burst only means something when a batch is actually arriving.
     show("burst", 0);
@@ -1032,6 +1096,16 @@
     });
     stage.querySelectorAll("[data-table]").forEach((n) => {
       n.addEventListener("click", (e) => { e.stopPropagation(); table = n.dataset.table; repaint(); });
+    });
+    // A silver model toggles, unlike a bronze table: bronze always has one selected and
+    // clicking the selected one again should not blank a sheet that has nowhere to fall
+    // back to. Silver starts with none, so closing the sheet is a state it can return to.
+    stage.querySelectorAll("[data-model]").forEach((n) => {
+      n.addEventListener("click", (e) => {
+        e.stopPropagation();
+        model = model === n.dataset.model ? null : n.dataset.model;
+        repaint();
+      });
     });
     stage.querySelectorAll("[data-service]").forEach((n) => {
       const pick = (e) => {
@@ -1673,7 +1747,7 @@
     // the click flips `open[id]`, the key does not change, repaint returns early and the box
     // simply never opens. `silver` was missing and the bug looked like a dead click.
     const key = [snap?.mode || "", graph ? 1 : 0, open.origin, open.collector, open.bronze,
-                 open.silver, table, service].join("|");
+                 open.silver, table, model, service].join("|");
     if (key === painted) return false;
     const first = painted === "";
     painted = key;

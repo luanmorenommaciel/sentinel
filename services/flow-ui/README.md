@@ -133,7 +133,8 @@ streaming or backfilling — the buffer's flush cadence is the tell, and the two
 | **Origin** | the seven services as a graph, **declared config beside observed row counts** | `topology.yaml` + bronze |
 | **Collector** | where a signal comes from and where it goes, with the three outcomes | `/metrics` |
 | **Bronze** | the tables, and the read contract as each one's datasheet | contract v1.0.0.1 |
-| **Silver** | the models, their row counts, and which read views exist | `system.tables` |
+| **Silver** | the models, their row counts, and the six read views with what each answers | `system.tables` |
+| **Silver** → pick a model | its columns and sort key, read live so they cannot drift | `system.columns` |
 | **Bronze + Silver** | the per-table derivation, drawn from the MV definitions | silver DDL |
 
 `Esc` returns to the overview. The legend at the bottom is rebuilt on every level change,
