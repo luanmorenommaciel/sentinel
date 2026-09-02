@@ -5,7 +5,7 @@ description: Open a new Architecture Decision Record using the Sentinel template
 
 # /adr
 
-Scaffolds `docs/adr/NNNN-<kebab-title>.md` with the standard Sentinel ADR template, in `Proposed` status. The ADR is committed on its own feature branch and reviewed via the standard 8-step PR flow (signed commits, 2 approvals, 7 CI gates).
+Scaffolds `docs/adr/NNNN-<kebab-title>.md` with the standard Sentinel ADR template, in `Proposed` status. The ADR is committed on its own feature branch and reviewed via the standard 8-step PR flow (signed commits, 2 approvals, CI gates).
 
 ## Usage
 

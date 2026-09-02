@@ -39,7 +39,7 @@
 ### Process
 | KB | What it covers |
 |---|---|
-| [`process/crew-b-wow/`](process/crew-b-wow/index.md) | Crew B Way of Working — roles, sprints, ADRs, 8-step PR flow, 7 CI gates, attribution contract |
+| [`process/crew-b-wow/`](process/crew-b-wow/index.md) | Crew B Way of Working — roles, sprints, ADRs, 8-step PR flow, CI gates, attribution contract |
 
 ### Communication
 | KB | What it covers |

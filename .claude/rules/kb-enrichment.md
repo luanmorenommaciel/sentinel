@@ -1,7 +1,7 @@
 # KB Enrichment Rule
 
 > Knowledge discovered during development must flow back into the KB system.
-> *Last updated: 2026-06-01*
+> *Last reviewed: 2026-09-02 · unchanged since 2026-06-01 — describes a policy, not repo state*
 
 ## When to enrich
 

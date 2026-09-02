@@ -420,7 +420,7 @@ A Sentinel contributor types `just setup` at the root after cloning (which deleg
 
 ## CI mapping to the Crew B 7-gate spec
 
-The Crew B WoW defines 7 CI gates. Per-language profiles map them:
+The Crew B WoW names seven CI gates as a target — **none of them runs today**; see the WoW's Step 4 for what actually does. The per-language profile below is what Rust maps onto once they exist, and `rust-ci.yml` already implements most of it:
 
 | Crew B gate | Python (via UV) | Rust |
 |---|---|---|
@@ -571,5 +571,5 @@ Three minutes from clone to running the Collector. Same vibe as `uv sync && uv r
 - `services/collector-rust/README.md` — the canonical example service README
 - `docs/adr/0004-collector-implementation-language.md` — why we're doing Rust at all
 - `kb/languages/rust/` — deeper Rust technique KB (idioms, tokio patterns, error handling, async lifetimes)
-- `kb/process/crew-b-wow/` — the 7 CI gates this maps to
+- `kb/process/crew-b-wow/` — the CI gates this maps to
 - Python equivalent in our other projects: `briefing-hub/pyproject.toml`, `duck-quant/pyproject.toml`
