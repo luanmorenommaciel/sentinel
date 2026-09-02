@@ -233,6 +233,31 @@ amber over 1 of 14. It now takes at least two buckets *and* 10% of the estate's.
 against a 13px standard gauge, so a service dependency drew fatter than the feeders and the
 bronze fan. What those edges carry is relative, so the range tops out *at* the standard gauge.
 
+## Shipped: Silver, as an addition rather than a migration
+
+`silver.service_health_1m` gives per-producer latency quantiles and error rate, and each
+ORIGIN node now draws **declared → measured**: what `topology.yaml` claims a component's
+latency is, beside what its operations actually took. The two agreeing is the baseline; the
+two diverging is the finding. flow-ui had no per-service latency at all before this — the
+Health board's quantiles are the collector's *export* latency, a different question.
+
+**The three Bronze queries did not move, and should not have.** Measured on the stack the day
+Silver landed: `bronze.otel_traces` held 1,703,050 rows over 36 hours, `silver.
+operation_executions` held 12,849 over 12 minutes, because ADR-0010's materialized views do
+not `POPULATE`. Migrating `contract_violations` would have reported nothing and lost the
+`legacy-billing-api` finding — 104,610 rows missing four required keys. Migrating
+`volume_band` would have left every producer below `MIN_BUCKETS` and shown the whole Watchers
+board grey. #37 stays open for the half that needs a backfill first.
+
+Silver also cannot answer one question Bronze can: `is_synthetic` is materialized as
+`lower(...) = 'true'`, so an **absent** `sentinel.synthetic` key is indistinguishable from an
+explicit `false`. Contract violation counting needs the key's absence, so it belongs on the
+retained Map either way.
+
+`service_health()` returns `[]` when `silver.*` is missing, which is the normal state of any
+stack whose ClickHouse volume predates the DDL. The node then shows the declared figure
+alone, as it always did.
+
 ## Next planned step
 
 Tier 1 is now closed to the limit of the data. What remains:

@@ -474,10 +474,19 @@
     t.nodes.forEach((n) => {
       const p = pos[n.id], row = byName[n.service], sel = n.service === service;
       const h = serviceHealth(n.service);
+      //: Declared beside measured. `topology.yaml` says what a component's latency should be;
+      //: Silver's `service_health_1m` says what its operations actually took. The repo's rule
+      //: applies — the two disagreeing is the finding — and this is the first thing drawn from
+      //: `silver.*` rather than derived from Bronze. Absent whenever Silver is not deployed,
+      //: which is any stack whose ClickHouse volume predates the DDL; the node then shows the
+      //: declared figure alone, exactly as it always did.
+      const sh = (snap?.service_health || []).find((r) => r.service === n.service);
       const node = el("g", { class: "hit", tabindex: "0", role: "button",
         "aria-pressed": String(sel),
         // The reason travels with the node for anyone not reading colour.
-        "aria-label": `Trace ${n.service} through the pipeline — ${h.state}: ${h.why}` });
+        "aria-label": `Trace ${n.service} through the pipeline — ${h.state}: ${h.why}`
+          + (sh ? ` · measured p50 ${sh.p50} ms, p99 ${sh.p99} ms, ${(sh.error_rate * 100).toFixed(2)}% errors`
+                : "") });
       node.dataset.service = n.service;
       // Name on its own line, figure on the next: at 196px a 24-character service name
       // and a right-aligned count were landing on the same pixels.
@@ -494,7 +503,10 @@
         el("text", { class: "txt", x: p.x + 16, y: p.y + 17 },
           clip(n.service, n.roots ? 21 : 26)),
         el("text", { class: "sub", x: p.x + 16, y: p.y + 33 },
-          `${n.kind} · ${n.latency_ms ?? "?"} ms`),
+          `${n.kind} · ${n.latency_ms ?? "?"} ms`
+          // Not `fmt()`: it abbreviates 1796.6 to "1.8k", which is coarser than the declared
+          // "1800" it sits beside — and the comparison is the entire point of the pair.
+          + (sh ? ` \u2192 ${Math.round(sh.p50)} ms` : "")),
         el("text", { class: "val", x: p.x + NW - 12, y: p.y + 33 }, row ? fmt(row.total) : "—"));
       if (n.roots) node.append(el("text", { class: "cue end", x: p.x + NW - 12, y: p.y + 17 }, "ROOT"));
       g.append(node);

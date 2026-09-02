@@ -354,6 +354,56 @@ class ClickHouse:
             log.warning("call edges unavailable: %s", exc)
         return out
 
+    async def service_health(self, minutes: int = 30, limit: int = 12) -> list[dict]:
+        """Per-producer latency and error rate, from Silver.
+
+        The first thing this service reads out of `silver.*` rather than deriving from
+        Bronze. It is an **addition, not a migration**: Bronze keeps answering the questions
+        it already answers, because Silver's materialized views do not `POPULATE` (ADR-0010)
+        and only see inserts made after the DDL was applied. Measured on this stack the day
+        Silver landed: `bronze.otel_traces` held 1,703,050 rows going back 36 hours while
+        `silver.operation_executions` held 12,849 going back 12 minutes. Moving the contract
+        and volume queries across today would have silently dropped 36 hours of evidence.
+
+        What it adds is genuinely new: flow-ui had **no per-service latency at all**. The
+        Health board's quantiles are the collector's *export* latency — how long writing to
+        ClickHouse takes — which is a different question from how long a producer's own
+        operations take.
+
+        Returns `[]` when `silver.*` is absent, which is the normal state of any stack whose
+        ClickHouse volume predates the Silver DDL: the boards degrade to what Bronze answers
+        rather than erroring.
+        """
+        sql = f"""
+        SELECT service_name,
+               sum(operation_count) AS ops,
+               sum(error_count) AS errors,
+               round(avg(latency_p50_ms), 1) AS p50,
+               round(max(latency_p95_ms), 1) AS p95,
+               round(max(latency_p99_ms), 1) AS p99,
+               round(max(latency_max_ms), 1) AS worst
+        FROM silver.service_health_1m
+        WHERE window_start >= now() - INTERVAL {int(minutes)} MINUTE
+        GROUP BY service_name ORDER BY ops DESC LIMIT {int(limit)} FORMAT TSV
+        """
+        out: list[dict] = []
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                svc, ops, errs, p50, p95, p99, worst = line.split("\t")
+                ops_i, errs_i = int(ops), int(errs)
+                out.append({
+                    "service": svc, "ops": ops_i, "errors": errs_i,
+                    "error_rate": round(errs_i / ops_i, 5) if ops_i else 0.0,
+                    "p50": float(p50), "p95": float(p95),
+                    "p99": float(p99), "max": float(worst),
+                })
+        except (httpx.HTTPError, ValueError) as exc:
+            # `UNKNOWN_TABLE` arrives here when the Silver DDL was never applied.
+            log.info("silver service health unavailable (is silver deployed?): %s", exc)
+        return out
+
     async def scenario(self) -> str:
         """The most recent run's scenario, for the header.
 

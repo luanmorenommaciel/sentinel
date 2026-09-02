@@ -34,6 +34,7 @@ is something the page does on its own — nothing tells it.
 | | |
 |---|---|
 | **Flow**, closed | three lanes in, one trunk out. One dot is 100 signals of that type |
+| **Flow** → open `ORIGIN`, latency | each producer shows `declared → measured` — `topology.yaml`'s claim beside Silver's observed p50 |
 | **Flow** → open `ORIGIN` | the declared service graph, each producer carrying its fused state; pipe width is what was actually traced on that edge |
 | **Flow** → open `COLLECTOR-RUST` | `receive → validate → buffer`, and the three ways a signal does not simply arrive |
 | **Flow** → open `BRONZE` | the four tables, each strand carrying the type that lands in it |

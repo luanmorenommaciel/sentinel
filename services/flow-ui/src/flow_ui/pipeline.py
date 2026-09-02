@@ -206,6 +206,12 @@ class Snapshot:
     metrics_by_service: dict = field(default_factory=dict)
     scenario: str = "—"
 
+    #: Per-producer latency and error rate, read from `silver.service_health_1m`. The first
+    #: thing this service reads out of Silver rather than deriving from Bronze — and an
+    #: addition, not a migration: Silver's MVs do not `POPULATE`, so it only knows what
+    #: arrived after its DDL was applied. Empty when Silver is not deployed.
+    service_health: list[dict] = field(default_factory=list)
+
     #: The call graph as traced: `{src, dst, spans, errors}`. The only per-edge measurement
     #: in the pipeline — it exists because a child span carries its parent, so the two rows
     #: join and the two `ServiceName`s are the edge. Compared against the *declared* topology
@@ -438,6 +444,7 @@ class Poller:
         snap.contract_violations = self.latest.contract_violations
         snap.volume = self.latest.volume
         snap.call_edges = self.latest.call_edges
+        snap.service_health = self.latest.service_health
         self.latest = snap
         self.broadcaster.publish(snap)
 
@@ -480,11 +487,13 @@ class Poller:
                 inventory = await self._ch.metric_inventory()
                 band = await self._ch.volume_band(self._s.volume_window_min)
                 edges = await self._ch.call_edges()
+                health = await self._ch.service_health()
                 self.latest.lineage = lineage
                 self.latest.scenario = scenario
                 self.latest.metrics_by_service = inventory
                 self.latest.volume = [volume_state(r) for r in band]
                 self.latest.call_edges = edges
+                self.latest.service_health = health
             except Exception as exc:                      # noqa: BLE001 — never kill the loop
                 log.debug("lineage refresh failed: %s", exc)
             await asyncio.sleep(self._s.lineage_interval_s)

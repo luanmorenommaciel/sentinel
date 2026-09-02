@@ -44,8 +44,11 @@ Three services and two data layers, all verified running:
 view of bronze: *Flow* (the path, expandable in place), *Health*, *Contract* (what would be
 dropped under `strict`, and which producers violate), *Watchers* (rows/min per producer against
 a band, where the band drawn **is** the alerting rule). Nothing in the pipeline depends on it.
-It re-derives from Bronze several things Silver was built to serve —
-[#37](https://github.com/luanmorenommaciel/sentinel/issues/37).
+It now reads `silver.service_health_1m` for per-producer latency and error rate — drawn on
+each ORIGIN node as **declared → measured**, beside the latency `topology.yaml` claims. It
+still derives contract violations, volume bands and call edges from Bronze: Silver's MVs do
+not `POPULATE`, so moving those across would drop the history they depend on
+([#37](https://github.com/luanmorenommaciel/sentinel/issues/37)).
 
 **Silver is defined but not necessarily deployed**: the DDL runs on ClickHouse boot, so a
 volume older than the merge will not have it, and the MVs do not `POPULATE` — they see new
