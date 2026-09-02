@@ -194,6 +194,17 @@ uv venv && uv pip install -e . && uv pip install pytest pytest-asyncio
 .venv/bin/uvicorn flow_ui.main:app --reload --port 8080
 ```
 
+## Roadmap
+
+Shipped and next, in order: [`STATUS.md`](STATUS.md).
+
+The ranked shortlist it draws from is
+[`docs/research/data-observability-competitive-landscape.md`](../../docs/research/data-observability-competitive-landscape.md)
+**§6**, ordered by *(differentiation × evidence) ÷ effort*. The filename says what the
+document *is* — a survey of what the category ships — and §6 is what it is *for*. Note that
+`.claude/docs/ROADMAP.md` is a different thing entirely: the plan for the knowledge system,
+not for this service.
+
 ## Contracts this reads
 
 - **`contracts/collector/v1/pod2-pod3-read-contract.md` v1.0.0.1** — the bronze semantics. Only
