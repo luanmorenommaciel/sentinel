@@ -12,7 +12,7 @@
 
 ## Sprint deliverable
 
-A working Rust binary that consumes Pod 1's NDJSON output (per `contract/schema/otlp_output.schema.json` v1.0.0) and writes the parsed signals into ClickHouse. End-to-end, tested against the golden fixture (`contract/golden/baseline_seed42.jsonl`), packaged in Docker, passing all 7 CI gates.
+A working Rust binary that consumes Pod 1's NDJSON output (per `contract/schema/otlp_output.schema.json` v1.0.0) and writes the parsed signals into ClickHouse. End-to-end, tested against the golden fixture (`contract/golden/baseline_seed42.jsonl`), packaged in Docker, passing all CI gates.
 
 OTLP gRPC `:4317` transport is the architectural target but is **out of scope for the MVP**. Week 2 work, after the NDJSON path is solid.
 

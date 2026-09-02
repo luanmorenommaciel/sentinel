@@ -27,6 +27,15 @@ Closes #
      schema, a column something reads, a public path — and say how you checked it still
      holds. "Nothing depends on this" is a good answer when it is true.
 
+     Include the docs. A file that describes something which no longer exists is broken by
+     the change that made it wrong:
+
+         git ls-files '*.md' | xargs grep -ln "<what you touched>"
+
+     Fix the ones that no longer hold, here. Leave `docs/adr/`, `.claude/sdd/` and
+     `docs/proposals/` alone — those are records, and rewriting history to match the present
+     is what makes an ADR unreadable.
+
      Until CI runs every suite (#34), this section is the only thing standing between a
      regression and `main`. -->
 

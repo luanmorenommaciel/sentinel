@@ -1,6 +1,6 @@
 # Document Ingestion Workflow
 
-> Last updated: 2026-06-01
+> Last reviewed: 2026-09-02 · unchanged since 2026-06-01 — describes a process, not repo state
 
 ## Why this exists
 

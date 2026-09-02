@@ -32,7 +32,7 @@ Read these before writing tests. They encode Sentinel's conventions; deviating w
 | Source | Use for |
 |---|---|
 | [`.claude/kb/languages/rust/index.md`](../../kb/languages/rust/index.md) | Tokio async test patterns, `Result<T, E>` exhaustive matching, anyhow vs thiserror in test assertions |
-| [`.claude/kb/process/crew-b-wow/`](../../kb/process/crew-b-wow/) | 7 CI gates, signed commits, Conventional Commits for `test:` scope |
+| [`.claude/kb/process/crew-b-wow/`](../../kb/process/crew-b-wow/) | CI gates, signed commits, Conventional Commits for `test:` scope |
 | [`.claude/kb/contracts/`](../../kb/contracts/) | Pydantic + Protobuf contract conventions; every field gets a positive + negative test |
 | [`.claude/kb/telemetry/`](../../kb/telemetry/) | OTLP gRPC fixture shape — what a `signal_type=log` vs `=span` vs `=metric` looks like on the wire |
 | [`.claude/kb/patterns/agentic-architecture/`](../../kb/patterns/agentic-architecture/) | Tiered-detection test seams (mock LLM tier 3 in unit tests; only hit live LLMs in nightly e2e) |
@@ -177,7 +177,7 @@ This test fails on `main` and passes after the fix — anchoring the regression 
 
 ## See also
 
-- [`.claude/CLAUDE.md`](../../CLAUDE.md) — project context, 7 CI gates, 80% coverage rule, agent inventory.
+- [`.claude/CLAUDE.md`](../../CLAUDE.md) — project context, CI gates, 80% coverage rule, agent inventory.
 - [`.claude/agents/code-quality/code-reviewer.md`](./code-reviewer.md) — sibling agent; reviews the tests this agent writes.
 - [`.claude/agents/languages/rust-specialist.md`](../languages/rust-specialist.md) — defers to this agent for Rust idioms beyond test scaffolding.
 - [`.claude/agents/data/otel-collector-specialist.md`](../data/otel-collector-specialist.md) — owns OTLP correctness; consulted on wire-format test assertions.

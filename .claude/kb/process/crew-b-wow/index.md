@@ -133,7 +133,7 @@ For agent-authored changes, the eight steps run inside the isolation and governa
 flowchart TD
     A[Branch off main\nfeat/area-short] --> B[Conventional Commits\n+ attribution trailers]
     B --> C[Push signed commits]
-    C --> D{7 CI gates pass?}
+    C --> D{CI gates pass?}
     D -- No --> E[Fix locally. CI fail = no human review.]
     D -- Yes --> F[CODEOWNERS auto-routes\nto reviewer]
     F --> G[Optional: /claude review]
@@ -152,6 +152,12 @@ docs/<area>-<short-description>
 ```
 
 Examples: `feat/collector-otlp-receiver`, `docs/adr-0004-go-rust-bakeoff`, `fix/b2-grpc-shutdown`.
+
+⚠️ [ADR-0009](../../../../docs/adr/0009-agentic-gitflow.md) introduces a second, finer level —
+`leg/<area>/<task>-v<n>` for a parallelizable chunk worked in its own worktree — and lists only
+`feat/` and `leg/` as prefixes. Whether `fix/`, `chore/` and `docs/` survive is open, and so is
+how any of it gets enforced:
+[#36](https://github.com/luanmorenommaciel/sentinel/issues/36).
 
 ### Step 2 — Conventional Commits + attribution
 
@@ -173,30 +179,54 @@ The `Co-Authored-By` trailers for human and LLM are **mandatory**. `Reviewed-by`
 
 ### Step 3 — Signed commits
 
-All commits must be GPG-signed (`git commit -S`). `main` enforces this at the branch protection level.
+All commits must be GPG-signed (`git commit -S`).
 
-### Step 4 — 7 CI gates
+⚠️ **`main` does not currently enforce this, or anything else** — the branch has no protection
+rules at all, so unsigned commits and unreviewed pushes both go through. Signing remains the
+rule; it is presently honour-based. Tracked in
+[#35](https://github.com/luanmorenommaciel/sentinel/issues/35), which needs an admin.
 
-CI runs on every push. All gates must be green before human review is requested:
+### Step 3b — Open the PR against the template
 
-| Gate | What it checks | Language |
-|------|---------------|----------|
-| `ruff` | Lint + format | Python |
-| `mypy --strict` | Type safety | Python |
-| `pytest >80%` | Unit + integration coverage | Python |
-| `bandit + safety` | Security scan (SAST + dep vulns) | Python |
-| `markdownlint` | Docs format consistency | All |
-| `CodeRabbit` | AI code review (automated first pass) | All |
-| `Docker build` | Container builds clean | All |
+`.github/PULL_REQUEST_TEMPLATE.md` pre-fills three sections and one question:
 
-For Rust services (Pod B2), the per-language profile extends the above:
+- **What** changes — not how.
+- **Why**, which is `Closes #<n>`. **A PR that closes no issue fails `pr-linked-issue.yml`.**
+  Forgot? Edit the description and the check re-runs itself; the issue does not have to exist
+  before the PR. A change that genuinely needs none takes the `no-issue` label, which leaves a
+  record of who decided that.
+- **Tests / evidence** — `make test passes` is a claim, the output is the evidence.
+- **What could this break, and how did you check?** A different question from "does it work",
+  and the one a green suite does not answer.
 
-| Additional gate | What it checks |
-|----------------|----------------|
-| `cargo fmt --check` | Format (rustfmt.toml) |
-| `cargo clippy -- -D warnings` | Lint (strict) |
-| `cargo nextest run` | Test runner (replaces `cargo test`) |
-| `cargo audit` | Dependency security audit |
+A bare `#33` does **not** link. It needs the keyword — `Closes`, `Fixes` or `Resolves` —
+otherwise it is a cross-reference and the check will (correctly) fail.
+
+### Step 4 — CI gates
+
+**What actually runs today** — `.github/workflows/`, verified against the repository:
+
+| Workflow | Covers |
+|---|---|
+| `rust-ci.yml` | `cargo fmt --check` · `cargo clippy -D warnings` · `cargo test` · a round-trip against a live ClickHouse · `cargo-deny` · Docker build |
+| `pr-linked-issue.yml` | fails a PR that closes no issue, unless labelled `no-issue` |
+
+**What does not run, and should.** These four suites are green locally and gate nothing —
+a PR can break any of them and merge clean. Tracked in
+[#34](https://github.com/luanmorenommaciel/sentinel/issues/34):
+
+| Suite | Command | Size |
+|---|---|---|
+| generator-python | `make test-generator` | 178 pytest |
+| flow-ui | `make test-flow-ui` | 57 pytest |
+| Silver read models | `make test-silver` | 60 SQL asserts |
+| Python lint | `make lint` | ruff over both services |
+
+**The seven-gate target.** This section previously listed `ruff`, `mypy --strict`,
+`pytest >80%`, `bandit + safety`, `markdownlint`, `CodeRabbit` and `Docker build` as if they
+existed. None of them did. They remain the goal; they are written here as a backlog, not as a
+description of the present, because a process document that overstates its own enforcement
+teaches people to distrust it.
 
 Full Rust setup: `.claude/docs/RUST_PROJECT_STANDARDS.md`.
 

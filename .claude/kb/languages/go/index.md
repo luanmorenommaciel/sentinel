@@ -337,7 +337,7 @@ close(done) // broadcast to all receivers
 - `../rust/index.md` — Rust KB sibling (Tokio, tonic, the bake-off counterpart)
 - `../../telemetry/otel-collector/index.md` — receiver/processor/exporter pipeline concepts
 - `../../storage/clickhouse/index.md` — ClickHouse schema, OTel table layout, connection tuning
-- `../../process/crew-b-wow/index.md` — 7 CI gates, PR flow, ADR process
+- `../../process/crew-b-wow/index.md` — CI gates, PR flow, ADR process
 - `../../../CLAUDE.md` — KB routing table, terminology guardrails
 - `../../../docs/RUST_PROJECT_STANDARDS.md` — Rust standards (parallel to these Go conventions)
 - `docs/adr/0004-collector-implementation-language.md` — Go vs Rust bake-off decision record

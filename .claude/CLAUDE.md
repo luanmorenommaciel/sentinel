@@ -1,6 +1,6 @@
 # Sentinel — Claude Code Project Context
 
-> Last updated: 2026-08-18
+> Last updated: 2026-09-02
 
 ## Mission
 
@@ -27,6 +27,29 @@ otel_core → rolling_stats → tiered_engine → cross_watcher → policy_engin
 
 **6 Watcher Crews:** Arrival · Parse · Volume · Schema · Latency · Storage.
 **3-tier detection cascade:** Statistical (z-scores) → Pattern (signature) → LLM (Haiku→Sonnet→Opus). *Cheapest tier wins. Opus only when Sonnet confidence is low AND blast radius is high.*
+
+## What exists today
+
+Three services and two data layers, all verified running:
+
+| | | |
+|---|---|---|
+| `services/generator-python` | Pod 1 — OTLP generator | 178 pytest |
+| `services/collector-rust` | Pod 2 — OTLP → `bronze.*` | 92 inline + 4 integration |
+| `services/flow-ui` | the pipeline watching itself · `:8080` · read-only | 57 pytest |
+| `bronze.*` | ADR-0007 · 4 live tables + 3 empty by contract | applied on ClickHouse boot |
+| `silver.*` | ADR-0010 · 3 typed models + 6 read views | 60 SQL asserts |
+
+**flow-ui** (merged in PR #31) has four boards over the collector's `/metrics` and a read-only
+view of bronze: *Flow* (the path, expandable in place), *Health*, *Contract* (what would be
+dropped under `strict`, and which producers violate), *Watchers* (rows/min per producer against
+a band, where the band drawn **is** the alerting rule). Nothing in the pipeline depends on it.
+It re-derives from Bronze several things Silver was built to serve —
+[#37](https://github.com/luanmorenommaciel/sentinel/issues/37).
+
+**Silver is defined but not necessarily deployed**: the DDL runs on ClickHouse boot, so a
+volume older than the merge will not have it, and the MVs do not `POPULATE` — they see new
+inserts only.
 
 ## Current state (Pod 2 — `collector-rust`)
 
@@ -111,10 +134,11 @@ Each agent has its own `.md` under `.claude/agents/<category>/<name>.md`. All ag
 
 Skill frontmatter follows [`.claude/skills/_template.md.example`](skills/_template.md.example).
 
-## Rules (1 path-scoped file)
+## Rules (2 path-scoped files)
 
 | Rule | Scope | Purpose |
 |---|---|---|
+| [`pre-pr-discipline.md`](rules/pre-pr-discipline.md) | all | Two checks before a PR: does an issue cover this (propose, never create unprompted), and which documents describe what changed. Both detect-and-propose. Written after #40 found a merged service with zero mentions in the README. |
 | [`kb-enrichment.md`](rules/kb-enrichment.md) | all | Policy: knowledge discovered during sessions must flow back into `.claude/kb/` via `/enrich-kb` or `/create-kb`. Defines the decision tree for KB vs. CLAUDE.md placement and the dating + confidence convention. |
 
 ## Knowledge Base (11 seed KBs)
@@ -130,7 +154,7 @@ Skill frontmatter follows [`.claude/skills/_template.md.example`](skills/_templa
 | Languages | `kb/languages/go/` | Concurrency, channels, OTel Collector internals *(retained as reference; the Go collector was removed in PR #28)* |
 | Contracts | `kb/contracts/` | Pydantic (Python), Protobuf (Go/Rust), versioning, boundary validation |
 | Detection | `kb/detection/anomaly-detection/` | Statistical baselines, z-scores, rolling windows |
-| Process | `kb/process/crew-b-wow/` | Sentinel WoW: syncs, ADRs, PR flow, attribution, 7 CI gates |
+| Process | `kb/process/crew-b-wow/` | Sentinel WoW: syncs, ADRs, PR flow, attribution, CI gates |
 | Patterns | `kb/patterns/agentic-architecture/` | Packt *Agentic Architectural Patterns* book index — when to consult |
 
 Browse `.claude/kb/README.md` for the full index with decision frameworks.
@@ -169,7 +193,7 @@ Per Sync 01 + `bem-vindos.md`:
 - **Conventional Commits.** `<type>(<scope>): <description>`
 - **Signed commits.** `git commit -S`.
 - **Mandatory attribution trailer** on every commit: `Co-Authored-By: <human>`, `Co-Authored-By: <LLM model>`, optional `Reviewed-by: <bot>`.
-- **7 CI gates** (all must pass before human review): ruff · mypy --strict · pytest >80% · bandit + safety · markdownlint · CodeRabbit · Docker build. ⚠️ This is the *agreement* from Sync 01, not the current state: only [`rust-ci.yml`](../.github/workflows/rust-ci.yml) is implemented today.
+- **CI gates.** ⚠️ Two workflows exist — `rust-ci.yml` and `pr-linked-issue.yml`. The seven the WoW names (ruff · mypy --strict · pytest >80% · bandit + safety · markdownlint · CodeRabbit · Docker build) are a **target, not a description**: none runs, and the four Python/Silver suites gate nothing ([#34](https://github.com/luanmorenommaciel/sentinel/issues/34)). ⚠️ This is the *agreement* from Sync 01, not the current state: only [`rust-ci.yml`](../.github/workflows/rust-ci.yml) is implemented today.
 - **2 approvals** required: first peer, second Captain. Squash-merge to main *(ADR-0009 proposes a merge commit for swimlane→main — pending ratification)*.
 - **Weekly sync** Tuesday Zoom ~60min.
 - **Tool freedom on input, rigor on output.** Pick any LLM coding tool (Claude Code, Cursor, Codex CLI, Aider, etc.); the contract is honest attribution + 7-gate CI.

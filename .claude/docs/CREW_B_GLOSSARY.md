@@ -1,6 +1,6 @@
 # Crew B Glossary
 
-> Last updated: 2026-06-01
+> Last reviewed: 2026-09-02 — corrected the CI-gate entry, which described gates that do not exist
 
 Sentinel uses program-specific terminology that doesn't always map cleanly to industry conventions. This glossary keeps everyone (and every agent) on the same page.
 
@@ -36,7 +36,7 @@ Sentinel uses program-specific terminology that doesn't always map cleanly to in
 | **Sprint 1 ADRs** | The three foundational ADRs assigned in `bem-vindos.md`: ADR-001 (blast radius), ADR-002 (baseline), ADR-003 (primary user). All owed by end of Sprint 1. |
 | **good-first-issue** | The sacred tag for backlog items suitable as an Astronaut's first PR of the sprint. Captain pre-tags 5–10 per sprint. Closed by PR, not by hand. |
 | **Weekly Sync** | Tuesday, Zoom, ~60 minutes. Pod assignments confirmed, first PRs reviewed live, ADRs progressed. |
-| **The 7 CI gates** | Required green-light checks before human review: ruff · mypy --strict · pytest >80% · bandit + safety · markdownlint · CodeRabbit · Docker build. CI fail = no human review. |
+| **The 7 CI gates** | The *target* set of checks — ruff · mypy --strict · pytest >80% · bandit + safety · markdownlint · CodeRabbit · Docker build. ⚠️ **None of them runs today.** What runs is `rust-ci.yml` and `pr-linked-issue.yml`; the four Python and Silver suites are green locally and gate nothing ([#34](https://github.com/luanmorenommaciel/sentinel/issues/34)). |
 | **The Contract** (capital C) | Every commit on `sentinel` declares its contributors via mandatory `Co-Authored-By:` trailers — human, LLM model, and bot (CodeRabbit `Reviewed-By:`). Visible in `git log --author` forever. |
 | **Tool freedom** | The Astronaut picks any agentic coding tool (Claude Code, Cursor, Codex CLI, Aider, Zed AI, Kimi K2, Cline, Windsurf, or propose another). The non-negotiable is *attribution*. |
 | **Lego principle** | Every component declares input/output contracts (Pydantic in Python, Protobuf in Go/Rust). Components are swappable — change what's inside the boundary; the contract holds. |

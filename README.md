@@ -9,7 +9,7 @@ Sentinel is an open-source observability + remediation system for data pipelines
 
 ## 1. System architecture
 
-Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling (bronze → silver → read models). **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
+Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling (bronze → silver → read models). **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top. Alongside the path — not in it — **`flow-ui` observes the pipeline** from the collector's `/metrics` and a read-only view of bronze; nothing in the path depends on it being up. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
 
 ```mermaid
 flowchart TB
@@ -55,6 +55,12 @@ flowchart TB
     end
 
     POD3 -.->|"feeds future detection"| FUTURE
+
+    subgraph OBS["🔭 OBSERVABILITY · reads the path, is not in it"]
+        FLOW["flow-ui :8080<br/>four boards · read-only"]
+    end
+    POD2 -. "/metrics :9090" .-> FLOW
+    STORE -. "bronze.* read-only" .-> FLOW
 
     classDef contract fill:#fde68a,stroke:#b45309,stroke-width:4px,color:#3a2f00;
     classDef zone fill:#f1f5f9,stroke:#94a3b8,color:#0f172a;
@@ -144,7 +150,9 @@ sentinel/
 ├── infra/                         # 🔗 SHARED · ClickHouse bootstrap
 │   ├── clickhouse-init.sql                #   db/users init (dev-only auth)
 │   ├── clickhouse-users.d/                #   default-user network override (Rust HTTP path)
-│   └── clickhouse/init.d/01-bronze-otel.sql  #   the BRONZE schema (bronze.*, Pod-3-owned)
+│   └── clickhouse/init.d/            #   applied on ClickHouse boot, in order
+│       ├── 01-bronze-otel.sql         #     the BRONZE schema (bronze.*, Pod-3-owned)
+│       └── 02-silver-layer.sql        #     SILVER v1 · typed models + read views (ADR-0010)
 │
 ├── docs/                          # 🔗 SHARED · cross-cutting knowledge
 │   ├── adr/                       #   architecture decisions (numbered, Pod-spanning)
@@ -152,9 +160,12 @@ sentinel/
 │
 ├── services/                      # 🧩 PER-COMPONENT · self-contained implementations
 │   ├── collector-rust/            #   Pod 2 — selected Rust collector. Cargo/Docker/tests ✅
-│   └── generator-python/          #   Pod 1 — Python telemetry generator (otelgen)
+│   ├── generator-python/          #   Pod 1 — Python telemetry generator (otelgen)
+│   └── flow-ui/                   #   the pipeline watching itself — four boards, read-only
 │
-├── .github/workflows/             # per-component CI, path-filtered (rust-ci.yml, …)
+├── .github/
+│   ├── PULL_REQUEST_TEMPLATE.md   # what · why (the linked issue) · tests/evidence
+│   └── workflows/                 # rust-ci.yml · pr-linked-issue.yml
 └── .claude/                       # Crew B knowledge env (agents · KBs · skills · standards)
 ```
 
@@ -179,6 +190,13 @@ make logs                      # tail collector logs
 # inspect at http://localhost:8123/play  →  SELECT count() FROM bronze.otel_traces
 # scrape collector metrics at http://localhost:9090/metrics
 make reset                     # stop everything + drop the ClickHouse volume
+```
+
+Watch it happen instead of querying for it:
+
+```sh
+make ui                            # flow-ui → http://localhost:8080
+make generate-stream DURATION=10m  # real-time telemetry, paced by the wall clock
 ```
 
 Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-component dev still works standalone (`cd services/collector-rust && cargo test`).
