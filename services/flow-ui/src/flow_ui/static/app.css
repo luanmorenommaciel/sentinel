@@ -230,6 +230,18 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
    on the same insert. A double bar says "what this becomes", a pipe would say "where this
    goes", and only one of those is true. No mouths, no particles, on purpose. */
 .derive{fill:none;stroke:var(--rule-arrow);stroke-width:1.6;opacity:.75}
+/* A READ dependency, not a run. A view is a query: nothing travels this edge until someone
+   asks, so it gets no casing, no bore and no particles — only the colour of the table it
+   reads, so lineage is still followable. Dashed says "on demand". */
+.lin{fill:none;stroke-width:1.4;opacity:.5;stroke-dasharray:3 3}
+/* Its own tone classes, NOT the particle ones: `.p1{fill:var(--pri)}` is a FILL rule, and
+   a path wearing it renders as a filled triangle rather than a line — ten read edges came
+   out as one solid smear. */
+.lin.e1{stroke:var(--pri)} .lin.e2{stroke:var(--ter)} .lin.e3{stroke:var(--sec)}
+/* Kind is carried by the left edge of the box, so it survives the colour-blind test the
+   particle palette is already held to: three kinds, three border weights, one label each. */
+.sub-nd.k-mv{stroke-dasharray:4 3}
+.sub-nd.k-view{stroke-dasharray:1 3}
 .derive.tip{opacity:1}
 
 /* A mouth is a LIP, and a lip is pipe-shaped: a short section perpendicular to the run,

@@ -196,6 +196,7 @@ flowchart LR
         M1["collector /metrics<br/>rates · flush cadence · rejections · export latency"]
         M2["bronze.*<br/>row counts · per-service lineage · contract violations · volume band · call edges"]
         M3["silver.service_health_1m<br/>observed p50 latency · error rate"]
+        M4["system.tables · system.columns<br/>Silver's own shape — kinds, columns, lineage"]
     end
     subgraph declared["declared"]
         D1["topology.yaml<br/>the service graph, and each component's claimed latency"]
@@ -204,6 +205,7 @@ flowchart LR
     end
     M3 --> J{"declared → measured<br/>drawn as two claims"}
     D1 --> J
+    M4 --> S["the SILVER board draws itself<br/>from the database, not from a list"]
 ```
 
 The whole point of the ORIGIN board is that seam: `topology.yaml` says what a component's

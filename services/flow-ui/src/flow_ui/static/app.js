@@ -38,7 +38,9 @@
     origin:    { closed: [212, 196], open: [742, 248], openSel: [742, 386] },
     collector: { closed: [252, 152], open: [500, 344] },
     bronze:    { closed: [176, 136], open: [318, 252] },
-    silver:    { closed: [186, 136], open: [330, 392] },
+    //: SILVER open has no fixed size — `silverSize()` measures the graph. Add a model or
+    //: a view to the DDL and the box grows to hold it.
+    silver:    { closed: [186, 136] },
   };
 
   let graph = null, snap = null, table = null, model = null;
@@ -172,11 +174,11 @@
     //: Silver sits close to bronze rather than a full GAP away, because nothing travels
     //: between them: the materialized views fire inside ClickHouse on the same insert that
     //: writes bronze. A long run would draw transport that does not happen.
-    const DERIVE_GAP = 52;
+    const DERIVE_GAP = open.bronze && open.silver ? 130 : 52;
     for (const id of ["origin", "collector", "bronze", "silver"]) {
       const key = !open[id] ? "closed"
         : (id === "origin" && service && SIZE[id].openSel) ? "openSel" : "open";
-      const [w, h] = SIZE[id][key];
+      const [w, h] = id === "silver" && open.silver ? silverSize() : SIZE[id][key];
       boxes[id] = { id, x, y: CY - h / 2, w, h };
       x += w + (id === "bronze" ? DERIVE_GAP : GAP);
     }
@@ -230,8 +232,13 @@
       : null;
     // SILVER's sheet sits under SILVER, on the same rule: a sheet exists only while its own
     // row is selected.
-    const mSheet = open.silver && model
-      ? { x: boxes.silver.x, y: boxes.silver.y + boxes.silver.h + 30, w: SHEET_W, h: 236 }
+    // Height follows the content: an MV has no columns of its own, so a 236-tall panel to
+    // hold three lines is mostly empty box.
+    const mDoc = (graph?.silver_graph || {})[model];
+    const mSheet = open.silver && model && mDoc
+      ? { x: boxes.silver.x, y: boxes.silver.y + boxes.silver.h + 30, w: SHEET_W,
+          h: mDoc.kind === "mv" ? 108
+            : 108 + Math.ceil((mDoc.columns?.length || 0) / 2) * 13 }
       : null;
     // Not a box, so it was absent from these bounds and `fit()` scaled to an extent that
     // excluded it — the sheet ran off the canvas whenever bronze was open.
@@ -719,13 +726,34 @@
    *  not 1:1: gauge and sum both land in `metric_observations`, which is the one thing about
    *  this layer a reader cannot get from anywhere else on the board.
    */
-  const FEEDS = { log_events: "otel_logs",
-                  operation_executions: "otel_traces",
-                  metric_observations: "otel_metrics gauge + sum" };
-  const DERIVES = [["otel_logs", "log_events", "p1"],
-                   ["otel_traces", "operation_executions", "p2"],
-                   ["otel_metrics_gauge", "metric_observations", "p3"],
-                   ["otel_metrics_sum", "metric_observations", "p3"]];
+  /** Which signal colour a bronze table carries. Bronze routes on data-point TYPE, so the
+   *  four names are the four types; the fallback exists so an added table is drawn in the
+   *  neutral lane rather than crashing the render or silently reading as logs. */
+  const toneOf = (t) => /log/.test(t) ? "p1" : /trace|span/.test(t) ? "p2"
+    : /metric/.test(t) ? "p3" : "p1";
+
+  /** Every strand from BRONZE into SILVER, READ from the lineage rather than listed here.
+   *
+   *  It is one entry per materialized view that reads a bronze table — which is what a
+   *  strand *is*. Written as a constant it was a fourth copy of the DDL, after the SQL, the
+   *  MV definitions and `system.tables`, and the first thing to go stale the day someone
+   *  adds a model. Add an MV to `02-silver-layer.sql` and a strand appears; nothing here
+   *  needs editing.
+   */
+  const derives = () => {
+    const G = graph?.silver_graph || {};
+    return Object.entries(G)
+      .filter(([, n]) => n.kind === "mv")
+      .flatMap(([name, n]) => (n.sources || [])
+        .filter((src) => src.startsWith("bronze."))
+        .map((src) => [src.split(".")[1], name, toneOf(src.split(".")[1])]))
+      .sort((a, z) => bronzeOrder().indexOf(a[0]) - bronzeOrder().indexOf(z[0]));
+  };
+  //: The order bronze draws its own tables in, so the strands leave in the order they
+  //: arrive. Read from the same `graph.tables` bronzeBody iterates, never listed twice.
+  const bronzeOrder = () => Object.keys(graph?.tables || {});
+
+  const FEEDS_FALLBACK = "bronze";
 
   /** SILVER — what Bronze becomes, not where Bronze goes.
    *
@@ -734,6 +762,46 @@
    *  Bronze to Silver moves nothing — ADR-0010's materialized views fire inside ClickHouse
    *  on the same insert that writes bronze. Drawing a run between them would claim a hop
    *  that never happens, so it is drawn as a derivation: a short double bar, no particles.
+   */
+  //: Inside SILVER: three columns, one per kind, in the order data reaches them.
+  //: `colGap` is routing room, not decoration: ten table→view edges have to pass between
+  //: those two columns, and at 26 they shared one channel and rendered as a smear.
+  const SB = { w: 180, h: 34, gap: 6, colGap: 72, pad: 26, head: 78 };
+
+  /** SILVER's open footprint, measured from the graph rather than typed in.
+   *
+   *  Three columns because there are three kinds of object in ClickHouse, and that is a
+   *  property of ClickHouse, not of this schema. Height is however many rows the tallest
+   *  column needs. Add a model or a read view to `02-silver-layer.sql` and the box grows to
+   *  hold it with no edit here — which is the whole point of reading `system.tables`
+   *  instead of restating it.
+   */
+  function silverSize() {
+    const G = graph?.silver_graph || {};
+    const n = (k) => Object.values(G).filter((z) => z.kind === k).length;
+    const rows = Math.max(1, n("mv"), n("table"), n("view"));
+    return [SB.pad * 2 + SB.w * 3 + SB.colGap * 2,
+            SB.head + rows * (SB.h + SB.gap) + 18];
+  }
+
+  /** SILVER, opened: every object in the database as its own box, and the lineage between.
+   *
+   *  Three kinds live in `silver` and collapsing them was the confusion this fixes — the
+   *  first version drew three boxes and a list of six names, which said nothing about what
+   *  separates them:
+   *
+   *  - **table** (MergeTree) — stores rows. It has a count, a sort key and a TTL.
+   *  - **mv** (MaterializedView) — stores nothing. In ClickHouse this is an *insert
+   *    trigger*, not a stored result set: rows land in its source, it runs its SELECT over
+   *    that block and inserts into its target. It is why Silver holds only what arrived
+   *    after the DDL did.
+   *  - **view** — a named query, run when read. No rows exist until someone asks, so there
+   *    is no count to show and never will be.
+   *
+   *  Which is why the edges are not all the same edge. Bronze → mv → table carries
+   *  particles: rows really do move, on the insert. table → view carries none: nothing
+   *  flows there until a reader runs the query, and animating it would claim a stream that
+   *  does not exist. Colour is the source table's signal type throughout.
    */
   function silverBody(g, b, edges, fx) {
     const sv = snap?.silver || {};
@@ -755,57 +823,133 @@
           total ? `${sv.mvs} materialized views feeding` : "empty — run a stream"));
       return;
     }
-    // Ordered by the bronze table each model is derived FROM, not by whatever order
-    // `system.tables` returned. With the rows in source order the four strands run
-    // essentially straight across; in the catalogue's order they crossed in the 52px gap,
-    // and a crossing is a claim about routing that this mapping does not make.
-    const rank = (n) => { const i = DERIVES.findIndex(([, to]) => to === n);
-                          return i < 0 ? DERIVES.length : i; };
-    const names = Object.keys(models).sort((a, z) => rank(a) - rank(z) || a.localeCompare(z));
-    const TW = b.w - 52, TH = 34;
-    names.forEach((n, i) => {
-      const y = b.y + 46 + i * (TH + 6), x = b.x + 26;
-      // A `.hit` group, like BRONZE's tables: the rows are the thing the pointer is for, so
-      // they have to answer it. Plain rects did not, and the box read as inert next to a
-      // bronze box whose every row lit up.
+    const G = graph?.silver_graph || {};
+    const lay = silverLayout(G, b);
+    if (!lay) return;
+
+    // Column captions. A reader who has never met a ClickHouse MV needs to be told that the
+    // middle column is the only one holding anything.
+    [["MATERIALIZED VIEWS", "insert triggers · store nothing"],
+     ["TABLES", "the rows live here"],
+     ["READ VIEWS", "queries · run when read"]].forEach(([t, sub], c) => {
+      const x = lay.colX[c];
+      g.append(el("text", { class: "lbl", x, y: b.y + 48 }, t),
+        el("text", { class: "sub", x, y: b.y + 61, style: "opacity:.55" }, sub));
+    });
+
+    // Lineage inside SILVER, drawn before the boxes so the boxes cap the runs. Each read
+    // edge gets its own vertical channel in the gap; sharing one turned ten dependencies
+    // into a single unreadable smear.
+    let lane = 0;
+    for (const [name, n] of Object.entries(lay.nodes)) {
+      for (const src of (G[name].sources || [])) {
+        const from = lay.nodes[src.split(".")[1]];
+        if (!from) continue;                       // a bronze source; drawn by derivations()
+        // `p1..p3` are particle FILL classes; an edge wearing one renders filled.
+        const cls = (lay.tone[src.split(".")[1]] || "p1").replace("p", "e");
+        edges.append(el("path", { class: "lin " + cls,
+          d: fan(from.x + SB.w, from.cy, n.x, n.cy, 10 + (lane++ % 10) * 6) }));
+      }
+      // An MV writes into its target, and that write is the only real movement in here.
+      const tgt = G[name].target && lay.nodes[G[name].target];
+      if (tgt) {
+        const id = `sv-${name}`;
+        pipe(edges, id, fan(n.x + SB.w, n.cy, tgt.x, tgt.cy, 12), "", {}, 7);
+        mouth(tgt.x, tgt.cy, 7);
+        spawn(fx, id, lay.tone[name] || "p1");
+      }
+    }
+
+    for (const [name, n] of Object.entries(lay.nodes)) {
+      const kind = G[name].kind, sel = name === model;
       const node = el("g", { class: "hit", tabindex: "0", role: "button",
-        "aria-label": `${n}, ${fmt(models[n])} rows, derived from ${FEEDS[n] || "bronze"}` });
-      node.dataset.model = n;
-      node.append(el("rect", { class: "nd sub-nd" + (n === model ? " sel" : ""), x, y,
-          width: TW, height: TH, rx: 3 }),
-        el("text", { class: "txt", x: x + 10, y: y + 15 }, clip(n, 24)),
-        el("text", { class: "val", x: x + TW - 10, y: y + 15 }, fmt(models[n])),
-        el("text", { class: "sub", x: x + 10, y: y + 28 },
-          FEEDS[n] ? `from ${FEEDS[n]}` : "one row per bronze record"));
+        "aria-label": `${name}, ${KIND_SAYS[kind]}` });
+      node.dataset.model = name;
+      const rows = models[name];
+      node.append(el("rect", { class: "nd sub-nd" + (sel ? " sel" : "") + " k-" + kind,
+          x: n.x, y: n.y, width: SB.w, height: SB.h, rx: 3 }),
+        el("text", { class: "txt", x: n.x + 9, y: n.y + 15, style: "font-size:9px" },
+          clip(name, 28)),
+        el("text", { class: "sub", x: n.x + 9, y: n.y + 27, style: "opacity:.6" },
+          kind === "view" ? (graph?.silver_views?.[name]?.[0] || "query")
+            : kind === "mv" ? "on insert" : "stored"),
+        // Only a table has a count. A view's rows do not exist until it is read, and an MV
+        // holds none at all — printing 0 there would be a different claim from "none".
+        el("text", { class: rows === undefined ? "sub" : "val", x: n.x + SB.w - 9, y: n.y + 21,
+            style: rows === undefined ? "text-anchor:end;opacity:.4" : "text-anchor:end" },
+          rows === undefined ? "—" : fmt(rows)));
       g.append(node);
-      ports.silver[n] = { x, y: y + TH / 2 };
+      if (kind === "mv") ports.silver[name] = { x: n.x, y: n.cy };
+    }
+  }
+
+  //: The short form, for the sheet header where there are 320 units to share with a title.
+  const KIND_SHORT = { table: "table", mv: "materialized view", view: "read view" };
+  //: The long form, for the screen reader, which has no width limit and needs the whole
+  //: distinction spelled out — it cannot see the border style that carries it visually.
+  const KIND_SAYS = {
+    table: "a table — stores rows",
+    mv: "a materialized view — an insert trigger, stores nothing",
+    view: "a read view — a query, run when read, stores nothing",
+  };
+
+  //: Particles for one strand, on the batch arrival that feeds it.
+  function spawn(fx, id, cls, r = 2.6) {
+    const { dur, n } = pools.__batch || { dur: 3.2, n: 3 };
+    const pool = [];
+    for (let k = 0; k < n; k++) {
+      const c = el("circle", { class: cls, r, opacity: 0 });
+      const a = el("animateMotion", { dur: `${(dur * 0.55).toFixed(2)}s`,
+        repeatCount: "indefinite", begin: `${(k * dur / n + dur).toFixed(2)}s` });
+      a.append(el("mpath", { href: `#${id}` }));
+      c.append(a); fx.append(c); pool.push(c);
+    }
+    pools[id] = pool;
+  }
+
+  /** Rows and columns for SILVER's objects, ordered so the lineage runs mostly straight.
+   *
+   *  Each column is ordered by where its own source sits in the column before it, which is
+   *  the same rule that took the four bronze strands from crossing to flat. A view with
+   *  three sources cannot be placed without crossing something, so those go last.
+   */
+  function silverLayout(G, b) {
+    const names = Object.keys(G);
+    if (!names.length) return null;
+    const kind = (k) => names.filter((n) => G[n].kind === k);
+    const bare = (r) => r.split(".")[1];
+    // MVs in the order BRONZE draws the tables they read, so the strands arrive in the
+    // order they left. An MV reading something bronze does not draw goes last, in place.
+    const rankMv = (m) => {
+      const order = bronzeOrder();
+      const i = order.indexOf(bare(G[m].sources[0] || ""));
+      return i < 0 ? order.length : i;
+    };
+    const mvs = kind("mv").sort((a, z) => rankMv(a) - rankMv(z) || a.localeCompare(z));
+    const tone = {};
+    mvs.forEach((m) => { tone[m] = toneOf(bare(G[m].sources[0] || "")); });
+    const tables = [];
+    mvs.forEach((m) => {
+      const t = G[m].target;
+      if (t && G[t] && !tables.includes(t)) { tables.push(t); tone[t] = tone[m]; }
     });
-    // READ VIEWS, one per line with what each one answers. Two columns of bare names fit,
-    // and six names with no explanation is a list, not information — a reader cannot tell a
-    // view from a table, or guess that `run_summary` is one row per run.
-    // Name and answer on two lines, not one. Side by side they collided: a 22-character
-    // name and a 43-character answer need 455 units and the box has 278 of usable width, so
-    // the two runs of text overlapped each other and the panel was unreadable.
-    const vd = graph?.silver_views || {};
-    const vy = b.y + 46 + names.length * (TH + 6) + 14;
-    g.append(el("text", { class: "lbl", x: b.x + 26, y: vy }, "READ VIEWS"),
-      el("text", { class: "sub", x: b.x + 26, y: vy + 15 },
-        "stored nowhere — a query over the models above"));
-    (sv.views || []).forEach((v, i) => {
-      const vyy = vy + 37 + i * 25, read = v === "service_health_1m";
-      const [grain, what] = vd[v] || ["", ""];
-      g.append(el("text", { class: "sub", x: b.x + 26, y: vyy,
-          // The one flow-ui actually consumes today, so the panel does not imply it reads six.
-          style: read ? "fill:var(--sec)" : null },
-        (read ? "▸ " : "· ") + clip(v, 26)),
-        el("text", { class: "sub", x: b.x + 38, y: vyy + 12, style: "opacity:.6" },
-          grain ? `${grain} · ${clip(what, 41)}` : ""));
+    kind("table").forEach((t) => { if (!tables.includes(t)) tables.push(t); });
+    // Views by their first source's row, multi-source ones after — they cross whatever
+    // order they are given, so they are not allowed to displace the ones that do not.
+    const views = kind("view").sort((a, z) => {
+      const rank = (v) => (G[v].sources.length > 1 ? 900
+        : tables.indexOf(bare(G[v].sources[0] || "")));
+      return rank(a) - rank(z) || a.localeCompare(z);
     });
-    // Marking one item in a second colour is a claim, and an unexplained claim is a puzzle.
-    // The legend rebuilds per level and this mark only exists here, so it is said here.
-    g.append(el("text", { class: "sub", x: b.x + 26,
-      y: vy + 37 + (sv.views || []).length * 25 + 4,
-      style: "fill:var(--sec)" }, "▸ the only one this board reads"));
+    tables.forEach((t) => { tone[t] ||= "p1"; });
+    const colX = [0, 1, 2].map((c) => b.x + SB.pad + c * (SB.w + SB.colGap));
+    const nodes = {};
+    [mvs, tables, views].forEach((col, c) => col.forEach((n, i) => {
+      const y = b.y + SB.head + i * (SB.h + SB.gap);
+      nodes[n] = { x: colX[c], y, cy: y + SB.h / 2, col: c, row: i };
+    }));
+    return { nodes, colX, tone,
+             rows: Math.max(mvs.length, tables.length, views.length) };
   }
 
   /** BRONZE ⇒ SILVER, per table, once both boxes are open.
@@ -824,25 +968,14 @@
    */
   function derivations(edges, fx, B) {
     if (!(open.bronze && open.silver)) return;
-    const { dur, n: inFlight } = pools.__batch || { dur: 3.2, n: 3 };
     let seen = 0;
-    DERIVES.forEach(([from, to, cls], i) => {
+    derives().forEach(([from, to, cls], i) => {
       const a = ports.bronze[from], z = ports.silver[to];
       if (!a || !z) return;
       const id = `dv${i}`;
-      // Same target, two sources: separate the channels so both runs are legible.
-      const stub = to === "metric_observations" ? (from.endsWith("gauge") ? 18 : 32) : 24;
-      pipe(edges, id, fan(a.x, a.y, z.x, z.y, stub), "", {}, 7);
+      pipe(edges, id, fan(a.x, a.y, z.x, z.y, 30 + i * 8), "", {}, 7);
       mouth(z.x, z.y, 7);
-      const pool = [];
-      for (let k = 0; k < inFlight; k++) {
-        const c = el("circle", { class: cls, r: 2.6, opacity: 0 });
-        const an = el("animateMotion", { dur: `${(dur * 0.55).toFixed(2)}s`,
-          repeatCount: "indefinite", begin: `${(k * dur / inFlight + dur).toFixed(2)}s` });
-        an.append(el("mpath", { href: `#${id}` }));
-        c.append(an); fx.append(c); pool.push(c);
-      }
-      pools[id] = pool;
+      spawn(fx, id, cls);
       seen++;
     });
   }
@@ -932,26 +1065,44 @@
    *  because a type is metadata and a purpose is a claim.
    */
   function modelsheet(parent, sheet) {
-    const d = (graph?.silver_tables || {})[model];
+    const d = (graph?.silver_graph || {})[model];
     if (!d || !sheet) return;
     const { x, y, w, h } = sheet;
     parent.append(el("rect", { class: "nd sheet", x, y, width: w, height: h, rx: 4 }),
       el("text", { class: "lbl", x: x + 16, y: y + 24, style: "fill:var(--sec)" },
-        model.toUpperCase()));
-    (d.summary.match(/.{1,48}(\s|$)/g) || []).slice(0, 2).forEach((line, i) =>
+        model.toUpperCase()),
+      // What KIND it is, because that is the thing a reader gets wrong about a ClickHouse
+      // `silver` database. On its own line: the long form is 53 characters against a
+      // 320-wide sheet, so right-anchored beside the title it ran straight through it.
+      el("text", { class: "sub", x: x + w - 16, y: y + 24, style: "text-anchor:end" },
+        KIND_SHORT[d.kind] || ""));
+    // A view's own purpose comes from its grain and its answer; a table's is written down.
+    const vd = graph?.silver_views?.[model];
+    const say = d.summary || (vd ? `${vd[0]} · ${vd[1]}` : "");
+    (say.match(/.{1,48}(\s|$)/g) || []).slice(0, 2).forEach((line, i) =>
       parent.append(el("text", { class: "sub", x: x + 16, y: y + 42 + i * 13 }, line.trim())));
+    // Reads above, writes below. Both at the same y drew one on top of the other.
+    if (d.sources?.length)
+      parent.append(el("text", { class: "sub", x: x + 16, y: y + 70, style: "opacity:.6" },
+        "reads " + clip(d.sources.join(", "), 52)));
+    if (d.target)
+      parent.append(el("text", { class: "sub", x: x + 16, y: y + 83, style: "opacity:.6" },
+        `writes silver.${d.target}`));
     // Two columns: 16 to 19 columns will not fit one, and truncating the list would hide
     // exactly the normalized fields that are the reason this layer exists.
     const cols = d.columns || [], half = Math.ceil(cols.length / 2);
     cols.forEach(([name, type], i) => {
       const cx = x + 16 + (i < half ? 0 : w / 2 - 8);
-      const cy = y + 78 + (i % half) * 13;
+      const cy = y + 90 + (i % half) * 13;
       parent.append(el("text", { class: "sub", x: cx, y: cy }, clip(name, 20)),
         el("text", { class: "sub", x: cx + w / 2 - 24, y: cy,
           style: "text-anchor:end;opacity:.55" }, clip(shortType(type), 13)));
     });
+    // An MV has no columns and no sort key of its own; saying so beats an empty panel.
     parent.append(el("text", { class: "sub", x: x + 16, y: y + h - 12 },
-      `ORDER BY ${clip(d.order_by, 56)}`));
+      d.order_by ? `ORDER BY ${clip(d.order_by, 56)}`
+        : d.kind === "mv" ? "no storage of its own — the rows land in its target"
+        : "no sort key — computed at read time"));
   }
 
   //: ClickHouse spells types in full; the sheet has 13 characters. The distinction that
@@ -1712,7 +1863,7 @@
     // A derivation strand runs on the growth of the bronze table it reads, for the same
     // reason: the MV fires on that table's insert and on nothing else. A silent source
     // means a still strand, not a strand animating over nothing.
-    DERIVES.forEach(([from], i) =>
+    derives().forEach(([from], i) =>
       show(`dv${i}`, ((s.bronze_rate || {})[from] || 0) > 0 ? 2 : 0));
     // Each tap runs only while its own outcome is happening. A pipeline losing nothing
     // should have three still lines, not three animations implying otherwise.

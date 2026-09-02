@@ -157,7 +157,7 @@ async def graph() -> dict:
     return {
         "topology": topology.service_graph(),
         "tables": topology.TABLE_DOCS,
-        "silver_tables": await poller.clickhouse.silver_schema(),
+        "silver_graph": await poller.clickhouse.silver_graph(),
         "silver_views": ClickHouse.SILVER_VIEW_DOCS,
         "empty_by_contract": topology.EMPTY_BY_CONTRACT,
         "derived": topology.DERIVED,

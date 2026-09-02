@@ -59,48 +59,68 @@ def test_a_row_that_does_not_parse_is_skipped_not_fatal(line):
     assert silver(f"MergeTree\tlog_events\t3\n{line}\n")["models"] == {"log_events": 3}
 
 
-def schema(keys: str, cols: str) -> dict:
+def sgraph(rows, cols: str = "") -> dict:
     ch = ClickHouse("http://ch:8123", "bronze")
-    seen: list[str] = []
 
     async def _query(sql: str) -> str:
-        seen.append(sql)
-        if isinstance(keys, Exception):
-            raise keys
-        return keys if "system.tables" in sql else cols
+        if isinstance(rows, Exception):
+            raise rows
+        return rows if "system.tables" in sql else cols
 
     ch._query = _query  # type: ignore[method-assign]
-    return asyncio.run(ch.silver_schema())
+    return asyncio.run(ch.silver_graph())
 
 
-def test_only_the_physical_models_get_a_schema():
-    """`system.columns` also returns the MVs and read views.
-
-    An MV's columns are its target's, so an unfiltered read returned each model's schema
-    three times under three names. Filtering happens in Python because ClickHouse 24.3
-    rejects `IN (SELECT … FROM system.tables)` with "Not-ready Set".
-    """
-    state = schema(
-        "log_events\tscenario, event_time\ttoDate(event_time)\n",
-        "log_events\tevent_time\tDateTime64(9)\n"
-        "log_events\tbody\tString\n"
-        "log_events_mv\tevent_time\tDateTime64(9)\n"
-        "log_health_1m\twindow_start\tDateTime\n",
-    )
-    assert list(state) == ["log_events"]
-    assert state["log_events"]["columns"] == [
-        ["event_time", "DateTime64(9)"], ["body", "String"]]
-    assert state["log_events"]["order_by"] == "scenario, event_time"
+MV = ("CREATE MATERIALIZED VIEW silver.log_events_mv TO silver.log_events "
+      "AS SELECT * FROM bronze.otel_logs")
+VIEW = "CREATE VIEW silver.log_health_1m AS SELECT * FROM silver.log_events"
+TBL = "CREATE TABLE silver.log_events (body String) ENGINE = MergeTree"
 
 
-def test_a_model_carries_its_hand_written_purpose():
-    """Columns are metadata and cannot drift. A purpose is a claim, so it is written down."""
-    state = schema("log_events\tk\tp\n", "log_events\tbody\tString\n")
-    assert "one row per log record" in state["log_events"]["summary"].lower()
+def test_the_three_kinds_are_told_apart_by_engine():
+    """A table stores rows, an MV is an insert trigger, a view is a query. Collapsing them
+    is exactly the thing the board now exists to un-collapse."""
+    g = sgraph(f"log_events\tMergeTree\tscenario\t{TBL}\n"
+               f"log_events_mv\tMaterializedView\t\t{MV}\n"
+               f"log_health_1m\tView\t\t{VIEW}\n")
+    assert {k: v["kind"] for k, v in g.items()} == {
+        "log_events": "table", "log_events_mv": "mv", "log_health_1m": "view"}
 
 
-def test_an_unreachable_clickhouse_yields_no_schema_rather_than_raising():
-    assert schema(httpx.ConnectError("refused"), "") == {}
+def test_an_mv_reads_its_from_and_writes_its_to():
+    """`TO silver.x` is the target and must not be reported as a source, or the MV would
+    look like it reads the table it writes."""
+    g = sgraph(f"log_events_mv\tMaterializedView\t\t{MV}\n")
+    assert g["log_events_mv"]["sources"] == ["bronze.otel_logs"]
+    assert g["log_events_mv"]["target"] == "log_events"
+
+
+def test_a_view_reads_every_table_it_names():
+    ddl = ("CREATE VIEW silver.run_summary AS SELECT * FROM silver.log_events "
+           "JOIN silver.operation_executions USING run_id")
+    g = sgraph(f"run_summary\tView\t\t{ddl}\n")
+    assert g["run_summary"]["sources"] == [
+        "silver.log_events", "silver.operation_executions"]
+
+
+def test_a_table_added_to_the_ddl_needs_no_code_change():
+    """The whole point of reading `system.tables`: the board is the database's shape, not a
+    list maintained here. Verified live too — a view created in ClickHouse appeared on the
+    board, wired to its source, with nothing edited."""
+    g = sgraph("brand_new\tMergeTree\tid\tCREATE TABLE silver.brand_new (id UInt8) "
+               "ENGINE = MergeTree\n")
+    assert g["brand_new"]["kind"] == "table"
+
+
+def test_an_mv_does_not_repeat_its_targets_columns():
+    """An MV's columns *are* its target's, so listing them says the same thing twice."""
+    g = sgraph(f"log_events_mv\tMaterializedView\t\t{MV}\n",
+               "log_events_mv\tbody\tString\n")
+    assert g["log_events_mv"]["columns"] == []
+
+
+def test_an_unreachable_clickhouse_yields_no_graph_rather_than_raising():
+    assert sgraph(httpx.ConnectError("refused")) == {}
 
 
 def test_every_read_view_the_box_lists_has_something_to_say_about_itself():

@@ -42,7 +42,7 @@ is something the page does on its own — nothing tells it.
 | **Flow** → open `ORIGIN` | the declared service graph, each producer carrying its fused state; pipe width is what was actually traced on that edge |
 | **Flow** → open `COLLECTOR-RUST` | `receive → validate → buffer`, and the three ways a signal does not simply arrive |
 | **Flow** → open `BRONZE` | the four tables, each strand carrying the type that lands in it. Pick a table for its datasheet, pick it again to close |
-| **Flow** → open `SILVER` | the three models and the six read views ADR-0010 derives from bronze |
+| **Flow** → open `SILVER` | every object in the database as its own box — materialized views, tables, read views — with the lineage between them |
 | **Flow** → open `BRONZE` **and** `SILVER` | which table becomes which model — 4 → 3, because gauge and sum share one |
 | **Health** | the verdict and the sentence behind it, over a 120s window |
 | **Contract** | the receive boundary: what would be dropped under `strict`, and who is violating |
@@ -133,8 +133,8 @@ streaming or backfilling — the buffer's flush cadence is the tell, and the two
 | **Origin** | the seven services as a graph, **declared config beside observed row counts** | `topology.yaml` + bronze |
 | **Collector** | where a signal comes from and where it goes, with the three outcomes | `/metrics` |
 | **Bronze** | the four tables; pick one for the read contract as its datasheet | contract v1.0.0.1 |
-| **Silver** | the models, their row counts, and the six read views with what each answers | `system.tables` |
-| **Silver** → pick a model | its columns and sort key, read live so they cannot drift | `system.columns` |
+| **Silver** | the whole `silver` DAG: 4 MVs → 3 tables → 6 read views, drawn from the database itself | `system.tables` |
+| **Silver** → pick any node | what kind it is, what it reads and writes, its columns and sort key | `system.columns` |
 | **Bronze + Silver** | the per-table derivation, drawn from the MV definitions | silver DDL |
 
 `Esc` returns to the overview. The legend at the bottom is rebuilt on every level change,
@@ -221,6 +221,9 @@ not for this service.
   columns §2 guarantees are shown, absent optional IDs are `''` per §4, grouping is by
   `ServiceName` because §5.6 makes that the one index-accelerated axis, and the unindexed
   `ResourceAttributes` Map probes (§3, §6) stay off the per-tick path.
+- **`system.tables` / `system.columns`** — Silver's shape is read from ClickHouse, never
+  restated here: engine gives the kind, `create_table_query` gives the lineage. Add a model or
+  a view to `02-silver-layer.sql` and it appears on the board with no code change.
 - **`silver.service_health_1m`** (ADR-0010) — per-producer latency quantiles and error rate,
   the *measured* half of each ORIGIN node's `declared → measured`. Read on the slow lane and
   optional: absent Silver means the node shows the declared figure alone.

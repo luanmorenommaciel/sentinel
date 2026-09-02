@@ -276,6 +276,41 @@ not imply flow-ui reads six things it does not read. Six tests pin the parsing, 
 present-but-empty vs absent split and an unreachable ClickHouse reading as absent rather than
 taking the board down.
 
+### Silver is a DAG now, and the DAG is the database's shape — not a list in the code
+
+Three boxes and a list of six names said nothing about what separates them, and the question
+it produced was the right one: *what is the difference between a table and a view?* Every
+object in `silver` is now its own box, in three columns, with the lineage drawn between them.
+
+**Three kinds, and the confusion is worth naming.** ClickHouse puts all three in one database
+and the words mislead:
+
+| | | on the board |
+|---|---|---|
+| **MergeTree** | a table — stores rows, has a sort key and a TTL | solid border, a row count |
+| **MaterializedView** | *not* a stored result set. An **insert trigger**: rows land in its source, it runs its SELECT over that block and inserts into its target. Stores nothing | dashed border, `on insert`, no count |
+| **View** | a named query, run at read time. No rows exist until someone asks | dotted border, its grain, `—` |
+
+That distinction is why Silver only holds what arrived after the DDL did — the MVs do not
+`POPULATE` — and it is the thing this board had been hiding.
+
+**The edges are not all the same edge.** `bronze → mv → table` carries particles, because rows
+really do move on that insert. `table → view` carries none: nothing flows there until a reader
+runs the query, and animating it would draw a stream that does not exist. Colour is the source
+table's signal type throughout, so lineage stays followable either way.
+
+**Nothing here enumerates the schema.** `silver_graph()` reads `system.tables`, classifies by
+engine, and parses lineage out of `create_table_query` — `TO x.y` is an MV's target, every
+other `bronze.`/`silver.` reference is a source. The old `DERIVES` constant, four bronze→model
+pairs typed into `app.js`, was a fourth copy of the DDL after the SQL, the MV definitions and
+`system.tables`; it is now computed. The box's own footprint is measured from the graph rather
+than typed in.
+
+**Verified the way the claim deserves:** a `CREATE VIEW silver.error_budget_1m AS SELECT …
+FROM silver.operation_executions` run against the live database appeared on the board — in the
+READ VIEWS column, placed next to the table it reads, wired to it by an edge in that table's
+colour, with the box grown to seven rows — with **no code edited**. Then dropped again.
+
 ### Silver's models have datasheets too — read from ClickHouse, not restated
 
 Clicking a silver model opens a sheet under the box, the same shape as bronze's. The
@@ -289,10 +324,10 @@ provenance is deliberately different, and the asymmetry is the point:
   would only create something to go stale.
 
 Only the one-line purpose per model is written by hand, because a type is metadata and a
-purpose is a claim. `system.columns` is filtered in Python rather than in the query:
+purpose is a claim. An MV's columns are skipped, because they *are* its target's — listing
+them says the same thing twice. (An earlier version tried to filter this in SQL and could not:
 ClickHouse 24.3 rejects `IN (SELECT … FROM system.tables)` with *"Not-ready Set is passed as
-the second argument for function 'in'"*, and unfiltered it returned each model's schema three
-times, once under each materialized view that writes it.
+the second argument for function 'in'"*.)
 
 **And the six read views now say what they are.** A bare list of names is a list, not
 information — a reader cannot tell a view from a table, or guess that `run_summary` is one row

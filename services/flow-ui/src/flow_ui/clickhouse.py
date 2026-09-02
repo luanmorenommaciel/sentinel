@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import ClassVar
 
 import httpx
@@ -471,43 +472,60 @@ class ClickHouse:
         "run_summary": ("per run", "services, traces, operations, errors"),
     }
 
-    async def silver_schema(self) -> dict:
-        """Each Silver model's columns and keys, read from ClickHouse rather than restated.
+    async def silver_graph(self) -> dict:
+        """Every object in `silver`, what kind it is, and what it reads — from ClickHouse.
 
-        The asymmetry with :data:`topology.TABLE_DOCS` is the point. Bronze's datasheet is
-        hand-written because the read contract makes a *subset* claim — only some columns are
-        populated, the rest sit at their ClickHouse default by design (§2) — and no DDL can
-        say that. Silver makes no such claim: the DDL is the whole definition, so restating
-        it in Python would only create something that can drift from the deployed schema.
+        Three kinds live in that database and they are not the same thing, which is exactly
+        what a reader gets wrong:
 
-        `system.columns` and `system.tables` are both metadata; this scans no data.
+        * **MergeTree** — a real table. Stores rows, has a sort key and a TTL.
+        * **MaterializedView** — not a stored result set, the way Postgres uses the word. In
+          ClickHouse it is an *insert trigger*: when rows land in its source it runs its
+          SELECT over that block and inserts into its `TO` target. It stores nothing itself.
+          This is why Silver holds only what arrived after the DDL did — they do not
+          `POPULATE`.
+        * **View** — a named query, run at read time. Stores nothing, and has no row count
+          to show, because the rows do not exist until someone asks.
+
+        Lineage is parsed out of `create_table_query` rather than declared here. `TO x.y` is
+        an MV's target and `FROM x.y` its source; a plain view's sources are every table it
+        names. Written down by hand it would be a second copy of the DDL, free to drift from
+        the one ClickHouse is actually running.
         """
         out: dict[str, dict] = {}
         try:
-            keys = await self._query(
-                "SELECT name, sorting_key, partition_key FROM system.tables "
-                "WHERE database = 'silver' AND engine = 'MergeTree' FORMAT TSV")
+            rows = await self._query(
+                "SELECT name, engine, sorting_key, "
+                "replaceRegexpAll(create_table_query, '\\s+', ' ') "
+                "FROM system.tables WHERE database = 'silver' FORMAT TSV")
             cols = await self._query(
                 "SELECT table, name, type FROM system.columns "
                 "WHERE database = 'silver' ORDER BY table, position FORMAT TSV")
         except httpx.HTTPError as exc:
-            log.info("silver schema unavailable: %s", exc)
+            log.info("silver graph unavailable: %s", exc)
             return out
-        for line in keys.splitlines():
+        ref = re.compile(r"\b(bronze|silver)\.([a-z_0-9]+)")
+        for line in rows.splitlines():
             parts = line.split("\t")
-            if len(parts) != 3:
+            if len(parts) != 4:
                 continue
-            out[parts[0]] = {"columns": [], "order_by": parts[1], "partition": parts[2],
-                             "summary": self.SILVER_SUMMARY.get(parts[0], "")}
-        # Filtered here, not in the query: ClickHouse 24.3 rejects `IN (SELECT … FROM
-        # system.tables)` with "Not-ready Set is passed as the second argument for function
-        # 'in'". The names are already in hand from the query above, so the filter is free.
-        # It matters — `system.columns` also returns the four materialized views and six read
-        # views, and an MV's columns are its target's, so unfiltered each model's schema came
-        # back three times under three names.
+            name, engine, sort, ddl = parts
+            kind = {"MergeTree": "table", "MaterializedView": "mv", "View": "view"}.get(engine)
+            if not kind:
+                continue
+            # `TO silver.x` is where an MV writes; everything else it names, it reads.
+            to = re.search(r"\bTO\s+(?:bronze|silver)\.([a-z_0-9]+)", ddl)
+            target = to.group(1) if to else ""
+            seen = {f"{db}.{tbl}" for db, tbl in ref.findall(ddl)}
+            sources = sorted(r for r in seen
+                             if r.split(".")[1] not in (name, target))
+            out[name] = {"kind": kind, "sources": sources, "target": target,
+                         "order_by": sort, "columns": [],
+                         "summary": self.SILVER_SUMMARY.get(name, "")}
         for line in cols.splitlines():
             parts = line.split("\t")
-            if len(parts) != 3 or parts[0] not in out:
+            # An MV's columns are its target's; listing them would say the same thing twice.
+            if len(parts) != 3 or parts[0] not in out or out[parts[0]]["kind"] == "mv":
                 continue
             out[parts[0]]["columns"].append([parts[1], parts[2]])
         return out
