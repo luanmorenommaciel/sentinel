@@ -829,16 +829,29 @@
     // A key, not column headings: the columns are DAG depth now, so any of them can hold
     // any kind. Kind is carried by the border, and a border style nobody explains is a
     // pattern, not information.
-    // The swatch wears the real class, so the key cannot drift from what it describes.
-    [["k-table", "table", "lit — the rows are in here"],
-     ["k-mv", "materialized view", "dim — a trigger; rows pass through"],
-     ["k-view", "read view", "dark — a query, run when read"]].forEach(([k, t, why], i) => {
-      const x = b.x + SB.pad + i * 210, y = b.y + 46;
-      g.append(el("rect", { class: "nd sub-nd " + k,
-          x, y: y - 9, width: 12, height: 12, rx: 2 }),
-        el("text", { class: "sub", x: x + 18, y }, t),
-        el("text", { class: "sub", x: x + 18, y: y + 12, style: "opacity:.5" }, why));
-    });
+    // The key is a legend, not a control, and it was being read as three checkboxes: a
+    // 12x12 rounded square beside a label is the shape of something you tick. It is a wide
+    // flat bar now — a miniature of the node it describes, which is what it actually is —
+    // and `pointer-events:none` means it never takes a cursor either.
+    //
+    // It does answer the pointer, though, just from the other end: selecting a node lights
+    // the swatch for that node's kind. The legend stops being dead chrome and starts saying
+    // "the thing you just picked is one of these".
+    const picked = (graph?.silver_graph || {})[model]?.kind;
+    [["k-table", "table", "table", "lit — the rows are in here"],
+     ["k-mv", "mv", "materialized view", "dim — a trigger; rows pass through"],
+     ["k-view", "view", "read view", "dark — a query, run when read"]]
+      .forEach(([k, kind, t, why], i) => {
+        const x = b.x + SB.pad + i * 210, y = b.y + 46, on = kind === picked;
+        // `el`'s third argument is TEXT, not children — passing elements there set the
+        // group's textContent and the swatch was never created at all.
+        const key = el("g", { class: "key" + (on ? " on" : "") });
+        key.append(
+          el("rect", { class: "sw sub-nd " + k, x, y: y - 8, width: 24, height: 11, rx: 2 }),
+          el("text", { class: "sub", x: x + 32, y }, t),
+          el("text", { class: "sub", x: x + 32, y: y + 12, style: "opacity:.5" }, why));
+        g.append(key);
+      });
 
     // Lineage inside SILVER, drawn before the boxes so the boxes cap the runs. Each read
     // edge gets its own vertical channel in the gap; sharing one turned ten dependencies

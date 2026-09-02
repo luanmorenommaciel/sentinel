@@ -274,6 +274,13 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
      view   near   — a query, nothing to light up until someone runs it
 
    Body text stays above 10:1 on all three, and the sub-labels above 3:1, in both worlds. */
+/* The key. Never a target — no cursor, no hover, no hit area — and dimmed until the
+   selection makes one of the three relevant. */
+.key{pointer-events:none;opacity:.62;transition:opacity .16s}
+.key.on{opacity:1}
+.key.on .sw{stroke-width:1.6}
+.key.on .sub{fill:var(--txt)}
+.sw{stroke-width:1}
 .sub-nd.k-table{fill:var(--k-table);stroke:var(--dim2);stroke-dasharray:none}
 .sub-nd.k-mv{fill:var(--k-mv);stroke:var(--dim);stroke-dasharray:4 3}
 .sub-nd.k-view{fill:var(--k-view);stroke:var(--rule-arrow);stroke-dasharray:1 3}

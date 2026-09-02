@@ -341,6 +341,20 @@ every edge and particle here, and a box borrowing one would make the same channe
 things. Border style stays as the redundant second reading, so the distinction survives
 greyscale and a colour-blind reader.
 
+**The key is a legend, and it was being read as three checkboxes.** A 12×12 rounded square
+beside a label is the shape of something you tick, so it invited a click it could not answer.
+It is a wide flat bar now — a miniature of the node it describes, which is what it actually is
+— and `pointer-events:none`, so it never takes a cursor either.
+
+It does answer the pointer, from the other end: **selecting a node lights the swatch for that
+node's kind**, and the other two stay dim. The legend stops being dead chrome and starts saying
+*the thing you just picked is one of these*. Verified across all three kinds and the
+nothing-selected state.
+
+**A silent failure mode worth knowing:** `el(tag, attrs, text)`'s third argument is text, not
+children. Passing elements there sets the group's `textContent` and the child is never created
+— no error, no warning, just a legend with no swatches in it.
+
 **And it surfaced a contrast bug that predates it.** Substrate's `--dim` was `#3D5A72`, putting
 every `.sub` label at **2.8:1** on the old panel and 2.09 on the new lit ground — under the 3:1
 floor for small text, on labels that are not decoration: `on insert`, `stored`, `per minute`,
