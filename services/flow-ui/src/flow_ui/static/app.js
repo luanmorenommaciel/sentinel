@@ -829,11 +829,12 @@
     // A key, not column headings: the columns are DAG depth now, so any of them can hold
     // any kind. Kind is carried by the border, and a border style nobody explains is a
     // pattern, not information.
-    [["k-mv", "materialized view", "an insert trigger · stores nothing"],
-     ["k-tbl", "table", "the rows live here"],
-     ["k-view", "read view", "a query · run when read"]].forEach(([k, t, why], i) => {
-      const x = b.x + SB.pad + i * 200, y = b.y + 46;
-      g.append(el("rect", { class: "nd sub-nd " + (k === "k-tbl" ? "" : k),
+    // The swatch wears the real class, so the key cannot drift from what it describes.
+    [["k-table", "table", "filled — the rows live here"],
+     ["k-mv", "materialized view", "hollow — an insert trigger, stores nothing"],
+     ["k-view", "read view", "sunk — a query, run when read"]].forEach(([k, t, why], i) => {
+      const x = b.x + SB.pad + i * 210, y = b.y + 46;
+      g.append(el("rect", { class: "nd sub-nd " + k,
           x, y: y - 9, width: 12, height: 12, rx: 2 }),
         el("text", { class: "sub", x: x + 18, y }, t),
         el("text", { class: "sub", x: x + 18, y: y + 12, style: "opacity:.5" }, why));

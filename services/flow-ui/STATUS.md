@@ -323,6 +323,17 @@ ClickHouse will let you build one.
 | A second-stage MV: `silver.log_events → silver.log_events_hourly` | landed in a **fourth column** that did not exist before, after the table it reads |
 | A table nothing feeds (`manual_annotations`) | column 0 with the sources, no incoming edge — correct: nothing produces it |
 
+**Kind is on two channels, and neither is hue.** Hue is spoken for: `--pri`, `--sec` and
+`--ter` mean logs, traces and metrics everywhere on this canvas, and a box borrowing one would
+make the same channel say two things. The **ground** was free, and there the difference is
+literal rather than a code to memorise — a table is *filled* because it holds something, an MV
+is *hollow* because rows pass through it and it stores nothing, a view is *sunk* because it is
+a window onto the rows below. Border style is the redundant second channel, so the distinction
+survives a colour-blind reader and greyscale, which this repo's own rule requires. Strokes stay
+inside the structural family (`--dim2` / `--viaS` / `--rule-arrow`), defined per palette, so
+both worlds keep their own version. The key swatches wear the real classes, so the legend
+cannot drift from what it describes.
+
 **Two defects that only a real object could have found**, and they were the same defect twice:
 `SummingMergeTree` — the obvious engine for a rollup — did not match the literal string
 `"MergeTree"`, so the table was **invisible** in `silver_graph` and **absent from `models`** in

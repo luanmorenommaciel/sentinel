@@ -240,9 +240,22 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
 .lin.e1{stroke:var(--pri)} .lin.e2{stroke:var(--ter)} .lin.e3{stroke:var(--sec)}
 /* Kind is carried by the left edge of the box, so it survives the colour-blind test the
    particle palette is already held to: three kinds, three border weights, one label each. */
-.sub-nd.k-mv{stroke-dasharray:4 3}
-.sub-nd.k-view{stroke-dasharray:1 3}
-.sub-nd.k-table{stroke-dasharray:none}
+/* Kind on TWO channels, and neither of them is hue.
+   Hue is spoken for: --pri, --sec and --ter mean logs, traces and metrics everywhere on this
+   canvas, and a box borrowing one would make the same channel say two things. The GROUND is
+   free, and there the difference is literal rather than a code to memorise:
+
+     table  filled and raised   — it holds something
+     mv     hollow              — an insert trigger holds nothing; rows pass through it
+     view   sunk                — a window onto the rows below, computed when looked through
+
+   Border style is the redundant second channel, so the distinction survives a colour-blind
+   reader and a greyscale print, per this repo's own rule against colour-only encoding. The
+   strokes stay inside the structural family (--dim2 / --viaS / --rule-arrow), which is
+   defined per palette, so both worlds keep their own version of it. */
+.sub-nd.k-table{fill:var(--raise);stroke:var(--dim2);stroke-dasharray:none}
+.sub-nd.k-mv{fill:none;stroke:var(--viaS);stroke-dasharray:4 3}
+.sub-nd.k-view{fill:var(--sunk);stroke:var(--rule-arrow);stroke-dasharray:1 3}
 .derive.tip{opacity:1}
 
 /* A mouth is a LIP, and a lip is pipe-shaped: a short section perpendicular to the run,
