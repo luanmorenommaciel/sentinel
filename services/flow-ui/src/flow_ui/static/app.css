@@ -288,6 +288,12 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
 .sub-nd.k-table{fill:var(--k-table);stroke:var(--dim2);stroke-dasharray:none}
 .sub-nd.k-mv{fill:var(--k-mv);stroke:var(--dim);stroke-dasharray:4 3}
 .sub-nd.k-view{fill:var(--k-view);stroke:var(--rule-arrow);stroke-dasharray:1 3}
+/* Selection has to come AFTER the kind rules, not before. `.nd.sel` and `.sub-nd.k-mv` are
+   both two classes, so the cascade falls back to source order — and adding the kind strokes
+   below `.nd.sel` silently took the selected border away from every silver node. Same trap
+   as the presentation-attribute-vs-stylesheet one the pipes hit: equal specificity is decided
+   by position, and position is easy to change by accident. */
+.sub-nd.sel{stroke:var(--sec);stroke-width:1.6}
 .derive.tip{opacity:1}
 
 /* A mouth is a LIP, and a lip is pipe-shaped: a short section perpendicular to the run,

@@ -357,6 +357,13 @@ applied — which it was. The class being right is not the question a reader ask
 verified at the pixel level instead: the swatch's computed stroke goes from `rgb(46,110,136)`
 to `rgb(255,197,61)` and its opacity from 0.5 to 1, while the other two do not move.
 
+**And adding the kind strokes silently took the selected border away from every silver node.**
+`.nd.sel` and `.sub-nd.k-mv` are both two classes, so the cascade falls back to source order,
+and the kind rules were written below. Selection now comes after them. The same trap as the
+presentation-attribute-versus-stylesheet one the pipes hit months earlier: equal specificity is
+decided by position, and position is easy to move by accident. The selected border keeps its
+dash pattern, so picking a node does not hide what kind it is.
+
 **A silent failure mode worth knowing:** `el(tag, attrs, text)`'s third argument is text, not
 children. Passing elements there sets the group's `textContent` and the child is never created
 — no error, no warning, just a legend with no swatches in it.
