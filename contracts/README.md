@@ -11,7 +11,9 @@ inside an implementation.
 | **`collector/`** | Pod 2 → Pod 3 (read) | [`collector/v1/pod2-pod3-read-contract.md`](collector/v1/pod2-pod3-read-contract.md) — the ClickHouse **bronze** read interface (the semantic layer over [`infra/clickhouse/init.d/01-bronze-otel.sql`](../infra/clickhouse/init.d/01-bronze-otel.sql)); machine-readable companion [`pod2-pod3-read-contract.yaml`](collector/v1/pod2-pod3-read-contract.yaml) | `v1.0.0.1` |
 
 - **`generator/`** is the producer (generator) single source of truth for the Pod 1 → Pod 2
-  OTLP handoff. Both collectors (Rust + Go) validate against it; neither keeps its own copy.
+  OTLP handoff. The collector validates against it and keeps no copy of its own. (Written while
+  Rust and Go both consumed it; the Go collector was removed in PR #28, merged 2026-08-12 — the
+  contract is deliberately implementation-agnostic, so nothing about it changed.)
 - **`collector/`** is the Pod 2 → Pod 3 bronze-schema boundary — one shared, implementation-
   agnostic contract that every collector implementation writes into. See
   [ADR-0007](../docs/adr/0007-bronze-canonical-contract.md).

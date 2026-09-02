@@ -101,6 +101,13 @@ edits Pod 1 generator code). Both are paid once and were validated end-to-end (b
   `make e2e COLLECTOR=go` → `default.*` 40,200 / 40,200 / 152,700; 0 generator failures
   (schema resolved from `/contracts/generator/v1`).
 
+> **Reading this later:** the evidence line above is a point-in-time record from 2026-06-23,
+> when both collectors existed. `make e2e COLLECTOR=rust|go`, the Go collector and the
+> `default.*` schema were all removed in PR #28 (merged 2026-08-12); the database formerly
+> called `sentinel` is now `bronze`. The commands are not runnable today — they are kept as
+> the evidence that was actually produced. The registry structure this ADR decides is
+> unaffected.
+
 ## Risks
 
 - **Cross-Pod churn.** Pod 1's generator code and both collectors' env changed. Mitigated by

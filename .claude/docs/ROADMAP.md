@@ -1,7 +1,7 @@
 # `.claude/` Roadmap
 
 > Evolution plan for Sentinel's Claude Code knowledge system.
-> Last updated: 2026-06-01
+> Last updated: 2026-08-18
 
 The `.claude/` environment isn't shipped once and forgotten — it grows as the project does. This roadmap maps the four growth phases to the Sentinel program's 20-week DataShip Mission 2026 timeline.
 
@@ -11,9 +11,9 @@ The `.claude/` environment isn't shipped once and forgotten — it grows as the 
 
 **Delivered:**
 - `.claude/CLAUDE.md` — project context with full lookup tables
-- 8 skills: `create-agent`, `create-kb`, `create-skill`, `enrich-kb`, `readme-maker`, `update-kbs`, `ingest-doc`, `adr`
-- 12 specialized agents across 8 categories
-- 10 seed KBs covering OTel, ClickHouse, Rust, Go, GCP telemetry, contracts, anomaly detection, agentic patterns, Crew B WoW
+- 8 skills at bootstrap: `create-agent`, `create-kb`, `create-skill`, `enrich-kb`, `readme-maker`, `update-kbs`, `ingest-doc`, `adr` *(now 10 — `arch-review` and `day-1-rust` added since)*
+- 12 specialized agents across 8 categories *(now 16)*
+- 10 seed KBs covering OTel, ClickHouse, Rust, Go, GCP telemetry, contracts, anomaly detection, agentic patterns, Crew B WoW *(now 11 — `communication/architecture-diagramming` added)*
 - 4 internal docs: `OCR_STRATEGY.md`, `INGESTION_WORKFLOW.md`, `ROADMAP.md` (this file), `CREW_B_GLOSSARY.md`
 - Path-scoped rules for KB enrichment and attribution
 
@@ -28,7 +28,7 @@ The `.claude/` environment isn't shipped once and forgotten — it grows as the 
 
 **Backlog:**
 - **ADR-001 / ADR-002 / ADR-003 in `docs/adr/`** — opened by the Commander, drafted by Crew B. The `/adr` skill produces the scaffold; `kb-architect` validates references.
-- **Bake-off harness KB** at `kb/process/bakeoff/` — how the Rust-vs-Go Collector comparison runs (load gen, ClickHouse instance, metric collection).
+- ~~**Bake-off harness KB** at `kb/process/bakeoff/`~~ — **dropped.** The Rust-vs-Go comparison was settled in-repo (Rust selected, PR #28, merged 2026-08-12) without a standalone harness KB.
 - **First weekly sync ingest** via `/ingest-doc` of the next Tuesday transcript → `kb/process/crew-b-wow/syncs/`.
 - **Captain's status template** — possibly a `/status` skill if the Captain (whoever wears the hat) wants to automate it.
 

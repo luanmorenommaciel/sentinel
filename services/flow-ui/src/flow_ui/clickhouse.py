@@ -1,0 +1,377 @@
+"""Reading bronze — the Pod 2 → Pod 3 read contract, from the consumer side.
+
+Built against `contracts/collector/v1/pod2-pod3-read-contract.md` v1.0.0.1.
+
+**Row counts are read with bare `count()`, never with a time window, and that is a
+correctness decision before it is a performance one.** Bronze stores *event* time: the
+contract (§2) defines `Timestamp` / `TimeUnix` as the signal's own timestamp, and there is
+no ingest-time column anywhere in the schema. In backfill mode the generator writes a
+window of history — measured: five minutes of timestamps ingested in 13.5 seconds — so
+`WHERE Timestamp > now() - INTERVAL 10 SECOND` asks "which rows *happened* recently",
+which is not the question. "How many rows *arrived*" is a delta of `count()`.
+
+It is also far cheaper. Measured on 233k rows: bare `count()` reads 1 row (it comes from
+part metadata) in 3.7 ms; the same count with a 10-second predicate reads all 40,200 rows
+of the table. That gap widens with every row inserted.
+"""
+from __future__ import annotations
+
+import json
+import logging
+
+import httpx
+
+log = logging.getLogger("flow_ui.clickhouse")
+
+#: The tables Pod 2 actually writes. The bronze DDL also defines
+#: `otel_metrics_histogram`, `_exponential_histogram` and `_summary`; contract §2.3 and §5
+#: state they stay empty in this version because Pod 1's v1.0.0 emits gauge and sum only.
+#: They are listed separately so the UI can say "empty by contract" rather than draw four
+#: live tables and two dead ones with no explanation.
+LIVE_TABLES = ("otel_logs", "otel_traces", "otel_metrics_gauge", "otel_metrics_sum")
+
+#: The five keys Pod 1 guarantees on every signal, mirrored from the collector's
+#: `REQUIRED_RESOURCE_KEYS` (`collector-rust/src/contract.rs`). Duplicated deliberately:
+#: this is the *reader's* copy, and if the two ever disagree the board should show what
+#: the collector is actually enforcing — so the drift is visible rather than silent.
+REQUIRED_RESOURCE_KEYS = (
+    "sentinel.synthetic",
+    "sentinel.scenario",
+    "sentinel.run_id",
+    "cloud.provider",
+    "service.name",
+)
+EMPTY_BY_CONTRACT = (
+    "otel_metrics_histogram",
+    "otel_metrics_exponential_histogram",
+    "otel_metrics_summary",
+)
+
+
+class ClickHouse:
+    """A thin async client over the HTTP interface."""
+
+    def __init__(self, url: str, database: str, timeout: float = 4.0) -> None:
+        self._url = url.rstrip("/")
+        self._db = database
+        self._client = httpx.AsyncClient(timeout=timeout)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def _query(self, sql: str) -> str:
+        """POST the SQL as the raw request body.
+
+        Not as a url-encoded ``query=`` form field: ClickHouse takes the whole body as the
+        statement, so a form encoding makes it try to parse the literal text ``query=SELECT
+        ...`` and fail with `Syntax error: failed at position 1 ('query')`.
+        """
+        resp = await self._client.post(self._url + "/", content=sql.encode())
+        resp.raise_for_status()
+        return resp.text
+
+    async def counts(self) -> dict[str, int]:
+        """Total rows per live table, in one round trip.
+
+        `ORDER BY` over a `UNION ALL` cannot see the branch aliases, so the union is
+        wrapped in a subquery — otherwise ClickHouse raises `UNKNOWN_IDENTIFIER`.
+        """
+        union = "\nUNION ALL ".join(
+            f"SELECT '{t}' AS tbl, count() AS n FROM {self._db}.{t}" for t in LIVE_TABLES
+        )
+        sql = f"SELECT * FROM (\n{union}\n) ORDER BY tbl FORMAT TSV"
+        out: dict[str, int] = {t: 0 for t in LIVE_TABLES}
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                tbl, n = line.split("\t")
+                out[tbl] = int(n)
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("bronze counts unavailable: %s", exc)
+            # `{}`, not a dict of zeros. Zeros are a claim — "the tables are empty" — and the
+            # caller stores whatever it gets as the previous reading, so on the recovering
+            # tick the whole table read as one second of growth.
+            return {}
+        return out
+
+    async def lineage(self, limit: int = 12) -> list[dict]:
+        """Rows per service, split by destination table.
+
+        `ServiceName` is the leading `ORDER BY` key on every bronze table (contract §5.6),
+        so this grouping is index-accelerated. `sentinel.scenario` deliberately is *not*
+        used: it lives inside the `ResourceAttributes` Map and §3/§6 warn it is an
+        unindexed probe, which is not something to put on a polling path.
+
+        The four counts are kept apart rather than summed into "metrics" because that is
+        the only thing that distinguishes one service from another here — **every service
+        writes to all four tables**, so the shape of the split is the information, not the
+        set of destinations.
+        """
+        sql = f"""
+        SELECT ServiceName,
+               sum(n) AS total,
+               sumIf(n, t = 'logs')   AS logs,
+               sumIf(n, t = 'traces') AS traces,
+               sumIf(n, t = 'gauge')  AS gauge,
+               sumIf(n, t = 'sum')    AS sums
+        FROM (
+            SELECT ServiceName, 'logs' AS t, count() AS n
+              FROM {self._db}.otel_logs GROUP BY ServiceName
+            UNION ALL
+            SELECT ServiceName, 'traces', count() FROM {self._db}.otel_traces GROUP BY ServiceName
+            UNION ALL
+            SELECT ServiceName, 'gauge', count()
+              FROM {self._db}.otel_metrics_gauge GROUP BY ServiceName
+            UNION ALL
+            SELECT ServiceName, 'sum', count()
+              FROM {self._db}.otel_metrics_sum GROUP BY ServiceName
+        )
+        GROUP BY ServiceName ORDER BY total DESC LIMIT {int(limit)} FORMAT TSV
+        """
+        rows: list[dict] = []
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                name, total, logs, traces, gauge, sums = line.split("\t")
+                rows.append({
+                    "service": name, "total": int(total), "logs": int(logs),
+                    "traces": int(traces), "gauge": int(gauge), "sum": int(sums),
+                })
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("bronze lineage unavailable: %s", exc)
+        return rows
+
+    async def metric_inventory(self) -> dict[str, dict[str, list[str]]]:
+        """Which named metrics each service emits, and which table each lands in.
+
+        This is the answer to "what is *this* service's path", and it is the only place
+        the per-service question has a real answer: routing to a bronze table is decided
+        by the **data-point type**, never by the producer, so every service reaches every
+        table. What differs is *which metrics* it emits — and that is what makes one
+        service's split 3:1 gauge-to-sum and another's 1:2.
+
+        Grouping by name over both metric tables is heavier than the counters, so the
+        poller runs it on its own slow cadence. The inventory is effectively static.
+        """
+        sql = f"""
+        SELECT ServiceName, tbl, MetricName FROM (
+            SELECT ServiceName, 'gauge' AS tbl, MetricName
+              FROM {self._db}.otel_metrics_gauge GROUP BY ServiceName, MetricName
+            UNION ALL
+            SELECT ServiceName, 'sum', MetricName
+              FROM {self._db}.otel_metrics_sum GROUP BY ServiceName, MetricName
+        ) ORDER BY ServiceName, tbl, MetricName FORMAT TSV
+        """
+        out: dict[str, dict[str, list[str]]] = {}
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                svc, tbl, name = line.split("\t")
+                out.setdefault(svc, {"gauge": [], "sum": []})[tbl].append(name)
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("metric inventory unavailable: %s", exc)
+        return out
+
+    async def contract_violations(self, limit: int = 10) -> list[dict]:
+        """Which producers wrote rows missing a required key, and which key.
+
+        **This is the only per-producer view of contract health that exists.** The
+        collector's `signals_rejected_total` carries `signal` and `reason` but no service
+        label, so it can say *how many* violated and *how*, never *who*. Bronze can,
+        because under the default `warn` policy a violating signal is exported anyway —
+        the evidence lands in the table.
+
+        Two things make it affordable. It probes `ResourceAttributes`, an unindexed Map
+        (§3), so it runs on its own slow cadence and never per tick. And it counts with
+        `countIf` per key rather than `ARRAY JOIN`-ing the five key names: the array form
+        multiplies every row by five *before* filtering, which measured 6.4s against
+        1.26s over the same ~6M rows.
+
+        `violating` counts ROWS missing at least one key, which is not the sum of the
+        per-key counts: a row missing four keys is one bad row, not four. Reporting the sum
+        as a share made a producer missing 4 of 5 keys on every row read "80%", which looks
+        like a row percentage and is not one.
+
+        Returns `[{service, rows, violating, missing: {key: n}, total_missing}]`, worst first.
+        """
+        keys = REQUIRED_RESOURCE_KEYS
+        cols = ",\n".join(
+            f"    countIf(NOT mapContains(ResourceAttributes, '{k}')) AS m{i}"
+            for i, k in enumerate(keys)
+        )
+        has_all = " AND ".join(
+            f"mapContains(ResourceAttributes, '{k}')" for k in keys
+        )
+        cols += f",\n    countIf(NOT ({has_all})) AS bad"
+        per_table = "\n  UNION ALL\n".join(
+            f"  SELECT ServiceName, count() AS rows,\n{cols}\n"
+            f"    FROM {self._db}.{t} GROUP BY ServiceName"
+            for t in LIVE_TABLES
+        )
+        sums = ", ".join(f"sum(m{i}) AS k{i}" for i in range(len(keys))) + ", sum(bad) AS bad"
+        having = " + ".join(f"k{i}" for i in range(len(keys)))
+        sql = f"""
+        SELECT ServiceName, sum(rows) AS rows, {sums}
+        FROM (
+{per_table}
+        )
+        GROUP BY ServiceName
+        HAVING {having} > 0
+        ORDER BY {having} DESC LIMIT {int(limit)} FORMAT TSV
+        """
+        out: list[dict] = []
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                parts = line.split("\t")
+                if len(parts) != 3 + len(keys):
+                    continue
+                missing = {k: int(v) for k, v in zip(keys, parts[2:-1]) if int(v) > 0}
+                out.append({
+                    "service": parts[0],
+                    "rows": int(parts[1]),
+                    "violating": int(parts[-1]),
+                    "missing": missing,
+                    "total_missing": sum(missing.values()),
+                })
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("contract violations unavailable: %s", exc)
+        return out
+
+    async def volume_band(self, minutes: int = 60, limit: int = 8) -> list[dict]:
+        """Per producer: the volume distribution over the window, and the latest bucket.
+
+        Returns the raw statistics, not a verdict — the band and the threshold are computed
+        in one place (`pipeline._volume_state`) so the drawn band and the alerting rule are
+        literally the same numbers. Metaplane shipped a version where they differed and
+        publicly called fixing it a "simplification"; there is no reason to repeat it.
+
+        Three deliberate choices, all cheap because `ServiceName, TimestampDate,
+        TimestampTime` is the sorting key, so the window filter is index-accelerated
+        (measured 0.135s):
+
+        * **The current bucket is excluded.** It is partial, and comparing a half-filled
+          bucket against a band built from full ones alarms on every tick.
+        * **`estate`** is the number of buckets in which *anything at all* landed. A
+          producer whose `seen` is below it was silent while the pipeline was not — which
+          is the one signal a tool that looks at tables at rest cannot produce: it sees a
+          stale table, not a write that failed to happen.
+        * **Both scale estimates are returned.** MAD is the robust one and the reason to
+          prefer this over a plain z-score, but a perfectly regular producer has MAD = 0 and
+          a band of zero width, where every tick is infinitely anomalous. The caller falls
+          back to stddev, and declares the series unmonitorable when both collapse.
+        """
+        win = int(minutes)
+        sql = f"""
+        WITH b AS (
+            SELECT ServiceName AS svc, toStartOfMinute(Timestamp) AS t, count() AS n
+            FROM {self._db}.otel_logs
+            WHERE Timestamp >= now() - INTERVAL {win} MINUTE
+              AND Timestamp < toStartOfMinute(now())
+            GROUP BY svc, t
+        ),
+        est AS (SELECT count(DISTINCT t) AS estate FROM b),
+        m AS (SELECT svc, quantileExact(0.5)(n) AS med, stddevPop(n) AS sd FROM b GROUP BY svc)
+        SELECT b.svc AS svc, m.med AS med,
+               quantileExact(0.5)(abs(b.n - m.med)) AS mad, any(m.sd) AS sd,
+               count() AS seen, any(est.estate) AS estate,
+               argMax(b.n, b.t) AS latest, toUnixTimestamp(max(b.t)) AS latest_t,
+               arraySort(x -> x.1, groupArray((toUnixTimestamp(b.t), b.n))) AS series
+        FROM b INNER JOIN m ON b.svc = m.svc CROSS JOIN est
+        GROUP BY b.svc, m.med
+        ORDER BY m.med DESC LIMIT {int(limit)} FORMAT JSONEachRow
+        """
+        out: list[dict] = []
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                out.append({
+                    "service": r["svc"],
+                    "median": float(r["med"]),
+                    "mad": float(r["mad"]),
+                    "sd": float(r["sd"]),
+                    "seen": int(r["seen"]),
+                    "estate": int(r["estate"]),
+                    "latest": int(r["latest"]),
+                    "latest_t": int(r["latest_t"]),
+                    "series": [[int(t), int(n)] for t, n in r["series"]],
+                })
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            log.warning("volume band unavailable: %s", exc)
+        return out
+
+    async def call_edges(self, minutes: int = 15, limit: int = 24) -> list[dict]:
+        """The call graph as it was actually traced: `A -> B` with span counts and errors.
+
+        This is the only per-edge measurement that exists anywhere in the pipeline. Neither
+        the collector nor bronze counts anything per edge; what makes it possible is that a
+        child span carries its parent, so parent and child rows join and the two
+        `ServiceName`s are the edge.
+
+        **The parent side must be deduplicated, and `TraceId` alone is not enough.** The
+        generator seeds a deterministic RNG, so a fixed `--seed` repeats *both* ids across
+        runs: joining on `SpanId` alone invented eight edges the topology does not contain,
+        and adding `TraceId` removed those while still fanning out — measured on a live
+        table, 16,154 children in the window produced 445,229 joined rows, a 27.6x
+        multiplication, because each child matched every historical copy of its parent. Edge
+        widths then encoded run history rather than traffic.
+
+        Collapsing parents to one row per `(TraceId, SpanId)` first makes the join
+        one-to-at-most-one, so a child is counted exactly once. Both sides are still bounded
+        by the same window, and it stays on the slow lane because it remains a self-join.
+        """
+        sql = f"""
+        WITH parents AS (
+            SELECT TraceId, SpanId, any(ServiceName) AS svc
+            FROM {self._db}.otel_traces
+            WHERE Timestamp > now() - INTERVAL {int(minutes)} MINUTE
+            GROUP BY TraceId, SpanId
+        )
+        SELECT p.svc AS src, c.ServiceName AS dst,
+               count() AS spans, countIf(c.StatusCode = 'Error') AS errors
+        FROM {self._db}.otel_traces AS c
+        INNER JOIN parents AS p
+          ON c.ParentSpanId = p.SpanId AND c.TraceId = p.TraceId
+        WHERE c.Timestamp > now() - INTERVAL {int(minutes)} MINUTE AND c.ParentSpanId != ''
+        GROUP BY src, dst HAVING src != dst
+        ORDER BY spans DESC LIMIT {int(limit)} FORMAT TSV
+        """
+        out: list[dict] = []
+        try:
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                src, dst, spans, errors = line.split("\t")
+                out.append({"src": src, "dst": dst,
+                            "spans": int(spans), "errors": int(errors)})
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("call edges unavailable: %s", exc)
+        return out
+
+    async def scenario(self) -> str:
+        """The most recent run's scenario, for the header.
+
+        This *does* probe the `ResourceAttributes` Map, which §3 flags as unindexed — which
+        is exactly why it is read on the slow lineage cadence and never per tick.
+        """
+        sql = (
+            f"SELECT ResourceAttributes['sentinel.scenario'] "
+            f"FROM {self._db}.otel_logs ORDER BY Timestamp DESC LIMIT 1 FORMAT TSV"
+        )
+        try:
+            return (await self._query(sql)).strip() or "—"
+        except httpx.HTTPError:
+            return "—"
+
+    async def ping(self) -> bool:
+        try:
+            await self._query("SELECT 1")
+            return True
+        except (TimeoutError, httpx.HTTPError):
+            return False

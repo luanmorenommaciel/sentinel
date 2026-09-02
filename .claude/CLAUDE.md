@@ -1,6 +1,6 @@
 # Sentinel — Claude Code Project Context
 
-> Last updated: 2026-06-09
+> Last updated: 2026-08-18
 
 ## Mission
 
@@ -16,7 +16,7 @@ Generator ──▶ OTel Collector ──▶ ClickStack (ClickHouse)
               └─ OTLP gRPC :4317
 ```
 
-First cloud target: **GCP**. Python is OUT for the Collector (perf); Go and Rust are on the bake-off table (see [ADR-0004](../docs/adr/0004-collector-implementation-language.md)).
+First cloud target: **GCP**. Python was ruled out for the Collector (perf). The Rust-vs-Go bake-off is **settled in practice: Rust was selected** and `services/collector-go/` was removed from the repo in PR #28 (merged 2026-08-12). ⚠️ [ADR-0004](../docs/adr/0004-collector-implementation-language.md) still reads `Proposed` and still frames the bake-off as open — the decision was taken by merge, not by ADR. Closing that record is a Pod 2 action item.
 
 **Eight-stage spine (vendor-agnostic):**
 
@@ -32,12 +32,14 @@ otel_core → rolling_stats → tiered_engine → cross_watcher → policy_engin
 
 > Source of truth: [README §8](../README.md) + the contract docs below. This block is the quick orientation; don't let it drift.
 
-- **Collector-rust is functional end-to-end** (verified live 2026-06-09): both ingest paths land in ClickHouse — file/NDJSON (golden `baseline_seed42.jsonl` → 48 logs / 48 spans / 183 metrics) and OTLP gRPC `:4317`.
-- **gRPC receive-boundary validation** is policy-gated via `contract.grpc_validation` (`off` / `warn` / `strict`, **default `warn`**). File mode still uses `contract.strict` (all-or-nothing). Foreign OTLP legitimately lacks the 5 `sentinel.*` keys → `strict` would drop it, hence `warn` default. Code: `src/grpc.rs` (`apply_validation`), `src/config.rs`.
-- **Pod 1 → Pod 2 input contract:** `v1.0.0` **frozen**; local `contract/schema/otlp_output.schema.json` verified byte-identical to upstream `001-otel-data-generator`.
-- **Pod 2 → Pod 3 read contract:** **`v1.0.0-rc.1`** — *authoritative release candidate* (build against it), not frozen. Freeze gates open: ADR-0005 + ADR-0006 acceptance, Pod 3 sign-off (Pod 3/B3 still unstaffed). Day-4 round-trip gate ✅. Doc: [`contracts/collector/v1/pod2-pod3-read-contract.md`](../contracts/collector/v1/pod2-pod3-read-contract.md).
-- **ADR-0004/0005/0006 all still `Proposed`.** ADR-0004 (language bake-off) does **not** block the read-contract freeze.
-- **README Phase-1 realignment in flight (uncommitted, 2026-06-09).** README §1/§2 were realigned to the original proposal (`victor_docs/Sentinel-Spec-diagram.png`): **Phase 1 = telemetry foundation** (POD1 generate → POD2 ingest/transform → POD3 storage / data-modelling / consumption); **Watchers · Detection · CrewAI · Remediation = future phase**. The diagram now draws **Contract ② *after* ClickHouse** (it *is* the CH schema, per ADR-0005). ⚠️ **Not yet ratified — do not propagate here:** the **Crew B layout below still lists B3 = Volume/Schema/Latency/Storage watchers**, which diverges from the README's POD3=storage/read-layer framing. Realign this file only after Captain/Commander sign off on the Pod↔layer mapping. ClickHouse operational ownership stays unassigned.
+- **Rust is the selected collector**; `services/collector-go/` was deleted in PR #28 (merged 2026-08-12). `services/collector-rust/` is the only ingestion path in the repo.
+- **Collector-rust writes the bronze schema directly** into ClickHouse database `bronze` (`otel_logs / otel_traces / otel_metrics_gauge / otel_metrics_sum`, otel-collector-contrib v0.105.0 style). Both ingest paths verified: OTLP gRPC `:4317` and file/NDJSON (golden `baseline_seed42.jsonl` → 48 logs / 48 spans / 183 metrics).
+- **Latest E2E snapshot (2026-08-04):** 233,100 signals in 4.5s (~51.4k signals/s), 0 rejected / 0 dropped / 0 export errors, avg ClickHouse export latency 32.3ms, 100% of flush attempts ≤80ms. A reproducible local snapshot — *not* a production SLO.
+- **gRPC receive-boundary validation** is policy-gated via `contract.grpc_validation` (`off` / `warn` / `strict`, **default `warn`**). File mode uses `contract.strict` (all-or-nothing). Foreign OTLP legitimately lacks the 5 `sentinel.*` keys → `strict` would drop it, hence the `warn` default. Code: `src/grpc.rs` (`apply_validation`), `src/config.rs`.
+- **Pod 1 → Pod 2 input contract:** `v1.0.0` **frozen**, at [`contracts/generator/v1/`](../contracts/generator/v1/).
+- **Pod 2 → Pod 3 read contract:** **`v1.0.0.1`** — the bronze DDL is the contract (ADR-0007 supersedes ADR-0005). Agreed boundary; Pod 3 sign-off still pending. Doc: [`contracts/collector/v1/pod2-pod3-read-contract.md`](../contracts/collector/v1/pod2-pod3-read-contract.md).
+- **ADR status:** 0004 (language) `Proposed` — stale, see above · ~~0005~~ superseded by 0007 · 0006 (optional-ID) `Proposed`, refined by 0007 · 0007 (bronze = canonical contract) `Proposed`, Pod 3 sign-off pending · 0008 (contracts registry by producing Pod) `Proposed`, in effect on `main`.
+- **README Phase-1 realignment is landed** (PR #26, merged 2026-06-30; refined by #28). README §1/§2 follow the original proposal (`victor_docs/Sentinel-Spec-diagram.png`): **Phase 1 = telemetry foundation** (POD1 generate → POD2 ingest/transform → POD3 storage / data-modelling / consumption); **Watchers · Detection · CrewAI · Remediation = future phase**. Contract ② is drawn **after** ClickHouse (it *is* the CH schema). ⚠️ **Still not ratified — do not propagate:** the **Crew B layout below still lists B3 = Volume/Schema/Latency/Storage watchers**, which diverges from the README's POD3 = storage/read-layer framing. Realign this file only after Captain/Commander sign off on the Pod↔layer mapping. ClickHouse operational ownership stays unassigned.
 
 ## Crew B layout (you are here)
 
@@ -60,16 +62,18 @@ sentinel/
 │   ├── adr/                       # Architecture Decision Records (numbered, versioned)
 │   └── research/                  # Companion research briefs (referenced by ADRs)
 ├── services/
-│   ├── collector-rust/            # Rust collector scaffold (ADR-0004)
-│   ├── collector-go/              # Go collector scaffold (sibling, pending)
-│   └── generator/                 # Python data generator (Pod 1)
-├── infra/                         # ClickHouse, Docker compose, deployment configs
+│   ├── collector-rust/            # Rust collector — SELECTED implementation (Pod 2)
+│   └── generator-python/          # Python data generator, otelgen CLI (Pod 1)
+├── contracts/                     # contract registry, namespaced by producing Pod
+│   ├── generator/v1/              #   Pod 1 → Pod 2 input contract
+│   └── collector/v1/              #   Pod 2 → Pod 3 read contract (bronze)
+├── infra/                         # ClickHouse bootstrap + Pod-3-owned bronze DDL (init.d/)
 ├── .claude/
 │   ├── CLAUDE.md                  # This file
 │   ├── agents/                    # Specialized subagents (16) + _schema.json + _template.md.example
 │   ├── skills/                    # Slash commands (10) + _template.md.example
 │   ├── kb/                        # Knowledge bases (11 seed KBs) + _templates/ + _index.yaml
-│   ├── docs/                      # Internal standards (5 — OCR, ingestion, roadmap, glossary, Rust standards)
+│   ├── docs/                      # Internal standards (6 — OCR, ingestion, roadmap, glossary, Rust standards, agentic gitflow)
 │   └── rules/                     # Path-scoped instruction files (1 — kb-enrichment)
 └── README.md
 ```
@@ -123,7 +127,7 @@ Skill frontmatter follows [`.claude/skills/_template.md.example`](skills/_templa
 | Storage | `kb/storage/clickhouse/` | Schema, native vs HTTP, ClickStack, OTel schema in CH |
 | Cloud | `kb/cloud/gcp-telemetry/` | Cloud Monitoring, Cloud Logging, PubSub formats |
 | Languages | `kb/languages/rust/` | Tokio, tonic, error handling, async patterns |
-| Languages | `kb/languages/go/` | Concurrency, channels, OTel Collector internals |
+| Languages | `kb/languages/go/` | Concurrency, channels, OTel Collector internals *(retained as reference; the Go collector was removed in PR #28)* |
 | Contracts | `kb/contracts/` | Pydantic (Python), Protobuf (Go/Rust), versioning, boundary validation |
 | Detection | `kb/detection/anomaly-detection/` | Statistical baselines, z-scores, rolling windows |
 | Process | `kb/process/crew-b-wow/` | Sentinel WoW: syncs, ADRs, PR flow, attribution, 7 CI gates |
@@ -149,7 +153,7 @@ KB routing:
 | ClickHouse schema, native protocol, performance | `kb/storage/clickhouse/` |
 | GCP telemetry shapes (logs/metrics/traces) | `kb/cloud/gcp-telemetry/` |
 | Rust async (tokio, tonic) | `kb/languages/rust/` |
-| Go concurrency, OTel Collector internals | `kb/languages/go/` |
+| Go concurrency, OTel Collector internals *(reference only — no Go in the repo)* | `kb/languages/go/` |
 | Pydantic / Protobuf contract validation | `kb/contracts/` |
 | Anomaly detection (z-scores, rolling windows) | `kb/detection/anomaly-detection/` |
 | Crew B WoW, ADRs, PR flow | `kb/process/crew-b-wow/` |
@@ -161,11 +165,12 @@ KB routing:
 Per Sync 01 + `bem-vindos.md`:
 
 - **`main` is protected.** Feature branches: `feat/<area>-<short>`, `fix/`, `chore/`, `docs/`.
+- **Agent fleets follow [ADR-0009](../docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*: one `git worktree` per agent (`leg/<area>/<task>-v<n>` in `.worktrees/`), legs declaring **disjoint paths**, 1 review to squash into the swimlane, 2 approvals + a **merge commit** into `main` so per-leg attribution survives. Mechanics: [`AGENTIC_GITFLOW.md`](docs/AGENTIC_GITFLOW.md). ⚠️ The merge-commit rule amends the WoW below and is **pending ratification**.
 - **Conventional Commits.** `<type>(<scope>): <description>`
 - **Signed commits.** `git commit -S`.
 - **Mandatory attribution trailer** on every commit: `Co-Authored-By: <human>`, `Co-Authored-By: <LLM model>`, optional `Reviewed-by: <bot>`.
-- **7 CI gates** (all must pass before human review): ruff · mypy --strict · pytest >80% · bandit + safety · markdownlint · CodeRabbit · Docker build.
-- **2 approvals** required: first peer, second Captain. Squash-merge to main.
+- **7 CI gates** (all must pass before human review): ruff · mypy --strict · pytest >80% · bandit + safety · markdownlint · CodeRabbit · Docker build. ⚠️ This is the *agreement* from Sync 01, not the current state: only [`rust-ci.yml`](../.github/workflows/rust-ci.yml) is implemented today.
+- **2 approvals** required: first peer, second Captain. Squash-merge to main *(ADR-0009 proposes a merge commit for swimlane→main — pending ratification)*.
 - **Weekly sync** Tuesday Zoom ~60min.
 - **Tool freedom on input, rigor on output.** Pick any LLM coding tool (Claude Code, Cursor, Codex CLI, Aider, etc.); the contract is honest attribution + 7-gate CI.
 
@@ -184,6 +189,7 @@ Full WoW: `kb/process/crew-b-wow/index.md`.
 | Generate / refresh a README | `/readme-maker` |
 | Process a document (PDF, transcript) into KB | `/ingest-doc <path>` |
 | Onboard a new Astronaut to Pod 2's Rust path | `/day-1-rust` |
+| Run an agent fleet across parallel legs | [`docs/AGENTIC_GITFLOW.md`](docs/AGENTIC_GITFLOW.md) |
 | Design OTel Collector pipeline | otel-collector-specialist agent |
 | Design ClickHouse schema | clickhouse-engineer agent |
 | Optimize Rust async code | rust-specialist agent |
@@ -218,6 +224,7 @@ Full WoW: `kb/process/crew-b-wow/index.md`.
 - ADR index: `../docs/adr/README.md`
 - OCR strategy: `./docs/OCR_STRATEGY.md`
 - Roadmap: `./docs/ROADMAP.md`
+- Agentic gitflow: `./docs/AGENTIC_GITFLOW.md` (mechanics) + `../docs/adr/0009-agentic-gitflow.md` (the decision)
 - Glossary: `./docs/CREW_B_GLOSSARY.md`
 
 ---
