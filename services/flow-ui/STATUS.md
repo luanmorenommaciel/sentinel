@@ -301,6 +301,15 @@ and is a query over the models above. They are on two lines each because side by
 22-character name and a 43-character answer need 455 units against 278 of usable width, and
 the first version simply drew them on top of each other.
 
+**Both sheets toggle, and both start closed.** BRONZE opened with `otel_logs` selected and no
+way to deselect it, so its sheet was a permanent fixture of the open box rather than an answer
+to a question the reader asked. Click a row for its sheet, click it again to put it away.
+
+**And ⌂ was resetting a stale list.** It cleared `origin`, `collector`, `bronze` and the table
+selection, and knew nothing about `silver` or the selected model — the same defect as the
+`repaint()` key, in a second hand-maintained list of the same boxes. Both now enumerate every
+expandable box and every selection.
+
 ### Open, the derivation becomes per-table — because the mapping is not 1:1
 
 Closed, one double bar is the honest summary. Open, the reader is asking a lineage question —

@@ -41,7 +41,7 @@
     silver:    { closed: [186, 136], open: [330, 392] },
   };
 
-  let graph = null, snap = null, table = "otel_logs", model = null;
+  let graph = null, snap = null, table = null, model = null;
   //: A selected service filters what the graph reports about bronze. It cannot filter the
   //: live rates: `sentinel_signals_ingested_total` carries a `signal` label and no service
   //: label, so per-service throughput simply does not exist upstream of ClickHouse. The
@@ -225,11 +225,11 @@
     // on the board shrank to 58% to make room for a panel. Below bronze it is 320 against
     // bronze's own 318, so it adds no width at all — only height, on an arrangement that is
     // far wider than it is tall and had the room to spare.
-    const sheet = open.bronze
+    const sheet = open.bronze && table
       ? { x: boxes.bronze.x, y: boxes.bronze.y + boxes.bronze.h + 30, w: SHEET_W, h: 236 }
       : null;
-    // SILVER's sheet sits under SILVER for the same reason, and only when a model is picked:
-    // bronze always has a selected table, silver starts with none.
+    // SILVER's sheet sits under SILVER, on the same rule: a sheet exists only while its own
+    // row is selected.
     const mSheet = open.silver && model
       ? { x: boxes.silver.x, y: boxes.silver.y + boxes.silver.h + 30, w: SHEET_W, h: 236 }
       : null;
@@ -1081,7 +1081,7 @@
          silver: silverBody }[id])(g, b, edges, fx);
     }
     derivations(edges, fx, B);
-    if (open.bronze) datasheet(nodes, L.sheet);
+    if (L.sheet) datasheet(nodes, L.sheet);
     if (L.mSheet) modelsheet(nodes, L.mSheet);
     nodesLater.forEach((n) => nodes.append(n));
     // The burst only means something when a batch is actually arriving.
@@ -1094,12 +1094,17 @@
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); n.click(); }
       });
     });
+    // Both toggle, and both start unselected: a datasheet is the answer to a click, so it
+    // appears on one and goes away on the next. BRONZE used to open with `otel_logs`
+    // selected and no way to deselect it, which made the sheet a permanent fixture of the
+    // open box rather than something the reader asked for.
     stage.querySelectorAll("[data-table]").forEach((n) => {
-      n.addEventListener("click", (e) => { e.stopPropagation(); table = n.dataset.table; repaint(); });
+      n.addEventListener("click", (e) => {
+        e.stopPropagation();
+        table = table === n.dataset.table ? null : n.dataset.table;
+        repaint();
+      });
     });
-    // A silver model toggles, unlike a bronze table: bronze always has one selected and
-    // clicking the selected one again should not blank a sheet that has nowhere to fall
-    // back to. Silver starts with none, so closing the sheet is a state it can return to.
     stage.querySelectorAll("[data-model]").forEach((n) => {
       n.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1243,9 +1248,8 @@
     $("z-in").addEventListener("click", () => zoomAt(VW / 2, VH / 2, 1.25));
     $("z-out").addEventListener("click", () => zoomAt(VW / 2, VH / 2, 1 / 1.25));
     $("z-home").addEventListener("click", () => {
-      open.origin = open.collector = open.bronze = false;
-      table = "otel_logs";
-      service = null;
+      open.origin = open.collector = open.bronze = open.silver = false;
+      table = model = service = null;
       repaint();
       fit();
     });

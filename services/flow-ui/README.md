@@ -41,7 +41,7 @@ is something the page does on its own — nothing tells it.
 | **Flow** → open `ORIGIN`, latency | each producer shows `declared → measured` — `topology.yaml`'s claim beside Silver's observed p50 |
 | **Flow** → open `ORIGIN` | the declared service graph, each producer carrying its fused state; pipe width is what was actually traced on that edge |
 | **Flow** → open `COLLECTOR-RUST` | `receive → validate → buffer`, and the three ways a signal does not simply arrive |
-| **Flow** → open `BRONZE` | the four tables, each strand carrying the type that lands in it |
+| **Flow** → open `BRONZE` | the four tables, each strand carrying the type that lands in it. Pick a table for its datasheet, pick it again to close |
 | **Flow** → open `SILVER` | the three models and the six read views ADR-0010 derives from bronze |
 | **Flow** → open `BRONZE` **and** `SILVER` | which table becomes which model — 4 → 3, because gauge and sum share one |
 | **Health** | the verdict and the sentence behind it, over a 120s window |
@@ -132,7 +132,7 @@ streaming or backfilling — the buffer's flush cadence is the tell, and the two
 | **Pipeline** | origin → collector → bronze, three lanes in and one out | `/metrics` |
 | **Origin** | the seven services as a graph, **declared config beside observed row counts** | `topology.yaml` + bronze |
 | **Collector** | where a signal comes from and where it goes, with the three outcomes | `/metrics` |
-| **Bronze** | the tables, and the read contract as each one's datasheet | contract v1.0.0.1 |
+| **Bronze** | the four tables; pick one for the read contract as its datasheet | contract v1.0.0.1 |
 | **Silver** | the models, their row counts, and the six read views with what each answers | `system.tables` |
 | **Silver** → pick a model | its columns and sort key, read live so they cannot drift | `system.columns` |
 | **Bronze + Silver** | the per-table derivation, drawn from the MV definitions | silver DDL |
