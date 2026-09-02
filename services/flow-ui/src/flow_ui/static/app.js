@@ -409,7 +409,12 @@
    *  that has genuinely stopped decays past it within a few ticks, one that is merely being
    *  sampled badly does not.
    */
-  const live = (key, rate) => {
+  //: Named `moving`, not `live`: `density` declares its own `const live` for the
+  //: has-any-traffic flag, and a module-level `live` was shadowed by it for that entire
+  //: scope — every call after that line hit a number instead of a function and threw, so
+  //: every gate from BRONZE onward silently stopped. The shows before it kept working,
+  //: which is exactly how it looked from outside.
+  const moving = (key, rate) => {
     ema[key] = ema[key] === undefined ? rate : ema[key] * (1 - ALPHA) + rate * ALPHA;
     return ema[key] > 0.5;
   };
@@ -2021,12 +2026,12 @@
     // scenario — the same defect as a hard-coded colour, moved into the gate.
     const tnames = Object.keys(graph?.tables || {});
     for (let i = 0; i < 6; i++)
-      show(`be${i}`, live(`be${i}`, (s.bronze_rate || {})[tnames[i]] || 0) ? 3 : 0);
+      show(`be${i}`, moving(`be${i}`, (s.bronze_rate || {})[tnames[i]] || 0) ? 3 : 0);
     // A derivation strand runs on the growth of the bronze table it reads, for the same
     // reason: the MV fires on that table's insert and on nothing else. A silent source
     // means a still strand, not a strand animating over nothing.
     derives().forEach(([from], i) =>
-      show(`dv${i}`, live(`dv${i}`, (s.bronze_rate || {})[from] || 0) ? 2 : 0));
+      show(`dv${i}`, moving(`dv${i}`, (s.bronze_rate || {})[from] || 0) ? 2 : 0));
     // An MV writing its target is the one real movement inside SILVER, and its pool was
     // being created and never shown — `spawn` fills `pools`, but nothing here revealed them,
     // so the run existed with every dot at opacity 0. The gate is the growth of the bronze
@@ -2047,7 +2052,7 @@
     };
     Object.keys(SG).forEach((name) => {
       if (SG[name].kind === "mv")
-        show(`sv-${name}`, live(`sv-${name}`, rootRate(name)) ? 2 : 0);
+        show(`sv-${name}`, moving(`sv-${name}`, rootRate(name)) ? 2 : 0);
     });
     // Each type on the bar runs on the bronze tables that feed ITS materialized views,
     // read from the graph so a new MV joins the right lane on its own.
@@ -2056,7 +2061,7 @@
       byTone[cls] = (byTone[cls] || 0) + ((s.bronze_rate || {})[from] || 0);
     });
     LANES.forEach(([name, cls]) =>
-      show(`dt-${name}`, live(`dt-${name}`, byTone[cls] || 0) ? 2 : 0));
+      show(`dt-${name}`, moving(`dt-${name}`, byTone[cls] || 0) ? 2 : 0));
     // A read edge runs on the growth of the table being READ — a view over a silent table
     // has nothing new to answer with. A silver table grows at the rate of whatever MV
     // writes it, which resolves back to a bronze table through the same walk.
@@ -2064,7 +2069,7 @@
       const feeder = Object.keys(SG).find((k) => SG[k].target === tbl);
       return feeder ? rootRate(feeder) : 0;
     };
-    readEdges.forEach(([id, src]) => show(id, live(id, tableRate(src)) ? 2 : 0));
+    readEdges.forEach(([id, src]) => show(id, moving(id, tableRate(src)) ? 2 : 0));
     // Each tap runs only while its own outcome is happening. A pipeline losing nothing
     // should have three still lines, not three animations implying otherwise.
     //

@@ -435,6 +435,19 @@ Measured with both boxes open, over 14 ticks: four lanes with a moving count bef
 and that one changes by a single dot three times, which is the metrics rate genuinely drifting
 across a boundary rather than a beat.
 
+**And that fix shipped broken for one commit**, in a way worth writing down. The new helper
+was called `moving` only after the event: it was named `live`, and `density` already declares
+`const live = total > 0 ? 1 : 0` for its has-any-traffic flag. The local shadowed the module
+function for that whole scope, so every call to it hit a number and threw — and the shows
+*before* that line kept working while everything from BRONZE onward went dark. Reported as
+"the dots stopped appearing from bronze onward", which is exactly what it looked like.
+
+Nothing caught it: no exception reached the console capture, the tests do not touch `density`,
+and the pools were being created correctly — three of the four things that usually reveal a
+bug all said the code was fine. What found it was measuring the *inputs* to the gate rather
+than reasoning about the gate: the pools existed, the rates were 82/s, so the only thing left
+was the function itself.
+
 **One lane was still a metronome.** BRONZE's internal fan builds its circles in its own loop
 rather than through `flow`, so the scatter never reached it: all twelve ran at exactly 3.20s
 while every other lane had been broken up. Now 10 distinct durations across 3.00–3.38s.
