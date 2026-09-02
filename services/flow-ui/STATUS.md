@@ -323,7 +323,31 @@ ClickHouse will let you build one.
 | A second-stage MV: `silver.log_events → silver.log_events_hourly` | landed in a **fourth column** that did not exist before, after the table it reads |
 | A table nothing feeds (`manual_annotations`) | column 0 with the sources, no incoming edge — correct: nothing produces it |
 
-**Kind is on two channels, and neither is hue.** Hue is spoken for: `--pri`, `--sec` and
+**Kind is on the GROUND, and the first attempt at it was measurably fake.** The channel is
+right — a filled area beats a 1px stroke as a signal, so a reader sees the kind before reading
+the name — but the first version used `--raise` / transparent / `--sunk`, which measure
+**1.03:1 apart**. Three names for one colour, with the border doing all the work while the
+comment claimed otherwise. Contrast ratio is a poor guide this close to black, so the fix was
+picked by rendering candidates and looking, then checked against the numbers:
+
+| | command | substrate |
+|---|---|---|
+| `--k-table` lit — the rows are in here | `#1B2614` | `#12283A` |
+| `--k-mv` dim — a trigger; rows pass through | `#0E1309` | `#0A121C` |
+| `--k-view` dark — a query, run when read | `#050703` | `#020407` |
+
+Hue is still not the channel: `--pri`, `--sec` and `--ter` mean logs, traces and metrics on
+every edge and particle here, and a box borrowing one would make the same channel say two
+things. Border style stays as the redundant second reading, so the distinction survives
+greyscale and a colour-blind reader.
+
+**And it surfaced a contrast bug that predates it.** Substrate's `--dim` was `#3D5A72`, putting
+every `.sub` label at **2.8:1** on the old panel and 2.09 on the new lit ground — under the 3:1
+floor for small text, on labels that are not decoration: `on insert`, `stored`, `per minute`,
+each producer's declared latency, the volume band's reason. Raised to `#57748F`, where the
+worst case on this board is 3.09. Command's was already above the line.
+
+**Kind was on two channels, and neither is hue.** Hue is spoken for: `--pri`, `--sec` and
 `--ter` mean logs, traces and metrics everywhere on this canvas, and a box borrowing one would
 make the same channel say two things. The **ground** was free, and there the difference is
 literal rather than a code to memorise — a table is *filled* because it holds something, an MV

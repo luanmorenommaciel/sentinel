@@ -24,15 +24,23 @@
   --rule-arrow:#4E6B39;
   --grid:rgba(127,224,74,.045); --scan:rgba(127,224,74,.03);
   --knob:#7FE04A;
+  /* Ground per object kind. A filled area is a far stronger channel than a 1px border, so
+     this is where the distinction lives; the border style is the redundant second reading. */
+  --k-table:#1B2614; --k-mv:#0E1309; --k-view:#050703;
 }
 :root[data-world="substrate"]{
   --bg:#04060B; --panel:#070B12; --raise:#091019; --sunk:#03050A;
   --pri:#22D3EE; --sec:#FFC53D; --ter:#DCE9F5; --alarm:#FF5C7A;
-  --txt:#C3D6E6; --dim:#3D5A72; --dim2:#6C8AA6;
+  /* --dim was #3D5A72 and put every small label under 3:1 — 2.8 on the panel, 2.09 on the
+     new lit table ground. `.sub` is not decoration here: it carries "on insert", "stored",
+     "per minute", the volume band's reason and each producer's declared latency. Raised
+     until the worst case on this board clears 3:1. Command's --dim was already above it. */
+  --txt:#C3D6E6; --dim:#57748F; --dim2:#6C8AA6;
   --rule:#153446; --rule2:#0E2230; --via:#0B1B26; --viaS:#1E5468;
   --rule-arrow:#2E6E88;
   --grid:rgba(34,211,238,.05); --scan:rgba(34,211,238,.014);
   --knob:#22D3EE;
+  --k-table:#12283A; --k-mv:#0A121C; --k-view:#020407;
 }
 /* The two reachability LEDs are a semaphore, and a semaphore is not part of a palette.
    Green means reachable and red means not, in BOTH worlds — that convention is older and
@@ -253,9 +261,22 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
    reader and a greyscale print, per this repo's own rule against colour-only encoding. The
    strokes stay inside the structural family (--dim2 / --viaS / --rule-arrow), which is
    defined per palette, so both worlds keep their own version of it. */
-.sub-nd.k-table{fill:var(--raise);stroke:var(--dim2);stroke-dasharray:none}
-.sub-nd.k-mv{fill:none;stroke:var(--viaS);stroke-dasharray:4 3}
-.sub-nd.k-view{fill:var(--sunk);stroke:var(--rule-arrow);stroke-dasharray:1 3}
+/* Kind on the GROUND first, border style second — and hue is still not the channel, because
+   --pri/--sec/--ter mean logs, traces and metrics on every edge and particle here.
+
+   The first attempt put kind on --raise / transparent / --sunk and measured 1.03:1 between
+   adjacent grounds: three names for one colour. A filled area beats a 1px stroke as a signal,
+   so the grounds are now stepped far enough apart to actually read, brightest to darkest in
+   the order of how much each thing holds:
+
+     table  lit    — the rows are in here
+     mv     dim    — an insert trigger; rows pass through and it keeps none
+     view   near   — a query, nothing to light up until someone runs it
+
+   Body text stays above 10:1 on all three, and the sub-labels above 3:1, in both worlds. */
+.sub-nd.k-table{fill:var(--k-table);stroke:var(--dim2);stroke-dasharray:none}
+.sub-nd.k-mv{fill:var(--k-mv);stroke:var(--dim);stroke-dasharray:4 3}
+.sub-nd.k-view{fill:var(--k-view);stroke:var(--rule-arrow);stroke-dasharray:1 3}
 .derive.tip{opacity:1}
 
 /* A mouth is a LIP, and a lip is pipe-shaped: a short section perpendicular to the run,

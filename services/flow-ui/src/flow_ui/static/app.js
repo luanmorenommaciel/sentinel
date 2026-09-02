@@ -830,9 +830,9 @@
     // any kind. Kind is carried by the border, and a border style nobody explains is a
     // pattern, not information.
     // The swatch wears the real class, so the key cannot drift from what it describes.
-    [["k-table", "table", "filled — the rows live here"],
-     ["k-mv", "materialized view", "hollow — an insert trigger, stores nothing"],
-     ["k-view", "read view", "sunk — a query, run when read"]].forEach(([k, t, why], i) => {
+    [["k-table", "table", "lit — the rows are in here"],
+     ["k-mv", "materialized view", "dim — a trigger; rows pass through"],
+     ["k-view", "read view", "dark — a query, run when read"]].forEach(([k, t, why], i) => {
       const x = b.x + SB.pad + i * 210, y = b.y + 46;
       g.append(el("rect", { class: "nd sub-nd " + k,
           x, y: y - 9, width: 12, height: 12, rx: 2 }),
