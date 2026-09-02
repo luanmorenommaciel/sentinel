@@ -25,6 +25,8 @@ services/
   flow-ui/                 # the pipeline watching itself — four boards over /metrics + bronze
 infra/                     # ClickHouse bootstrap (users/db init + users.d network override + bronze DDL in init.d/)
 docs/                      # shared docs (ADRs, research, proposals)
+                           #   research/ holds the V2 product roadmap for flow-ui:
+                           #   data-observability-competitive-landscape.md §6
 docker-compose.yml         # root orchestrator
 Makefile                   # one-command UX
 ```

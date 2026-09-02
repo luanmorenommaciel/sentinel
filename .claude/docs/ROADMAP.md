@@ -1,5 +1,10 @@
 # `.claude/` Roadmap
 
+> **Looking for the product roadmap?** It is
+> [`docs/research/data-observability-competitive-landscape.md`](../../docs/research/data-observability-competitive-landscape.md)
+> §6 — the ranked V2 shortlist for `services/flow-ui`, with what has shipped tracked in
+> [`services/flow-ui/STATUS.md`](../../services/flow-ui/STATUS.md). **This file is not that.**
+>
 > Evolution plan for Sentinel's Claude Code knowledge system.
 > Last updated: 2026-08-18
 
