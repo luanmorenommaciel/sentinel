@@ -357,6 +357,14 @@ applied — which it was. The class being right is not the question a reader ask
 verified at the pixel level instead: the swatch's computed stroke goes from `rgb(46,110,136)`
 to `rgb(255,197,61)` and its opacity from 0.5 to 1, while the other two do not move.
 
+**Every run is capped at both ends now.** The `collector → bronze` trunk had lips at
+departure and arrival from the start; every run added after it got one only where it landed,
+so a pipe grew out of a flat box edge at one end and met a lip at the other — on the bronze
+tables' exits, on the MVs' exits, and on the collapsed `bronze ⇒ silver` bar, which had none
+at all. A lip marks where a run *meets a box*: it is a termination, not a claim about what
+travels, so putting one on the derivation bar does not undo it carrying nothing. The dashed
+read edges still have none, because they are not pipes.
+
 **And adding the kind strokes silently took the selected border away from every silver node.**
 `.nd.sel` and `.sub-nd.k-mv` are both two classes, so the cascade falls back to source order,
 and the kind rules were written below. Selection now comes after them. The same trap as the

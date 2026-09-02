@@ -868,6 +868,7 @@
         if (G[up]?.target === name) {
           const id = `sv-${up}`;
           pipe(edges, id, fan(from.x + SB.w, from.cy, n.x, n.cy, 12), "", {}, 7);
+          mouth(from.x + SB.w, from.cy, 7);
           mouth(n.x, n.cy, 7);
           spawn(fx, id, cls);
         } else {
@@ -1029,6 +1030,10 @@
       if (!a || !z) return;
       const id = `dv${i}`;
       pipe(edges, id, fan(a.x, a.y, z.x, z.y, 30 + i * 8), "", {}, 7);
+      // Both ends. The collector→bronze trunk has always been capped at departure and
+      // arrival; every run added after it was capped only where it landed, so a pipe grew
+      // out of a flat box edge at one end and met a lip at the other.
+      mouth(a.x, a.y, 7);
       mouth(z.x, z.y, 7);
       spawn(fx, id, cls);
       seen++;
@@ -1231,6 +1236,10 @@
         d: `M${x1} ${my + o} L${x2} ${my + o}` })));
       edges.append(el("path", { class: "derive tip", "marker-end": "url(#arrow-tap)",
         d: `M${x2 - 12} ${my} L${x2 - 1} ${my}` }));
+      // Lips here too. A lip marks where a run meets a box — it is a termination, not a
+      // claim about what travels — so it does not undo this bar carrying nothing.
+      mouth(x1, my, dy * 2 + 4);
+      mouth(x2, my, dy * 2 + 4);
       nodesLater.push(el("text", { class: "sub", x: (x1 + x2) / 2, y: my - 12,
         style: "text-anchor:middle" }, "derived"),
         el("text", { class: "sub", x: (x1 + x2) / 2, y: my + 20,
