@@ -242,6 +242,10 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
    asks, so it gets no casing, no bore and no particles — only the colour of the table it
    reads, so lineage is still followable. Dashed says "on demand". */
 .lin{fill:none;stroke-width:1.4;opacity:.5;stroke-dasharray:3 3}
+/* A motion track: geometry for `animateMotion` to follow, never drawn. The collapsed
+   BRONZE ⇒ SILVER bar is two rails with nothing between them, and the dots run down the
+   middle — so the path they follow has to exist without being a third rail. */
+.track{fill:none;stroke:none}
 /* Its own tone classes, NOT the particle ones: `.p1{fill:var(--pri)}` is a FILL rule, and
    a path wearing it renders as a filled triangle rather than a line — ten read edges came
    out as one solid smear. */

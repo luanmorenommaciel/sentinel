@@ -58,6 +58,9 @@
   let root = null;                      // the <g> everything pans inside
   let vias = null;                      // the layer mouths are drawn into
   let sheets = null;                    // the datasheets, redrawn without a full render
+  //: [pathId, silverTableItReads] for each read edge, so the tick can gate each one on the
+  //: growth of the table behind it rather than on the estate.
+  let readEdges = [];
 
   /* ── helpers ───────────────────────────────────────────────── */
   const fmt = (n) => {
@@ -874,8 +877,13 @@
           spawn(fx, id, cls);
         } else {
           // `p1..p3` are particle FILL classes; an edge wearing one renders filled.
-          edges.append(el("path", { class: "lin " + cls.replace("p", "e"),
+          const rid = `rd${lane}`;
+          edges.append(el("path", { id: rid, class: "lin " + cls.replace("p", "e"),
             d: fan(from.x + SB.w, from.cy, n.x, n.cy, 10 + (lane++ % 10) * 6) }));
+          // Smaller and slower than a pipe's dots, because the claim is different: a view
+          // is read, not fed. The weight carries what the dashed line already says.
+          spawn(fx, rid, cls, 2, 1.9);
+          readEdges.push([rid, up]);
         }
       }
     }
@@ -914,12 +922,12 @@
   };
 
   //: Particles for one strand, on the batch arrival that feeds it.
-  function spawn(fx, id, cls, r = 2.6) {
+  function spawn(fx, id, cls, r = 2.6, slow = 1) {
     const { dur, n } = pools.__batch || { dur: 3.2, n: 3 };
     const pool = [];
     for (let k = 0; k < n; k++) {
       const c = el("circle", { class: cls, r, opacity: 0 });
-      const a = el("animateMotion", { dur: `${(dur * 0.55).toFixed(2)}s`,
+      const a = el("animateMotion", { dur: `${(dur * 0.55 * slow).toFixed(2)}s`,
         repeatCount: "indefinite", begin: `${(k * dur / n + dur).toFixed(2)}s` });
       a.append(el("mpath", { href: `#${id}` }));
       c.append(a); fx.append(c); pool.push(c);
@@ -1183,6 +1191,7 @@
     const stage = $("stage");
     pools = {};
     ports = { bronze: {}, silver: {} };
+    readEdges = [];
     const L = layout(), B = L.boxes;
     const svg = el("svg", { viewBox: `0 0 ${VW} ${VH}`, preserveAspectRatio: "xMidYMid meet" });
     const defs = el("defs");
@@ -1241,6 +1250,12 @@
       // claim about what travels — so it does not undo this bar carrying nothing.
       mouth(x1, my, dy * 2 + 4);
       mouth(x2, my, dy * 2 + 4);
+      // Dots down the middle of the bar. The rails stay a derivation mark — no casing, no
+      // bore — but rows really do move on that insert, and a still bar between two boxes
+      // whose counts are both climbing says the opposite.
+      edges.append(el("path", { id: "derive-track", class: "track",
+        d: `M${x1} ${my} L${x2} ${my}` }));
+      spawn(fx, "derive-track", "p3", 3);
       nodesLater.push(el("text", { class: "sub", x: (x1 + x2) / 2, y: my - 12,
         style: "text-anchor:middle" }, "derived"),
         el("text", { class: "sub", x: (x1 + x2) / 2, y: my + 20,
@@ -1306,7 +1321,10 @@
 
     stage.replaceChildren(svg);
     stage.querySelectorAll("[data-node]").forEach((n) => {
-      n.addEventListener("click", () => { open[n.dataset.node] = !open[n.dataset.node]; repaint(); });
+      n.addEventListener("click", () => {
+        open[n.dataset.node] = !open[n.dataset.node];
+        repaintNow();
+      });
       n.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); n.click(); }
       });
@@ -1333,7 +1351,7 @@
       const pick = (e) => {
         e.stopPropagation();
         service = service === n.dataset.service ? null : n.dataset.service;
-        repaint();
+        repaintNow();
       };
       n.addEventListener("click", pick);
       n.addEventListener("keydown", (e) => {
@@ -1467,7 +1485,7 @@
     $("z-home").addEventListener("click", () => {
       open.origin = open.collector = open.bronze = open.silver = false;
       table = model = service = null;
-      repaint();
+      repaintNow();
       fit();
     });
   }
@@ -1952,6 +1970,16 @@
     Object.keys(SG).forEach((name) => {
       if (SG[name].kind === "mv") show(`sv-${name}`, rootRate(name) > 0 ? 2 : 0);
     });
+    // The collapsed bar runs on the estate: it stands for all four derivations at once.
+    show("derive-track", sum2(s.bronze_rate) > 0 ? 3 : 0);
+    // A read edge runs on the growth of the table being READ — a view over a silent table
+    // has nothing new to answer with. A silver table grows at the rate of whatever MV
+    // writes it, which resolves back to a bronze table through the same walk.
+    const tableRate = (tbl) => {
+      const feeder = Object.keys(SG).find((k) => SG[k].target === tbl);
+      return feeder ? rootRate(feeder) : 0;
+    };
+    readEdges.forEach(([id, src]) => show(id, tableRate(src) > 0 ? 2 : 0));
     // Each tap runs only while its own outcome is happening. A pipeline losing nothing
     // should have three still lines, not three animations implying otherwise.
     //
@@ -2017,6 +2045,16 @@
   }
 
   /* ── structural repaint ────────────────────────────────────── */
+  /** Repaint and immediately re-apply the current density.
+   *
+   *  Anything that rebuilds the stage outside the tick has to do both: `render` creates
+   *  every dot at opacity 0, so a repaint on its own hands back an empty board that stays
+   *  empty until the next frame arrives.
+   */
+  function repaintNow() {
+    if (repaint() && snap) density(snap);
+  }
+
   function repaint() {
     // Every box that can expand belongs in this key. Leaving one out does not fail loudly:
     // the click flips `open[id]`, the key does not change, repaint returns early and the box
@@ -2056,7 +2094,11 @@
     // A board only draws when it is on screen. Neither has animation to preserve, but
     // rebuilding a chart nobody is looking at, once a second, is work for nothing.
     drawBoards();
-    if (repaint()) return;          // structural only; throughput never rebuilds
+    // `density` runs whether or not the stage was rebuilt. It used to be skipped on a
+    // structural repaint — `if (repaint()) return` — and `render` creates every dot at
+    // opacity 0, so opening a box left the whole board blank until the NEXT tick a second
+    // later, then filled it again all at once. That reads as every particle restarting.
+    repaint();
     density(s);
   }
   const sum2 = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
@@ -2103,7 +2145,7 @@
     ceiling = h.ceiling_ms || ceiling;
     drawBoards();
   }).catch(() => {});
-  fetch("/api/graph").then((r) => r.json()).then((g) => { graph = g; painted = ""; repaint(); fit(); })
+  fetch("/api/graph").then((r) => r.json()).then((g) => { graph = g; painted = ""; repaintNow(); fit(); })
     .catch(() => {});
   const es = new EventSource("/stream");
   es.onmessage = (e) => { try { apply(JSON.parse(e.data)); } catch (_) { /* bad frame */ } };

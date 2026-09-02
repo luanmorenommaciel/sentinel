@@ -365,6 +365,13 @@ with every dot at opacity 0 — bronze fed the MVs and then the board went still
 the growth of the bronze table the chain started from, resolved **through the graph**, so a
 second-stage MV reading a silver table finds its root instead of guessing.
 
+*Opening a box blacked the board out for a second.* `render` creates every dot at opacity 0
+and the tick read `if (repaint()) return`, skipping the `density` call that reveals them — so a
+structural change left the whole canvas empty until the next frame arrived, then filled it all
+at once. Read as every particle restarting, and reported as exactly that. Every structural
+repaint outside the tick now goes through `repaintNow`, which re-applies the current density
+immediately: 69 dots are visible the instant the click completes, not a second later.
+
 *Clicking a row restarted every dot on the board.* Selection went through `repaint`, which
 rebuilds the whole stage; rebuilding recreates every `animateMotion`, and an `animateMotion`
 keeps its progress on the node itself, so each dot jumped back to the mouth of its pipe. That
@@ -373,6 +380,17 @@ by its own click handler. A selection changes no geometry (the sheets sit below 
 are narrower than it, so nothing moves), so it now redraws only the sheet layer, the `.sel`
 classes and the key. Verified by **object identity**, not by counting: the same 89 circle nodes
 survive both a model click and a table click.
+
+**The two still edges now carry dots, which reverses a call I made twice.** The collapsed
+`bronze ⇒ silver` bar and the `table → view` reads were drawn motionless on the argument that
+neither is a hop. The argument holds for the *shape* — the bar keeps its rails and no bore, the
+reads keep their dashes — but not for the stillness: both counts climb while the stream runs,
+and a dead line between two rising numbers says the opposite of what is happening. The bar's
+dots run down a `.track`, a path with no stroke that exists only for `animateMotion` to follow,
+so the rails stay two rails. A read's dots are smaller and slower than a pipe's, so the
+difference in claim survives as a difference in weight. Each read edge is gated on the growth
+of the table being *read*, resolved back to its bronze root: a view over a silent table has
+nothing new to answer with.
 
 **Every run is capped at both ends now.** The `collector → bronze` trunk had lips at
 departure and arrival from the start; every run added after it got one only where it landed,
