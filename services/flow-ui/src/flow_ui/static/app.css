@@ -242,6 +242,7 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
    particle palette is already held to: three kinds, three border weights, one label each. */
 .sub-nd.k-mv{stroke-dasharray:4 3}
 .sub-nd.k-view{stroke-dasharray:1 3}
+.sub-nd.k-table{stroke-dasharray:none}
 .derive.tip{opacity:1}
 
 /* A mouth is a LIP, and a lip is pipe-shaped: a short section perpendicular to the run,

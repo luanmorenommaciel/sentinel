@@ -128,3 +128,35 @@ def test_every_read_view_the_box_lists_has_something_to_say_about_itself():
     for name, (grain, what) in ClickHouse.SILVER_VIEW_DOCS.items():
         assert grain and what, name
         assert len(what) <= 41, (name, len(what))
+
+
+def test_the_whole_mergetree_family_is_a_table():
+    """A SummingMergeTree rollup is the obvious engine for a second-stage model.
+
+    Matching the literal string "MergeTree" made one invisible on the board with its own MV
+    left pointing at nothing — found by creating one against the live database, not in
+    review. Anything that is not one of the two view engines stores rows.
+    """
+    ddl = "CREATE TABLE silver.log_events_hourly (n UInt64) ENGINE = SummingMergeTree"
+    g = sgraph(f"log_events_hourly\tSummingMergeTree\tservice_name\t{ddl}\n")
+    assert g["log_events_hourly"]["kind"] == "table"
+
+
+def test_silver_state_classifies_engines_the_same_way():
+    """The two readings must agree, or the board draws a table it has no count for."""
+    state = silver("SummingMergeTree\tlog_events_hourly\t22\n"
+                   "MergeTree\tlog_events\t7\n"
+                   "View\tlog_health_1m\t0\n"
+                   "MaterializedView\tlog_events_hourly_mv\t0\n")
+    assert state["models"] == {"log_events_hourly": 22, "log_events": 7}
+    assert state["views"] == ["log_health_1m"] and state["mvs"] == 1
+
+
+def test_a_second_stage_mv_reads_silver_not_bronze():
+    """An hourly rollup reads a silver table. Laid out by kind it fell back into the first
+    column and its edge ran right to left; depth puts it after what it reads."""
+    ddl = ("CREATE MATERIALIZED VIEW silver.log_events_hourly_mv TO silver.log_events_hourly "
+           "AS SELECT count() FROM silver.log_events GROUP BY service_name")
+    g = sgraph(f"log_events_hourly_mv\tMaterializedView\t\t{ddl}\n")
+    assert g["log_events_hourly_mv"]["sources"] == ["silver.log_events"]
+    assert g["log_events_hourly_mv"]["target"] == "log_events_hourly"

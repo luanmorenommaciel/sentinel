@@ -306,10 +306,29 @@ pairs typed into `app.js`, was a fourth copy of the DDL after the SQL, the MV de
 `system.tables`; it is now computed. The box's own footprint is measured from the graph rather
 than typed in.
 
-**Verified the way the claim deserves:** a `CREATE VIEW silver.error_budget_1m AS SELECT …
-FROM silver.operation_executions` run against the live database appeared on the board — in the
-READ VIEWS column, placed next to the table it reads, wired to it by an edge in that table's
-colour, with the box grown to seven rows — with **no code edited**. Then dropped again.
+**Columns are DAG depth, not kind.** Kind decided the column first and it was wrong the
+moment the schema stopped being a straight line, which is what "what if a new MV is born in
+the middle?" was really asking. A second-stage MV — one reading a *silver* table rather than a
+bronze one, which is how an hourly rollup is built — belongs between two tables; by kind it
+landed back in column 0 and its edge ran right to left, drawing a dependency that reads
+backwards. Depth puts every node after everything it reads, whatever it happens to be, and the
+kind moved to the border style with a key to explain it. The walk is guarded against cycles:
+ClickHouse will let you build one.
+
+**Verified against the live database three times, by creating the awkward cases and looking:**
+
+| Case | Result |
+|---|---|
+| `CREATE VIEW silver.error_budget_1m … FROM silver.operation_executions` | appeared beside the table it reads, wired in that table's colour, box grown a row — **no code edited** |
+| A second-stage MV: `silver.log_events → silver.log_events_hourly` | landed in a **fourth column** that did not exist before, after the table it reads |
+| A table nothing feeds (`manual_annotations`) | column 0 with the sources, no incoming edge — correct: nothing produces it |
+
+**Two defects that only a real object could have found**, and they were the same defect twice:
+`SummingMergeTree` — the obvious engine for a rollup — did not match the literal string
+`"MergeTree"`, so the table was **invisible** in `silver_graph` and **absent from `models`** in
+`silver_state`, leaving the board drawing a table it had no count for. Anything that is not one
+of the two view engines stores rows. Both readings now classify identically, and a test pins
+that they agree.
 
 ### Silver's models have datasheets too — read from ClickHouse, not restated
 

@@ -438,12 +438,15 @@ class ClickHouse:
             except ValueError:
                 continue
             out["present"] = True
-            if engine == "MergeTree":
-                out["models"][name] = int(n)
+            # Same classification as `silver_graph`, and it has to stay the same: matching
+            # the literal "MergeTree" left a SummingMergeTree rollup out of `models`, so the
+            # board drew the table but had no count to put in it.
+            if engine == "MaterializedView":
+                out["mvs"] += 1
             elif engine == "View":
                 out["views"].append(name)
-            elif engine == "MaterializedView":
-                out["mvs"] += 1
+            else:
+                out["models"][name] = int(n)
         out["views"].sort()
         return out
 
@@ -510,9 +513,12 @@ class ClickHouse:
             if len(parts) != 4:
                 continue
             name, engine, sort, ddl = parts
-            kind = {"MergeTree": "table", "MaterializedView": "mv", "View": "view"}.get(engine)
-            if not kind:
-                continue
+            # Any *MergeTree is a table. Matching the literal string "MergeTree" made a
+            # SummingMergeTree rollup — the obvious engine for exactly this kind of model —
+            # invisible on the board, with its own MV left pointing at nothing. Everything
+            # that is not one of the two view engines stores rows, so it is a table.
+            kind = ("mv" if engine == "MaterializedView"
+                    else "view" if engine == "View" else "table")
             # `TO silver.x` is where an MV writes; everything else it names, it reads.
             to = re.search(r"\bTO\s+(?:bronze|silver)\.([a-z_0-9]+)", ddl)
             target = to.group(1) if to else ""

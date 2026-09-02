@@ -766,7 +766,7 @@
   //: Inside SILVER: three columns, one per kind, in the order data reaches them.
   //: `colGap` is routing room, not decoration: ten table→view edges have to pass between
   //: those two columns, and at 26 they shared one channel and rendered as a smear.
-  const SB = { w: 180, h: 34, gap: 6, colGap: 72, pad: 26, head: 78 };
+  const SB = { w: 180, h: 34, gap: 6, colGap: 72, pad: 26, head: 86 };
 
   /** SILVER's open footprint, measured from the graph rather than typed in.
    *
@@ -777,10 +777,9 @@
    *  instead of restating it.
    */
   function silverSize() {
-    const G = graph?.silver_graph || {};
-    const n = (k) => Object.values(G).filter((z) => z.kind === k).length;
-    const rows = Math.max(1, n("mv"), n("table"), n("view"));
-    return [SB.pad * 2 + SB.w * 3 + SB.colGap * 2,
+    const lay = silverLayout(graph?.silver_graph || {}, { x: 0, y: 0 });
+    const cols = Math.max(3, lay?.cols || 3), rows = Math.max(1, lay?.rows || 1);
+    return [SB.pad * 2 + SB.w * cols + SB.colGap * (cols - 1),
             SB.head + rows * (SB.h + SB.gap) + 18];
   }
 
@@ -827,14 +826,17 @@
     const lay = silverLayout(G, b);
     if (!lay) return;
 
-    // Column captions. A reader who has never met a ClickHouse MV needs to be told that the
-    // middle column is the only one holding anything.
-    [["MATERIALIZED VIEWS", "insert triggers · store nothing"],
-     ["TABLES", "the rows live here"],
-     ["READ VIEWS", "queries · run when read"]].forEach(([t, sub], c) => {
-      const x = lay.colX[c];
-      g.append(el("text", { class: "lbl", x, y: b.y + 48 }, t),
-        el("text", { class: "sub", x, y: b.y + 61, style: "opacity:.55" }, sub));
+    // A key, not column headings: the columns are DAG depth now, so any of them can hold
+    // any kind. Kind is carried by the border, and a border style nobody explains is a
+    // pattern, not information.
+    [["k-mv", "materialized view", "an insert trigger · stores nothing"],
+     ["k-tbl", "table", "the rows live here"],
+     ["k-view", "read view", "a query · run when read"]].forEach(([k, t, why], i) => {
+      const x = b.x + SB.pad + i * 200, y = b.y + 46;
+      g.append(el("rect", { class: "nd sub-nd " + (k === "k-tbl" ? "" : k),
+          x, y: y - 9, width: 12, height: 12, rx: 2 }),
+        el("text", { class: "sub", x: x + 18, y }, t),
+        el("text", { class: "sub", x: x + 18, y: y + 12, style: "opacity:.5" }, why));
     });
 
     // Lineage inside SILVER, drawn before the boxes so the boxes cap the runs. Each read
@@ -842,21 +844,23 @@
     // into a single unreadable smear.
     let lane = 0;
     for (const [name, n] of Object.entries(lay.nodes)) {
-      for (const src of (G[name].sources || [])) {
-        const from = lay.nodes[src.split(".")[1]];
-        if (!from) continue;                       // a bronze source; drawn by derivations()
-        // `p1..p3` are particle FILL classes; an edge wearing one renders filled.
-        const cls = (lay.tone[src.split(".")[1]] || "p1").replace("p", "e");
-        edges.append(el("path", { class: "lin " + cls,
-          d: fan(from.x + SB.w, from.cy, n.x, n.cy, 10 + (lane++ % 10) * 6) }));
-      }
-      // An MV writes into its target, and that write is the only real movement in here.
-      const tgt = G[name].target && lay.nodes[G[name].target];
-      if (tgt) {
-        const id = `sv-${name}`;
-        pipe(edges, id, fan(n.x + SB.w, n.cy, tgt.x, tgt.cy, 12), "", {}, 7);
-        mouth(tgt.x, tgt.cy, 7);
-        spawn(fx, id, lay.tone[name] || "p1");
+      for (const up of lay.feeds[name]) {
+        const from = lay.nodes[up];
+        if (!from) continue;
+        const cls = lay.tone[up] || "p1";
+        // An MV WRITING its target is real movement — rows land on that insert — so it gets
+        // a pipe with particles. Everything else here is a READ: a view's source, or an MV's
+        // input, where nothing travels until the query runs. Same lineage, different claim.
+        if (G[up]?.target === name) {
+          const id = `sv-${up}`;
+          pipe(edges, id, fan(from.x + SB.w, from.cy, n.x, n.cy, 12), "", {}, 7);
+          mouth(n.x, n.cy, 7);
+          spawn(fx, id, cls);
+        } else {
+          // `p1..p3` are particle FILL classes; an edge wearing one renders filled.
+          edges.append(el("path", { class: "lin " + cls.replace("p", "e"),
+            d: fan(from.x + SB.w, from.cy, n.x, n.cy, 10 + (lane++ % 10) * 6) }));
+        }
       }
     }
 
@@ -907,49 +911,86 @@
     pools[id] = pool;
   }
 
-  /** Rows and columns for SILVER's objects, ordered so the lineage runs mostly straight.
+  /** Rows and columns for SILVER's objects, laid out by DEPTH in the DAG, not by kind.
    *
-   *  Each column is ordered by where its own source sits in the column before it, which is
-   *  the same rule that took the four bronze strands from crossing to flat. A view with
-   *  three sources cannot be placed without crossing something, so those go last.
+   *  Kind decided the column in the first version and it was wrong the moment the schema
+   *  stopped being a straight line. A second-stage MV — one reading a silver table rather
+   *  than a bronze one, which is how you build an hourly rollup — belongs *between* two
+   *  tables; by kind it landed back in column 0 and its edge ran right to left, drawing a
+   *  dependency that reads backwards. A table nothing feeds belongs at the start, not in the
+   *  middle. Depth puts each node after everything it reads, whatever it happens to be, and
+   *  the kind is carried by the border and the sub-label instead.
+   *
+   *  Edges are the dependency, in both directions the DDL states them: an MV *reads* its
+   *  sources and *writes* its target, so a table's producers are the MVs pointing at it.
    */
   function silverLayout(G, b) {
     const names = Object.keys(G);
     if (!names.length) return null;
-    const kind = (k) => names.filter((n) => G[n].kind === k);
     const bare = (r) => r.split(".")[1];
-    // MVs in the order BRONZE draws the tables they read, so the strands arrive in the
-    // order they left. An MV reading something bronze does not draw goes last, in place.
-    const rankMv = (m) => {
-      const order = bronzeOrder();
-      const i = order.indexOf(bare(G[m].sources[0] || ""));
-      return i < 0 ? order.length : i;
+
+    // Who feeds whom. A table has no `sources` of its own — it is fed by the MVs whose
+    // `target` it is, so that edge has to be read backwards out of the MV.
+    const feeds = {};
+    names.forEach((n) => { feeds[n] = new Set(); });
+    names.forEach((n) => {
+      (G[n].sources || []).forEach((src) => {
+        if (feeds[bare(src)]) feeds[n].add(bare(src));      // reads a silver object
+      });
+      const t = G[n].target;
+      if (t && feeds[t]) feeds[t].add(n);                   // an MV writes this table
+    });
+
+    // Depth = one past the deepest thing it reads. `busy` guards a cycle: ClickHouse will
+    // let you build one, and an unguarded walk would recurse until the stack gives out.
+    const depth = {}, busy = new Set();
+    const walk = (n) => {
+      if (n in depth) return depth[n];
+      if (busy.has(n)) return 0;
+      busy.add(n);
+      const up = [...feeds[n]].map(walk);
+      busy.delete(n);
+      return (depth[n] = up.length ? Math.max(...up) + 1 : 0);
     };
-    const mvs = kind("mv").sort((a, z) => rankMv(a) - rankMv(z) || a.localeCompare(z));
+    names.forEach(walk);
+
+    const cols = [];
+    names.forEach((n) => { (cols[depth[n]] ||= []).push(n); });
+    // Within a column, follow the row of whatever feeds you, so runs stay short and mostly
+    // straight — the same rule that took the four bronze strands from crossing to flat.
+    const row = {};
+    cols.forEach((col, c) => {
+      col.sort((a, z) => {
+        const at = (n) => {
+          const up = [...feeds[n]].map((u) => row[u]).filter((r) => r !== undefined);
+          return up.length ? Math.min(...up) : (c === 0 ? -1 : 900);
+        };
+        return at(a) - at(z) || a.localeCompare(z);
+      });
+      col.forEach((n, i) => { row[n] = i; });
+    });
+
+    // Colour is the signal type of the bronze table the chain started from, carried forward
+    // so a rollup three hops down still reads as "this is the metrics lineage".
     const tone = {};
-    mvs.forEach((m) => { tone[m] = toneOf(bare(G[m].sources[0] || "")); });
-    const tables = [];
-    mvs.forEach((m) => {
-      const t = G[m].target;
-      if (t && G[t] && !tables.includes(t)) { tables.push(t); tone[t] = tone[m]; }
-    });
-    kind("table").forEach((t) => { if (!tables.includes(t)) tables.push(t); });
-    // Views by their first source's row, multi-source ones after — they cross whatever
-    // order they are given, so they are not allowed to displace the ones that do not.
-    const views = kind("view").sort((a, z) => {
-      const rank = (v) => (G[v].sources.length > 1 ? 900
-        : tables.indexOf(bare(G[v].sources[0] || "")));
-      return rank(a) - rank(z) || a.localeCompare(z);
-    });
-    tables.forEach((t) => { tone[t] ||= "p1"; });
-    const colX = [0, 1, 2].map((c) => b.x + SB.pad + c * (SB.w + SB.colGap));
+    const toneFor = (n) => {
+      if (tone[n]) return tone[n];
+      const ext = (G[n].sources || []).find((s) => s.startsWith("bronze."));
+      if (ext) return (tone[n] = toneOf(bare(ext)));
+      const up = [...feeds[n]];
+      return (tone[n] = up.length ? toneFor(up[0]) : "p1");
+    };
+    names.forEach((n) => { tone[n] = undefined; });
+    names.forEach(toneFor);
+
     const nodes = {};
-    [mvs, tables, views].forEach((col, c) => col.forEach((n, i) => {
+    cols.forEach((col, c) => col.forEach((n, i) => {
+      const x = b.x + SB.pad + c * (SB.w + SB.colGap);
       const y = b.y + SB.head + i * (SB.h + SB.gap);
-      nodes[n] = { x: colX[c], y, cy: y + SB.h / 2, col: c, row: i };
+      nodes[n] = { x, y, cy: y + SB.h / 2, col: c, row: i };
     }));
-    return { nodes, colX, tone,
-             rows: Math.max(mvs.length, tables.length, views.length) };
+    return { nodes, feeds, tone, cols: cols.length,
+             rows: Math.max(...cols.map((c) => c.length)) };
   }
 
   /** BRONZE ⇒ SILVER, per table, once both boxes are open.
