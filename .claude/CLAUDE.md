@@ -134,10 +134,11 @@ Each agent has its own `.md` under `.claude/agents/<category>/<name>.md`. All ag
 
 Skill frontmatter follows [`.claude/skills/_template.md.example`](skills/_template.md.example).
 
-## Rules (1 path-scoped file)
+## Rules (2 path-scoped files)
 
 | Rule | Scope | Purpose |
 |---|---|---|
+| [`pre-pr-discipline.md`](rules/pre-pr-discipline.md) | all | Two checks before a PR: does an issue cover this (propose, never create unprompted), and which documents describe what changed. Both detect-and-propose. Written after #40 found a merged service with zero mentions in the README. |
 | [`kb-enrichment.md`](rules/kb-enrichment.md) | all | Policy: knowledge discovered during sessions must flow back into `.claude/kb/` via `/enrich-kb` or `/create-kb`. Defines the decision tree for KB vs. CLAUDE.md placement and the dating + confidence convention. |
 
 ## Knowledge Base (11 seed KBs)
