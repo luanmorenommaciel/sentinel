@@ -418,6 +418,27 @@ repaint must not reshuffle a lane the reader is already watching. Verified — t
 `begin` values survive an open-and-close. Same constraint that made `order` use farthest-point
 insertion rather than a modular stride.
 
+### Dots that vanish and come back: the rate BEATS
+
+Reported as dots leaving, disappearing and reappearing, and it was not the animation. The
+generator emits on a 1s step and the poller samples on a 1s interval, so the two drift against
+each other and a window catches two of the generator's ticks or none. Sampled every 2s `logs`
+reads a steady 82/s; drawn per tick the lane ran **4,2,4,2,4,2**.
+
+A deadband alone could not fix it — a 2× swing is not a rounding boundary. The density is now
+smoothed with an EMA and *then* quantised with a deadband, and the on/off gates use the same
+smoothing: `rate > 0` reads false in whichever window catches nothing, so a run went still for
+one frame and came back — the same defect in binary. **Display only**; every printed figure is
+still the raw measurement and the smoothing never reaches the verdict.
+
+Measured with both boxes open, over 14 ticks: four lanes with a moving count before, one after —
+and that one changes by a single dot three times, which is the metrics rate genuinely drifting
+across a boundary rather than a beat.
+
+**One lane was still a metronome.** BRONZE's internal fan builds its circles in its own loop
+rather than through `flow`, so the scatter never reached it: all twelve ran at exactly 3.20s
+while every other lane had been broken up. Now 10 distinct durations across 3.00–3.38s.
+
 **Every run is capped at both ends now.** The `collector → bronze` trunk had lips at
 departure and arrival from the start; every run added after it got one only where it landed,
 so a pipe grew out of a flat box edge at one end and met a lip at the other — on the bronze

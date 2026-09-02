@@ -387,8 +387,42 @@
     pools[key] = pool;
   };
 
-  const dots = (rate) => rate <= 0 ? 0
-    : Math.max(1, Math.min(MAX_DOTS, Math.round(Math.pow(rate / QUANTUM, .62) * 2.6)));
+  //: Lane density, smoothed then quantised — and it needs both.
+  //:
+  //: The rate arriving each tick BEATS. The generator emits on a 1s step and the poller
+  //: samples on a 1s interval, so the two drift against each other and a window catches two
+  //: of the generator's ticks or none: `logs` reads a steady 82/s sampled every 2s while the
+  //: per-second series alternates. Drawn straight, the logs lane ran 4,2,4,2,4,2 — dots
+  //: appearing and vanishing on the beat, which is what a reader sees and reports.
+  //:
+  //: An EMA absorbs the beat without hiding a real change; a deadband on top of it stops the
+  //: rounding boundary flickering the last dot. Display only — every figure printed on the
+  //: page is still the raw measurement, and the smoothing never reaches the verdict.
+  const ALPHA = 0.35, DEADBAND = 0.65;
+  const ema = {}, held = {};
+
+  /** Is this lane moving? Same smoothing, for the gates that are on/off rather than a count.
+   *
+   *  `rate > 0` on a beating series reads 0 in whichever window catches none of the
+   *  generator's ticks, so a run went still for one frame and came back — the same defect as
+   *  the flickering dot, in binary. The threshold sits below one signal per second: a lane
+   *  that has genuinely stopped decays past it within a few ticks, one that is merely being
+   *  sampled badly does not.
+   */
+  const live = (key, rate) => {
+    ema[key] = ema[key] === undefined ? rate : ema[key] * (1 - ALPHA) + rate * ALPHA;
+    return ema[key] > 0.5;
+  };
+
+  const dots = (key, rate) => {
+    if (rate <= 0) { ema[key] = 0; held[key] = 0; return 0; }
+    ema[key] = ema[key] === undefined ? rate : ema[key] * (1 - ALPHA) + rate * ALPHA;
+    const raw = Math.max(1, Math.min(MAX_DOTS, Math.pow(ema[key] / QUANTUM, .62) * 2.6));
+    const prev = held[key];
+    const n = prev === undefined || Math.abs(raw - prev) > DEADBAND ? Math.round(raw) : prev;
+    held[key] = n;
+    return n;
+  };
 
   /* ── per-service health, fused ─────────────────────────────
    *
@@ -1128,9 +1162,14 @@
       const { dur, n: inFlight } = pools.__batch || { dur: 3.2, n: 3 };
       const pool = [];
       for (let k = 0; k < inFlight; k++) {
+        // Scattered like every other lane. This loop builds its circles inline rather than
+        // through `flow`, so it kept marching in lockstep at exactly 3.20s after the others
+        // were broken up — the one lane still running on a metronome.
+        const own = dur * (1 + (jitter(id, k + 500) - 0.5) * DRIFT);
+        const off = (jitter(id, k) - 0.5) * SPREAD * (dur / inFlight);
         const c = el("circle", { class: cls, r: 3.2, opacity: 0 });
-        const a = el("animateMotion", { dur: `${dur}s`, repeatCount: "indefinite",
-          begin: `${(k * dur / inFlight + dur).toFixed(2)}s` });
+        const a = el("animateMotion", { dur: `${own.toFixed(2)}s`, repeatCount: "indefinite",
+          begin: `${Math.max(0, k * dur / inFlight + dur + off).toFixed(2)}s` });
         a.append(el("mpath", { href: `#${id}` }));
         c.append(a); fx.append(c); pool.push(c);
       }
@@ -1960,10 +1999,12 @@
   /* ── per-tick visibility ───────────────────────────────────── */
   function density(s) {
     const ing = s.ingest_rate || {};
-    show("logs", dots(ing.logs || 0));
-    show("trace", dots(ing.trace || 0));
-    show("metrics", dots(ing.metrics || 0));
-    const inFlight = Math.min(3, Math.round((s.flush_rate || 0) * 3.2 / 2));
+    show("logs", dots("logs", ing.logs || 0));
+    show("trace", dots("trace", ing.trace || 0));
+    show("metrics", dots("metrics", ing.metrics || 0));
+    ema.__flush = ema.__flush === undefined ? (s.flush_rate || 0)
+      : ema.__flush * (1 - ALPHA) + (s.flush_rate || 0) * ALPHA;
+    const inFlight = Math.min(3, Math.round(ema.__flush * 3.2 / 2));
     show("blk", inFlight);
     show("burst", inFlight);
     const total = Object.values(ing).reduce((a, z) => a + z, 0);
@@ -1980,12 +2021,12 @@
     // scenario — the same defect as a hard-coded colour, moved into the gate.
     const tnames = Object.keys(graph?.tables || {});
     for (let i = 0; i < 6; i++)
-      show(`be${i}`, ((s.bronze_rate || {})[tnames[i]] || 0) > 0 ? 3 : 0);
+      show(`be${i}`, live(`be${i}`, (s.bronze_rate || {})[tnames[i]] || 0) ? 3 : 0);
     // A derivation strand runs on the growth of the bronze table it reads, for the same
     // reason: the MV fires on that table's insert and on nothing else. A silent source
     // means a still strand, not a strand animating over nothing.
     derives().forEach(([from], i) =>
-      show(`dv${i}`, ((s.bronze_rate || {})[from] || 0) > 0 ? 2 : 0));
+      show(`dv${i}`, live(`dv${i}`, (s.bronze_rate || {})[from] || 0) ? 2 : 0));
     // An MV writing its target is the one real movement inside SILVER, and its pool was
     // being created and never shown — `spawn` fills `pools`, but nothing here revealed them,
     // so the run existed with every dot at opacity 0. The gate is the growth of the bronze
@@ -2005,7 +2046,8 @@
       return 0;
     };
     Object.keys(SG).forEach((name) => {
-      if (SG[name].kind === "mv") show(`sv-${name}`, rootRate(name) > 0 ? 2 : 0);
+      if (SG[name].kind === "mv")
+        show(`sv-${name}`, live(`sv-${name}`, rootRate(name)) ? 2 : 0);
     });
     // Each type on the bar runs on the bronze tables that feed ITS materialized views,
     // read from the graph so a new MV joins the right lane on its own.
@@ -2013,7 +2055,8 @@
     derives().forEach(([from, , cls]) => {
       byTone[cls] = (byTone[cls] || 0) + ((s.bronze_rate || {})[from] || 0);
     });
-    LANES.forEach(([name, cls]) => show(`dt-${name}`, (byTone[cls] || 0) > 0 ? 2 : 0));
+    LANES.forEach(([name, cls]) =>
+      show(`dt-${name}`, live(`dt-${name}`, byTone[cls] || 0) ? 2 : 0));
     // A read edge runs on the growth of the table being READ — a view over a silent table
     // has nothing new to answer with. A silver table grows at the rate of whatever MV
     // writes it, which resolves back to a bronze table through the same walk.
@@ -2021,7 +2064,7 @@
       const feeder = Object.keys(SG).find((k) => SG[k].target === tbl);
       return feeder ? rootRate(feeder) : 0;
     };
-    readEdges.forEach(([id, src]) => show(id, tableRate(src) > 0 ? 2 : 0));
+    readEdges.forEach(([id, src]) => show(id, live(id, tableRate(src)) ? 2 : 0));
     // Each tap runs only while its own outcome is happening. A pipeline losing nothing
     // should have three still lines, not three animations implying otherwise.
     //
