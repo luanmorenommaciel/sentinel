@@ -1244,8 +1244,7 @@
     if (!(open.bronze && open.silver)) {
       [-dy, dy].forEach((o) => edges.append(el("path", { class: "derive",
         d: `M${x1} ${my + o} L${x2} ${my + o}` })));
-      edges.append(el("path", { class: "derive tip", "marker-end": "url(#arrow-tap)",
-        d: `M${x2 - 12} ${my} L${x2 - 1} ${my}` }));
+
       // Lips here too. A lip marks where a run meets a box — it is a termination, not a
       // claim about what travels — so it does not undo this bar carrying nothing.
       mouth(x1, my, dy * 2 + 4);
@@ -1255,7 +1254,12 @@
       // whose counts are both climbing says the opposite.
       edges.append(el("path", { id: "derive-track", class: "track",
         d: `M${x1} ${my} L${x2} ${my}` }));
-      spawn(fx, "derive-track", "p3", 3);
+      // `flow3`, not three `spawn`s: it already staggers the three colours by a third of a
+      // slot so they interleave instead of moving in lockstep. The bar stands for all four
+      // materialized views at once, so it carries whatever is actually moving — a single
+      // hardcoded class painted every dot amber, right by accident for metrics and wrong for
+      // the other two, which is the same defect the collector's outcome rows had.
+      flow3(fx, "derive-track", "dt", 2.6, 3, 2);
       nodesLater.push(el("text", { class: "sub", x: (x1 + x2) / 2, y: my - 12,
         style: "text-anchor:middle" }, "derived"),
         el("text", { class: "sub", x: (x1 + x2) / 2, y: my + 20,
@@ -1970,8 +1974,13 @@
     Object.keys(SG).forEach((name) => {
       if (SG[name].kind === "mv") show(`sv-${name}`, rootRate(name) > 0 ? 2 : 0);
     });
-    // The collapsed bar runs on the estate: it stands for all four derivations at once.
-    show("derive-track", sum2(s.bronze_rate) > 0 ? 3 : 0);
+    // Each type on the bar runs on the bronze tables that feed ITS materialized views,
+    // read from the graph so a new MV joins the right lane on its own.
+    const byTone = {};
+    derives().forEach(([from, , cls]) => {
+      byTone[cls] = (byTone[cls] || 0) + ((s.bronze_rate || {})[from] || 0);
+    });
+    LANES.forEach(([name, cls]) => show(`dt-${name}`, (byTone[cls] || 0) > 0 ? 2 : 0));
     // A read edge runs on the growth of the table being READ — a view over a silent table
     // has nothing new to answer with. A silver table grows at the rate of whatever MV
     // writes it, which resolves back to a bronze table through the same walk.

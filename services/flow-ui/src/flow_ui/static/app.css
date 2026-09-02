@@ -298,7 +298,6 @@ main[role="tabpanel"]:not([hidden]){flex:1;display:flex;flex-direction:column;mi
    as the presentation-attribute-vs-stylesheet one the pipes hit: equal specificity is decided
    by position, and position is easy to change by accident. */
 .sub-nd.sel{stroke:var(--sec);stroke-width:1.6}
-.derive.tip{opacity:1}
 
 /* A mouth is a LIP, and a lip is pipe-shaped: a short section perpendicular to the run,
    wider than the casing it caps. It was a circle, which read as a bead threaded onto the
