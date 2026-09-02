@@ -253,12 +253,37 @@
   }
 
   /* ── particle pools ────────────────────────────────────────── */
+  /** A deterministic scatter, keyed by the pool and the dot index.
+   *
+   *  Telemetry does not arrive on a metronome and the board should not draw one. Evenly
+   *  spaced departures read as 1-2-3, 1-2-3 — a rhythm the pipeline does not have — and
+   *  identical durations keep it forever, because every dot returns to its slot each cycle.
+   *
+   *  Seeded rather than `Math.random`, so a pool laid out twice lands the same way: a
+   *  structural repaint must not reshuffle a lane the reader is already watching, which is
+   *  the same reason `order` uses farthest-point insertion instead of a modular stride.
+   */
+  const jitter = (key, i) => {
+    let h = 2166136261;
+    const str = `${key}#${i}`;
+    for (let k = 0; k < str.length; k++) { h ^= str.charCodeAt(k); h = Math.imul(h, 16777619); }
+    return ((h >>> 0) % 10000) / 10000;                       // [0, 1)
+  };
+
+  //: How far a departure may slide inside its own slot, and how much two dots' speeds may
+  //: differ. The spread is what breaks the pattern; the drift is what stops it re-forming,
+  //: because dots at slightly different speeds never return to the same relative positions.
+  const SPREAD = 0.55, DRIFT = 0.14;
+
   const flow = (parent, pathId, key, cls, dur = 2.4, r = 3.2, n = MAX_DOTS) => {
     const pool = [];
     for (let i = 0; i < n; i++) {
+      const slot = dur / n;
+      const off = (jitter(key, i) - 0.5) * SPREAD * slot;
+      const own = dur * (1 + (jitter(key, i + 500) - 0.5) * DRIFT);
       const c = el("circle", { class: cls, r, opacity: 0 });
-      const a = el("animateMotion", { dur: `${dur}s`, repeatCount: "indefinite",
-        begin: `${((dur / n) * i).toFixed(2)}s` });
+      const a = el("animateMotion", { dur: `${own.toFixed(2)}s`, repeatCount: "indefinite",
+        begin: `${Math.max(0, slot * i + off).toFixed(2)}s` });
       a.append(el("mpath", { href: `#${pathId}` }));
       c.append(a); parent.append(c); pool.push(c);
     }
@@ -313,10 +338,15 @@
   const flow3 = (parent, pathId, keyBase, dur = 2.4, r = 3.2, n = 2) =>
     LANES.forEach(([name, cls], k) => {
       flow(parent, pathId, `${keyBase}-${name}`, cls, dur, r, n);
-      // stagger each colour by a third of a slot so they do not overlap exactly
+      // A third of a slot per colour was the other half of the metronome: three colours
+      // marching a fixed distance apart reads as 1-2-3 even once each colour is scattered.
+      // The colour's share of the slot is now scattered too, around that same third.
       (pools[`${keyBase}-${name}`] || []).forEach((c, i) => {
         const a = c.querySelector("animateMotion");
-        if (a) a.setAttribute("begin", `${((dur / n) * i + (dur / n / 3) * k).toFixed(2)}s`);
+        if (!a) return;
+        const slot = dur / n;
+        const lane = slot * (k / LANES.length + (jitter(`${keyBase}${name}`, i) - 0.5) * 0.5);
+        a.setAttribute("begin", `${Math.max(0, slot * i + lane).toFixed(2)}s`);
       });
     });
   /** A batch, drawn as what it contains. The buffer flushes ONE mixed batch — the
@@ -927,8 +957,11 @@
     const pool = [];
     for (let k = 0; k < n; k++) {
       const c = el("circle", { class: cls, r, opacity: 0 });
-      const a = el("animateMotion", { dur: `${(dur * 0.55 * slow).toFixed(2)}s`,
-        repeatCount: "indefinite", begin: `${(k * dur / n + dur).toFixed(2)}s` });
+      const own = dur * 0.55 * slow * (1 + (jitter(id, k + 500) - 0.5) * DRIFT);
+      const off = (jitter(id, k) - 0.5) * SPREAD * (dur / n);
+      const a = el("animateMotion", { dur: `${own.toFixed(2)}s`,
+        repeatCount: "indefinite",
+        begin: `${Math.max(0, k * dur / n + dur + off).toFixed(2)}s` });
       a.append(el("mpath", { href: `#${id}` }));
       c.append(a); fx.append(c); pool.push(c);
     }

@@ -392,6 +392,32 @@ difference in claim survives as a difference in weight. Each read edge is gated 
 of the table being *read*, resolved back to its bronze root: a view over a silent table has
 nothing new to answer with.
 
+**One pool per signal type on the bar**, through the existing `flow3`, each gated on the bronze
+tables feeding *its* materialized views. The first version passed a single hardcoded class and
+every dot came out amber — right by accident for metrics, wrong for logs and traces, and the
+same defect the collector's outcome rows had before `reject_matrix` fixed them. Twice in one
+service, reported both times by the person looking at it.
+
+**The arrowhead came off the bar.** Direction is carried by dots that move, which is the
+stronger of the two ways of saying it; a marker on top of them was the weaker one repeated.
+
+### The lanes stopped running on a metronome
+
+`flow` spaced departures at exactly `dur / n` and `flow3` added exactly a third of a slot per
+colour, so every lane read 1-2-3, 1-2-3 — a rhythm this pipeline does not have. Identical
+durations kept it forever, because every dot returns to its own slot each cycle.
+
+Departures are scattered inside their slot now, and each dot runs at its own slightly different
+speed: the spread breaks the pattern, the drift stops it re-forming, because dots at different
+speeds never return to the same relative positions. Measured on the derivation bar — gaps of
+`0.26 / 0.48 / 0.06 / 0.91 / 0.48` against a constant `0.43` before, and six distinct durations
+where there was one.
+
+The scatter is **seeded on the pool key and the dot index, never `Math.random`**: a structural
+repaint must not reshuffle a lane the reader is already watching. Verified — the same six
+`begin` values survive an open-and-close. Same constraint that made `order` use farthest-point
+insertion rather than a modular stride.
+
 **Every run is capped at both ends now.** The `collector → bronze` trunk had lips at
 departure and arrival from the start; every run added after it got one only where it landed,
 so a pipe grew out of a flat box edge at one end and met a lip at the other — on the bronze
