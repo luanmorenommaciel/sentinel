@@ -30,6 +30,7 @@
   const QUANTUM = 100;            // signals per dot at the overview
   const MAX_DOTS = 14;            // per lane; beyond this the eye reads a line, not a count
   const GAP = 110;                // between columns
+  const SHEET_W = 320;            // the bronze datasheet, which layout() must make room for
 
   //: Collapsed and expanded footprints. Layout is computed from these, so a box growing
   //: pushes its neighbours rather than overlapping them.
@@ -48,6 +49,9 @@
   let service = null;
   const open = { origin: false, collector: false, bronze: false, silver: false };
   let painted = "", pools = {};
+  //: Where an open box's rows meet its edge, so the BRONZE ⇒ SILVER strands can be drawn
+  //: after both bodies have run. Reset on every render; empty whenever a box is closed.
+  let ports = { bronze: {}, silver: {} };
   const view = { k: 1, x: 0, y: 0 };   // viewport transform
   let root = null;                      // the <g> everything pans inside
   let vias = null;                      // the layer mouths are drawn into
@@ -212,11 +216,23 @@
     // about 200 of it — on a tall window the graph sat small in the middle of empty space.
     const bs = Object.values(boxes);
     const y0 = Math.min(...bs.map((b) => b.y)), y1 = Math.max(...bs.map((b) => b.y + b.h));
-    // The datasheet is drawn 40px past BRONZE and is 320 wide. It is not a box, so it was
-    // absent from these bounds and `fit()` scaled to a width that did not include it — the
-    // sheet ran off the right edge of the canvas whenever bronze was open.
-    const x1 = (x - GAP) + (open.bronze ? 40 + 320 : 0);
-    return { boxes, x0: 40, y0, width: x1 - 40, height: y1 - y0 };
+    // The datasheet goes BELOW bronze, directly under the table it describes.
+    //
+    // To the right it landed exactly where SILVER now sits and covered it — a detail panel
+    // over the nodes it is meant to explain, the third time that defect has reached the
+    // reader. Past SILVER it cleared the overlap and cost more: at 320 wide it took the
+    // canvas from 1080 to 1682 units, and `fit()` scales to the widest thing, so every box
+    // on the board shrank to 58% to make room for a panel. Below bronze it is 320 against
+    // bronze's own 318, so it adds no width at all — only height, on an arrangement that is
+    // far wider than it is tall and had the room to spare.
+    const sheet = open.bronze
+      ? { x: boxes.bronze.x, y: boxes.bronze.y + boxes.bronze.h + 30, w: SHEET_W, h: 236 }
+      : null;
+    // Not a box, so it was absent from these bounds and `fit()` scaled to an extent that
+    // excluded it — the sheet ran off the canvas whenever bronze was open.
+    const x1 = Math.max(x - GAP, sheet ? sheet.x + sheet.w : 0);
+    return { boxes, sheet, x0: 40, y0,
+             width: x1 - 40, height: Math.max(y1, sheet ? sheet.y + sheet.h : 0) - y0 };
   }
 
   /* ── particle pools ────────────────────────────────────────── */
@@ -691,6 +707,20 @@
     });
   }
 
+  /** Which bronze table each silver model is materialized FROM. Read off the four
+   *  `CREATE MATERIALIZED VIEW ... TO silver.x ... FROM bronze.y` statements in
+   *  `infra/clickhouse/init.d/02-silver-layer.sql`, not inferred from the names — and it is
+   *  not 1:1: gauge and sum both land in `metric_observations`, which is the one thing about
+   *  this layer a reader cannot get from anywhere else on the board.
+   */
+  const FEEDS = { log_events: "otel_logs",
+                  operation_executions: "otel_traces",
+                  metric_observations: "otel_metrics gauge + sum" };
+  const DERIVES = [["otel_logs", "log_events", "p1"],
+                   ["otel_traces", "operation_executions", "p2"],
+                   ["otel_metrics_gauge", "metric_observations", "p3"],
+                   ["otel_metrics_sum", "metric_observations", "p3"]];
+
   /** SILVER — what Bronze becomes, not where Bronze goes.
    *
    *  The link from bronze is NOT a pipe, and that is the point. Everything else on this
@@ -719,13 +749,28 @@
           total ? `${sv.mvs} materialized views feeding` : "empty — run a stream"));
       return;
     }
-    const names = Object.keys(models), TW = 218, TH = 34;
+    // Ordered by the bronze table each model is derived FROM, not by whatever order
+    // `system.tables` returned. With the rows in source order the four strands run
+    // essentially straight across; in the catalogue's order they crossed in the 52px gap,
+    // and a crossing is a claim about routing that this mapping does not make.
+    const rank = (n) => { const i = DERIVES.findIndex(([, to]) => to === n);
+                          return i < 0 ? DERIVES.length : i; };
+    const names = Object.keys(models).sort((a, z) => rank(a) - rank(z) || a.localeCompare(z));
+    const TW = 218, TH = 34;
     names.forEach((n, i) => {
       const y = b.y + 46 + i * (TH + 6), x = b.x + 26;
-      g.append(el("rect", { class: "nd sub-nd", x, y, width: TW, height: TH, rx: 3 }),
+      // A `.hit` group, like BRONZE's tables: the rows are the thing the pointer is for, so
+      // they have to answer it. Plain rects did not, and the box read as inert next to a
+      // bronze box whose every row lit up.
+      const node = el("g", { class: "hit", tabindex: "0", role: "button",
+        "aria-label": `${n}, ${fmt(models[n])} rows, derived from ${FEEDS[n] || "bronze"}` });
+      node.append(el("rect", { class: "nd sub-nd", x, y, width: TW, height: TH, rx: 3 }),
         el("text", { class: "txt", x: x + 10, y: y + 15 }, clip(n, 24)),
         el("text", { class: "val", x: x + TW - 10, y: y + 15 }, fmt(models[n])),
-        el("text", { class: "sub", x: x + 10, y: y + 28 }, "one row per bronze record"));
+        el("text", { class: "sub", x: x + 10, y: y + 28 },
+          FEEDS[n] ? `from ${FEEDS[n]}` : "one row per bronze record"));
+      g.append(node);
+      ports.silver[n] = { x, y: y + TH / 2 };
     });
     const vy = b.y + 46 + names.length * (TH + 6) + 10;
     g.append(el("text", { class: "lbl", x: b.x + 26, y: vy }, "READ VIEWS"));
@@ -734,6 +779,50 @@
         // The one flow-ui actually consumes today, so the panel does not imply it uses six.
         style: v === "service_health_1m" ? "fill:var(--sec)" : null },
         (v === "service_health_1m" ? "▸ " : "· ") + clip(v, 17))));
+    // Marking one item in a second colour is a claim, and an unexplained claim is a puzzle.
+    // The legend rebuilds per level and this mark only exists here, so it is said here.
+    g.append(el("text", { class: "sub", x: b.x + 26,
+      y: vy + 15 + Math.ceil((sv.views || []).length / 2) * 12 + 6,
+      style: "fill:var(--sec)" }, "\u25b8 read by this board"));
+  }
+
+  /** BRONZE ⇒ SILVER, per table, once both boxes are open.
+   *
+   *  Closed, this is one double bar: the honest summary of a derivation that moves nothing
+   *  across a network. Open, the reader is asking a lineage question — *which table becomes
+   *  which* — and that question has an answer only a drawing gives cheaply, because the
+   *  mapping is not 1:1. `otel_metrics_gauge` and `otel_metrics_sum` both land in
+   *  `metric_observations`; nothing else on this board says so.
+   *
+   *  The strands carry particles and the strands are short, which is the point: the dots
+   *  depart on the SAME batch arrival that fills the bronze row, because ADR-0010's
+   *  materialized views fire inside ClickHouse on that insert. They are not a second hop
+   *  after it. The two vertical channels for the metrics pair are deliberately offset so the
+   *  merge is visible as a merge rather than as one line drawn twice.
+   */
+  function derivations(edges, fx, B) {
+    if (!(open.bronze && open.silver)) return;
+    const { dur, n: inFlight } = pools.__batch || { dur: 3.2, n: 3 };
+    let seen = 0;
+    DERIVES.forEach(([from, to, cls], i) => {
+      const a = ports.bronze[from], z = ports.silver[to];
+      if (!a || !z) return;
+      const id = `dv${i}`;
+      // Same target, two sources: separate the channels so both runs are legible.
+      const stub = to === "metric_observations" ? (from.endsWith("gauge") ? 18 : 32) : 24;
+      pipe(edges, id, fan(a.x, a.y, z.x, z.y, stub), "", {}, 7);
+      mouth(z.x, z.y, 7);
+      const pool = [];
+      for (let k = 0; k < inFlight; k++) {
+        const c = el("circle", { class: cls, r: 2.6, opacity: 0 });
+        const an = el("animateMotion", { dur: `${(dur * 0.55).toFixed(2)}s`,
+          repeatCount: "indefinite", begin: `${(k * dur / inFlight + dur).toFixed(2)}s` });
+        an.append(el("mpath", { href: `#${id}` }));
+        c.append(an); fx.append(c); pool.push(c);
+      }
+      pools[id] = pool;
+      seen++;
+    });
   }
 
   function bronzeBody(g, b, edges, fx) {
@@ -768,6 +857,7 @@
         el("text", { class: "sub", x: x + 10, y: y + 32 },
           row ? `${service.slice(0, 22)} only` : `${tables[n].section} · +${fmt((r.bronze_rate || {})[n])}/s`));
       g.append(node);
+      ports.bronze[n] = { x: x + TW, y: y + TH / 2 };
       // One lane in, fanning to each table — and each strand carries the colour of what
       // actually lands there. Routing is by data-point TYPE, so a log only ever reaches
       // otel_logs; painting every strand the same colour said the opposite.
@@ -792,10 +882,10 @@
   }
 
   /* ── the datasheet, only when bronze is open ───────────────── */
-  function datasheet(parent, b) {
+  function datasheet(parent, sheet) {
     const d = (graph?.tables || {})[table];
-    if (!d) return;
-    const x = b.x + b.w + 40, y = b.y, w = 320, h = b.h;
+    if (!d || !sheet) return;
+    const { x, y, w, h } = sheet;
     parent.append(el("rect", { class: "nd sheet", x, y, width: w, height: h, rx: 4 }),
       el("text", { class: "lbl", x: x + 16, y: y + 24, style: "fill:var(--sec)" },
         table.toUpperCase()));
@@ -817,6 +907,7 @@
   function render() {
     const stage = $("stage");
     pools = {};
+    ports = { bronze: {}, silver: {} };
     const L = layout(), B = L.boxes;
     const svg = el("svg", { viewBox: `0 0 ${VW} ${VH}`, preserveAspectRatio: "xMidYMid meet" });
     const defs = el("defs");
@@ -866,14 +957,16 @@
     // mark — the two rules a reader has to keep apart are "moved" and "derived from".
     const sb = B.bronze, sv = B.silver, dy = 5;
     const x1 = sb.x + sb.w, x2 = sv.x, my = sb.y + sb.h / 2;
-    [-dy, dy].forEach((o) => edges.append(el("path", { class: "derive",
-      d: `M${x1} ${my + o} L${x2} ${my + o}` })));
-    edges.append(el("path", { class: "derive tip", "marker-end": "url(#arrow-tap)",
-      d: `M${x2 - 12} ${my} L${x2 - 1} ${my}` }));
-    nodesLater.push(el("text", { class: "sub", x: (x1 + x2) / 2, y: my - 12,
-      style: "text-anchor:middle" }, "derived"),
-      el("text", { class: "sub", x: (x1 + x2) / 2, y: my + 20,
-        style: "text-anchor:middle" }, "on insert"));
+    if (!(open.bronze && open.silver)) {
+      [-dy, dy].forEach((o) => edges.append(el("path", { class: "derive",
+        d: `M${x1} ${my + o} L${x2} ${my + o}` })));
+      edges.append(el("path", { class: "derive tip", "marker-end": "url(#arrow-tap)",
+        d: `M${x2 - 12} ${my} L${x2 - 1} ${my}` }));
+      nodesLater.push(el("text", { class: "sub", x: (x1 + x2) / 2, y: my - 12,
+        style: "text-anchor:middle" }, "derived"),
+        el("text", { class: "sub", x: (x1 + x2) / 2, y: my + 20,
+          style: "text-anchor:middle" }, "on insert"));
+    }
     // Three batches in flight, evenly spaced. Each one's ARRIVAL time is what the burst
     // and the per-table fan below are keyed to, so the unpacking is not decorative timing
     // — it happens when the batch actually gets there.
@@ -924,7 +1017,8 @@
       ({ origin: originBody, collector: collectorBody, bronze: bronzeBody,
          silver: silverBody }[id])(g, b, edges, fx);
     }
-    if (open.bronze) datasheet(nodes, B.bronze);
+    derivations(edges, fx, B);
+    if (open.bronze) datasheet(nodes, L.sheet);
     nodesLater.forEach((n) => nodes.append(n));
     // The burst only means something when a batch is actually arriving.
     show("burst", 0);
@@ -1537,6 +1631,11 @@
     const tnames = Object.keys(graph?.tables || {});
     for (let i = 0; i < 6; i++)
       show(`be${i}`, ((s.bronze_rate || {})[tnames[i]] || 0) > 0 ? 3 : 0);
+    // A derivation strand runs on the growth of the bronze table it reads, for the same
+    // reason: the MV fires on that table's insert and on nothing else. A silent source
+    // means a still strand, not a strand animating over nothing.
+    DERIVES.forEach(([from], i) =>
+      show(`dv${i}`, ((s.bronze_rate || {})[from] || 0) > 0 ? 2 : 0));
     // Each tap runs only while its own outcome is happening. A pipeline losing nothing
     // should have three still lines, not three animations implying otherwise.
     //

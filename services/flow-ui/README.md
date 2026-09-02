@@ -43,6 +43,7 @@ is something the page does on its own — nothing tells it.
 | **Flow** → open `COLLECTOR-RUST` | `receive → validate → buffer`, and the three ways a signal does not simply arrive |
 | **Flow** → open `BRONZE` | the four tables, each strand carrying the type that lands in it |
 | **Flow** → open `SILVER` | the three models and the six read views ADR-0010 derives from bronze |
+| **Flow** → open `BRONZE` **and** `SILVER` | which table becomes which model — 4 → 3, because gauge and sum share one |
 | **Health** | the verdict and the sentence behind it, over a 120s window |
 | **Contract** | the receive boundary: what would be dropped under `strict`, and who is violating |
 | **Watchers** | rows per minute per producer against a band — and the band drawn *is* the alerting rule |
@@ -133,6 +134,7 @@ streaming or backfilling — the buffer's flush cadence is the tell, and the two
 | **Collector** | where a signal comes from and where it goes, with the three outcomes | `/metrics` |
 | **Bronze** | the tables, and the read contract as each one's datasheet | contract v1.0.0.1 |
 | **Silver** | the models, their row counts, and which read views exist | `system.tables` |
+| **Bronze + Silver** | the per-table derivation, drawn from the MV definitions | silver DDL |
 
 `Esc` returns to the overview. The legend at the bottom is rebuilt on every level change,
 because **a particle means something different at each one** — see [DESIGN.md](DESIGN.md).

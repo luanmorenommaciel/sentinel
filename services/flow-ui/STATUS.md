@@ -276,6 +276,49 @@ not imply flow-ui reads six things it does not read. Six tests pin the parsing, 
 present-but-empty vs absent split and an unreachable ClickHouse reading as absent rather than
 taking the board down.
 
+### Open, the derivation becomes per-table — because the mapping is not 1:1
+
+Closed, one double bar is the honest summary. Open, the reader is asking a lineage question —
+*which bronze table becomes which silver model* — and that question has an answer worth
+drawing, because it is 4 → 3:
+
+```
+otel_logs          → log_events
+otel_traces        → operation_executions
+otel_metrics_gauge ─┐
+otel_metrics_sum   ─┴→ metric_observations
+```
+
+Nothing else on the board says that gauge and sum both land in one model. The four strands
+carry particles in the type colours, and each strand runs on the growth of *its own* bronze
+table — a silent source is a still strand, the same rule the bronze fan already follows.
+The dots depart on the same batch arrival that fills the bronze row, because the MVs fire on
+that insert; they are not a second hop after it. The mapping is read off the four
+`CREATE MATERIALIZED VIEW … TO silver.x … FROM bronze.y` statements in the DDL, not inferred
+from the names, and each silver row also states its source in text so a reader who never
+opens both boxes still gets the answer.
+
+**The rows are ordered by their source, not by `system.tables`.** In the catalogue's order
+the four strands crossed inside a 52px gap, and a crossing is a claim about routing this
+mapping does not make. In source order they run essentially straight across, and the two
+metrics strands visibly converge — the merge reads as a merge.
+
+**Three defects this surfaced, all found by looking:**
+
+- **The datasheet covered SILVER.** Drawn 40px right of BRONZE, it landed exactly where the
+  new box sits — a detail panel over the nodes it explains, the third time that class of
+  defect has reached the reader. Moving it past SILVER cleared the overlap and cost more:
+  at 320 wide it took the canvas from 1080 to 1682 units, and `fit()` scales to the widest
+  thing, so every box shrank to 58% to make room for a panel. It now sits **below** BRONZE,
+  directly under the table it describes, where at 320 against bronze's own 318 it adds no
+  width at all.
+- **SILVER's rows did not answer the pointer.** They were plain rects next to a BRONZE box
+  whose every row lit up, so the box read as inert. They are `.hit` groups now, with the
+  source named in the `aria-label`.
+- **`open.silver` was missing from `repaint()`'s key.** The click flipped the state, the key
+  did not change, repaint returned early and the box never opened — a dead click with no
+  error. That key is a dependency list maintained by hand; every expandable box belongs in it.
+
 ## Next planned step
 
 Tier 1 is now closed to the limit of the data. What remains:
