@@ -357,6 +357,23 @@ applied — which it was. The class being right is not the question a reader ask
 verified at the pixel level instead: the swatch's computed stroke goes from `rgb(46,110,136)`
 to `rgb(255,197,61)` and its opacity from 0.5 to 1, while the other two do not move.
 
+**Two bugs a running stream found that a still page could not.**
+
+*The MV → table runs had particles that were never revealed.* `spawn` fills `pools`, and
+nothing in the tick showed the `sv-*` ones, so the one real movement inside SILVER existed
+with every dot at opacity 0 — bronze fed the MVs and then the board went still. The gate is
+the growth of the bronze table the chain started from, resolved **through the graph**, so a
+second-stage MV reading a silver table finds its root instead of guessing.
+
+*Clicking a row restarted every dot on the board.* Selection went through `repaint`, which
+rebuilds the whole stage; rebuilding recreates every `animateMotion`, and an `animateMotion`
+keeps its progress on the node itself, so each dot jumped back to the mouth of its pipe. That
+invariant is [the reason this page has no framework](ARCHITECTURE.md) — and it was being broken
+by its own click handler. A selection changes no geometry (the sheets sit below their box and
+are narrower than it, so nothing moves), so it now redraws only the sheet layer, the `.sel`
+classes and the key. Verified by **object identity**, not by counting: the same 89 circle nodes
+survive both a model click and a table click.
+
 **Every run is capped at both ends now.** The `collector → bronze` trunk had lips at
 departure and arrival from the start; every run added after it got one only where it landed,
 so a pipe grew out of a flat box edge at one end and met a lip at the other — on the bronze

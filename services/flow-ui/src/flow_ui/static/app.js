@@ -57,6 +57,7 @@
   const view = { k: 1, x: 0, y: 0 };   // viewport transform
   let root = null;                      // the <g> everything pans inside
   let vias = null;                      // the layer mouths are drawn into
+  let sheets = null;                    // the datasheets, redrawn without a full render
 
   /* ── helpers ───────────────────────────────────────────────── */
   const fmt = (n) => {
@@ -1296,8 +1297,9 @@
          silver: silverBody }[id])(g, b, edges, fx);
     }
     derivations(edges, fx, B);
-    if (L.sheet) datasheet(nodes, L.sheet);
-    if (L.mSheet) modelsheet(nodes, L.mSheet);
+    sheets = el("g", { class: "sheets" });
+    nodes.append(sheets);
+    drawSheets();
     nodesLater.forEach((n) => nodes.append(n));
     // The burst only means something when a batch is actually arriving.
     show("burst", 0);
@@ -1317,14 +1319,14 @@
       n.addEventListener("click", (e) => {
         e.stopPropagation();
         table = table === n.dataset.table ? null : n.dataset.table;
-        repaint();
+        reselect();
       });
     });
     stage.querySelectorAll("[data-model]").forEach((n) => {
       n.addEventListener("click", (e) => {
         e.stopPropagation();
         model = model === n.dataset.model ? null : n.dataset.model;
-        repaint();
+        reselect();
       });
     });
     stage.querySelectorAll("[data-service]").forEach((n) => {
@@ -1929,6 +1931,27 @@
     // means a still strand, not a strand animating over nothing.
     derives().forEach(([from], i) =>
       show(`dv${i}`, ((s.bronze_rate || {})[from] || 0) > 0 ? 2 : 0));
+    // An MV writing its target is the one real movement inside SILVER, and its pool was
+    // being created and never shown — `spawn` fills `pools`, but nothing here revealed them,
+    // so the run existed with every dot at opacity 0. The gate is the growth of the bronze
+    // table the chain started from, resolved through the graph so a second-stage MV reading
+    // a silver table still finds its root rather than guessing.
+    const SG = graph?.silver_graph || {};
+    const rootRate = (name, seen = new Set()) => {
+      if (seen.has(name)) return 0;
+      seen.add(name);
+      for (const src of (SG[name]?.sources || [])) {
+        const [db, tbl] = src.split(".");
+        if (db === "bronze") return (s.bronze_rate || {})[tbl] || 0;
+        // A silver source is written by whichever MV targets it.
+        const feeder = Object.keys(SG).find((k) => SG[k].target === tbl);
+        if (feeder) return rootRate(feeder, seen);
+      }
+      return 0;
+    };
+    Object.keys(SG).forEach((name) => {
+      if (SG[name].kind === "mv") show(`sv-${name}`, rootRate(name) > 0 ? 2 : 0);
+    });
     // Each tap runs only while its own outcome is happening. A pipeline losing nothing
     // should have three still lines, not three animations implying otherwise.
     //
@@ -1960,13 +1983,46 @@
     show("h-drop", (s.drop_rate || 0) > 0 ? 2 : 0);
   }
 
+  /** Redraw only what a selection changes: the two sheets and which rows read as picked.
+   *
+   *  Selecting a row changes no geometry — the sheets sit below their box and are narrower
+   *  than it, so no box moves — but it used to go through `repaint`, which rebuilds the
+   *  whole stage. Rebuilding recreates every `animateMotion`, and an `animateMotion` keeps
+   *  its progress on the node itself, so every dot on the board jumped back to the mouth of
+   *  its pipe on every click. That invariant is the reason this page has no framework; it
+   *  should not be broken by its own click handler.
+   */
+  function drawSheets() {
+    if (!sheets) return;
+    sheets.replaceChildren();
+    const L = layout();
+    if (L.sheet) datasheet(sheets, L.sheet);
+    if (L.mSheet) modelsheet(sheets, L.mSheet);
+  }
+
+  function reselect() {
+    if (!sheets) return repaint();
+    drawSheets();
+    const stage = $("stage");
+    stage.querySelectorAll("[data-table]").forEach((n) =>
+      n.querySelector("rect")?.classList.toggle("sel", n.dataset.table === table));
+    stage.querySelectorAll("[data-model]").forEach((n) =>
+      n.querySelector("rect")?.classList.toggle("sel", n.dataset.model === model));
+    // The key follows the selection, so it has to be updated with it.
+    const kind = (graph?.silver_graph || {})[model]?.kind;
+    stage.querySelectorAll(".key").forEach((k) =>
+      k.classList.toggle("on",
+        !!kind && k.querySelector(".sw")?.classList.contains("k-" + kind)));
+    fit();
+  }
+
   /* ── structural repaint ────────────────────────────────────── */
   function repaint() {
     // Every box that can expand belongs in this key. Leaving one out does not fail loudly:
     // the click flips `open[id]`, the key does not change, repaint returns early and the box
     // simply never opens. `silver` was missing and the bug looked like a dead click.
     const key = [snap?.mode || "", graph ? 1 : 0, open.origin, open.collector, open.bronze,
-                 open.silver, table, model, service].join("|");
+                 open.silver, service].join("|");
     if (key === painted) return false;
     const first = painted === "";
     painted = key;
