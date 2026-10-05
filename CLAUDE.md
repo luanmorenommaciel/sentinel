@@ -95,7 +95,7 @@ Issues live in GitHub Issues on `luanmorenommaciel/sentinel`, driven by the `gh`
 
 ### Triage labels
 
-The five canonical triage roles, label strings unchanged (`needs-triage` · `needs-info` · `ready-for-agent` · `ready-for-human` · `wontfix`). See [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
+The five canonical triage roles **projected onto this repo's real `type:*`/`phase:*`/`priority:*` scheme** — four of the five canonical label strings do not exist here (verified 2026-10-05). See [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
 
 ### Domain docs
 

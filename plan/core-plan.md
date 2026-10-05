@@ -383,6 +383,8 @@ the strongest artifact in the baseline's posture. The spike supplies evidence; P
 ### T05 — `migrate.sh` + the `_meta` ledger (`0003`)
 **Leg** `leg/infra/ch-migrate-v1` · **Blocked by** — *(DEC-A3 sets its form, not its existence)* · **REQ** A-04, A-13, A-14, D-11, NFR-11 · **Seam** S1
 **Files** +`infra/clickhouse/migrate.sh` · +`infra/clickhouse/migrations/0003_meta.sql`
+*(2026-10-05: `migrate.sh` MUST pass `--multiquery` to `clickhouse-client` — the 24.3 client
+rejects multi-statement `-q` with `Code: 62` where 25.4 accepts it. Measured, #46.)*
 (`_meta.schema_migrations` + `_meta.backfill_runs`, verbatim from `SPEC §6.2`)
 **Does** Makes "what schema is deployed?" a `SELECT`, and gives the deployed path a way to apply
 DDL where `docker-entrypoint-initdb.d` does not exist. Bash + `clickhouse-client` only (NFR-11).

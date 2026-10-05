@@ -1252,6 +1252,8 @@ of each wave — which is the conflict §12.3 escalates.
 
 ### 11.1 Probe results — `[V-1]`, `[V-2]`, `[V-3]` RESOLVED 2026-10-05
 
+**Added 2026-10-05 (#46).** The **18 silver assertions in `infra/clickhouse/tests/02-silver-layer.test.sql` PASS on 25.4.13.22, with output byte-identical to 24.3.18.7.** Measured on throwaway containers with `init.d` mounted read-only and synthetic `bronze` rows inserted post-boot so the non-`POPULATE` MVs fired (40/30/25/20 → 40/30/45 in silver, exact). This closes the one open gap in DEC-I1's recommendation to standardise on 25.4. Separately measured: the **24.3 `clickhouse-client` rejects multi-statement `-q`** (`Code: 62`) where 25.4 accepts it, so `migrate.sh` (REQ-A-04, T05) MUST pass `--multiquery` explicitly.
+
 Measured directly, **after** the body of this spec was written, in throwaway `--rm`
 `clickhouse/clickhouse-server` containers with no volume mounts and
 `CLICKHOUSE_SKIP_USER_SETUP=1`. Run on **both** versions the repo references, with
