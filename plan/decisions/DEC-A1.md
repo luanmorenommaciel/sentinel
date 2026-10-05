@@ -1,6 +1,6 @@
 # DEC-A1 — Compute form for the deployed services
 
-**Owner** Captain / Commander · **Unblocks** T22, T40, T43 directly; 10 tickets transitively (T22–T24, T40–T45, T48)
+**Owner** Captain / Commander · **Unblocks** T40, T43 directly; 6 tickets transitively (T40–T44, T48). T22 was removed from this list on 2026-10-05
 
 Evidence tags: **[M]** measured this session · **[S]** measured per `spec/core-spec.md` §11.1, not re-run · **[D]** asserted in a repo document, not independently verified · **[R]** reasoned.
 
@@ -34,10 +34,10 @@ Which platform runs the collector (long-lived gRPC server), flow-ui (SSE, in-mem
 
 ## 5. What it unblocks
 
-T22 (`release.yml`; see defect note below), T40 (IaC, migrate-before-ingest, readiness), T43 (edge auth). Transitively T23, T24, T41, T42, T44, T45, T48. Also shapes DEC-A4's edge-termination option.
+T40 (IaC, migrate-before-ingest, readiness), T43 (edge auth). Transitively T41, T42, T44, T48. T22 (`release.yml`) no longer waits on this decision (see below). Also shapes DEC-A4's edge-termination option.
 
 ## 6. What it cannot settle
 
 - Cost, quotas and the platform's real shutdown grace period: none are in the repo and none were invented here. A grace-period figure must come from the chosen platform's documentation, then be compared with a measured worst-case flush time (a measurement nobody has taken).
 - The SIGTERM defect needs its own ticket regardless of the answer.
-- Plan inconsistency: T22 is blocked by DEC-A1, but `design-spec.md` A.2 calls registry/provenance "independent of both decisions... can land in wave 1". Only the Artifact Registry naming is GCP-specific, so T22 may not need to wait. Ruling needed from whoever owns the plan.
+- Plan inconsistency: T22 is blocked by DEC-A1, but `design-spec.md` A.2 calls registry/provenance "independent of both decisions... can land in wave 1". Only the Artifact Registry naming is GCP-specific, so T22 may not need to wait. **Resolved 2026-10-05:** the blocker was removed from T22 in `plan/core-plan.md`, with the rationale in the ticket; T23, T24 and T45's dependency on T22 are therefore no longer behind DEC-A1.

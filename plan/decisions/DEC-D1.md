@@ -8,7 +8,7 @@ Tags: **[M]** measured this session · **[S]** per spec §11.1 · **[D]** docume
 
 Should Pod 3's *new* D read models (`resource_key_presence_1m`, `volume_1m`) key or filter by typed Sentinel-key columns, or stay key-list agnostic over the `resource_attributes` Map?
 
-The question as the documents word it ("does silver materialise typed Sentinel keys", `README.md:260`, `design-spec.md` §9 ADR-D1) is **already answered in shipped code** (see Established facts), so it is restated to what is genuinely still open.
+The question as the documents word it ("does silver materialise typed Sentinel keys", `README.md:260`, `design-spec.md` §9 DEC-D1) is **already answered in shipped code** (see Established facts), so it is restated to what is genuinely still open.
 
 ## 2. Why it's open
 

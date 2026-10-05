@@ -56,14 +56,14 @@ throwaway container used for `[V-4]`, and if it does not, swap `0002` and `0004`
 
 | ID | Decision | Owner | Blocks |
 |---|---|---|---|
-| DEC-A1 | Compute form for the three services | Captain / Commander | T22, T40, T43 |
+| DEC-A1 | Compute form for the three services | Captain / Commander | T40, T43 |
 | DEC-A2 | ClickHouse hosting **and operational owner**; settles `[V-3]` `SharedMergeTree` + `REPLACE PARTITION` | Commander | T30, T40 |
 | DEC-A3 | What applies DDL in a deployed environment (bespoke runner vs off-shelf) | Pod 3, Pod 2 consulted | T05 (form only) |
 | DEC-A4 | TLS: collector-terminated vs platform edge vs sidecar | Pod 2 | T42 |
 | DEC-I1 | One ClickHouse version + deleting the generator Compose file | Pod 1 (file), Pod 3 (version) | T12 |
 | DEC-I2 | `pre-pr-discipline` same-PR doc fixes vs ADR-0009 disjoint paths | Captain / Commander | T45–T48 |
 | DEC-D1 | Does silver materialise typed Sentinel keys | Pod 3 + Pod 2 | — (must stay undecided; see T28) |
-| DEC-V3a | `call_edges_1m_rmv` on an experimental flag vs scheduled-INSERT fallback | Pod 3 | T29 |
+| DEC-V3a | *Folded into DEC-I1 (2026-10-05):* refreshable MVs are ungated on 25.4.13.22 and gated only on 24.3.18.7, so on 25.4+ the scheduled-INSERT fallback is unnecessary. A consequence of DEC-I1, not an independent decision | Pod 3 (follows DEC-I1) | T29 (via DEC-I1) |
 
 Four are W1 blockers in practice: **DEC-A1, DEC-A2, DEC-A3, DEC-I1**.
 
@@ -92,14 +92,14 @@ Four are W1 blockers in practice: **DEC-A1, DEC-A2, DEC-A3, DEC-I1**.
 | T19 | Delete the `::/0` routes and `otelgen` *(contract + integrate-and-verify)* | T15, T18 |
 | T20 | `e2e-silver.yml` — the live-ClickHouse job | T07, T08, T09, T11, T19 |
 | T21 | `docs/ci-gates.md` + required-check set | T20 |
-| T22 | `release.yml` — registry, OIDC, provenance, SBOM, signing | DEC-A1 |
+| T22 | `release.yml` — registry, OIDC, provenance, SBOM, signing | — |
 | T23 | Digest promotion staging→prod, verify-before-admit | T22 |
 | T24 | Image vulnerability scan gates the push | T22 |
 | T25 | `0005a` `silver.metric_stats_1m` + MV + the new test file | T16, T20 |
 | T26 | Real-telemetry tripwire | T25 |
 | T27 | `0005b` `silver.volume_1m` + 3 MVs | T25 |
 | T28 | `0005c` `silver.resource_key_presence_1m` + 3 MVs | T27 |
-| T29 | `0005d` `silver.call_edges_1m` + determinism / no-verdict asserts | T28, DEC-V3a, T01 |
+| T29 | `0005d` `silver.call_edges_1m` + determinism / no-verdict asserts | T28, T01 *(DEC-V3a folded into DEC-I1, already inherited via T28)* |
 | T30 | Backfill runner skeleton + live-partition refusal + README | T05, T19, DEC-A2 |
 | T31 | Backfill phase 1 — bronze → silver base, partition swap | T30 |
 | T32 | REQ-E-11 in-runner content checksum | T31 |
@@ -199,8 +199,8 @@ serialisation if only one agent is available.
 | Frontier | Startable | Note |
 |---|---|---|
 | **F0** | all 8 DEC tickets | Run as **one** sync agenda item, not eight documents — the team's demonstrated ADR throughput is ~0 ratifications/quarter (DSP R-01). |
-| **F1** | **T01 T02 T03 T04 T05 T06 T07 T08 T09 T10** — ten tickets, no blockers | Plus T22 the moment DEC-A1 lands, and T12 the moment DEC-I1 + T03 land. |
-| **F2** | T11 (T05+T07) · T12 (DEC-I1+T03) · T22 (DEC-A1) · T35 (T02) | |
+| **F1** | **T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 T22** — eleven tickets, no blockers | Plus T12 the moment DEC-I1 + T03 land. |
+| **F2** | T11 (T05+T07) · T12 (DEC-I1+T03) · T35 (T02) | |
 | **F3** | T13 (T12) · T23 T24 (T22) | |
 | **F4** | T14 (T12+T09) | |
 | **F5** | T15 (T13+T14) · T16 (T05+T01+T13) | |
@@ -211,7 +211,7 @@ serialisation if only one agent is available.
 | **F10** | T21 (T20) · T25 (T16+T20) · T30 (T05+T19+DEC-A2) | W2 and W3's runner lane open together |
 | **F11** | T26 T27 (T25) · T31 (T30) | |
 | **F12** | T28 (T27) · T32 (T31) | |
-| **F13** | T29 (T28+DEC-V3a+T01) · T38 (T35+T28) | |
+| **F13** | T29 (T28+T01) · T38 (T35+T28) | |
 | **F14** | T33 (T32+T29) · T36 (T35+T27) · T37 (T35+T29) | |
 | **F15** | T34 (T25+T33) · T39 (T36+T37+T38) | |
 | **F16** | T40 (DEC-A1+DEC-A2+T05+T22) | |
@@ -219,9 +219,9 @@ serialisation if only one agent is available.
 | Docs | T45 after T24 · T46 after T29 · T47 after T34+T39 · T48 after T44 | gated on DEC-I2 |
 
 **Parallelism actually available.** W1 runs **nine** legs (§4). If DEC-A1/A2/A3/I1 do not clear
-W0, the frontier shrinks to T01–T11 plus T35 — the prefactors, the probes, the migration runner,
+W0, the frontier shrinks to T01–T11, the release lane T22–T24 and T35 — the prefactors, the probes, the migration runner,
 the Python gates and the collector's config shape. That is still real work, and it is why those
-ten carry no decision edges. A-compute (T40), the release lane (T22–T24) and the whole compose
+carry no decision edges. A-compute (T40) and the whole compose
 unification (T12–T15) stall together.
 
 ---
@@ -280,12 +280,11 @@ paths disjoint (§5, T01).
 | Wave | Leg | Declared paths | Tickets |
 |---|---|---|---|
 | W2 | `leg/silver/watcher-models-v1` | `infra/clickhouse/migrations/0005_silver_watcher_models.sql`, `infra/clickhouse/tests/03-watcher-models.test.sql`, `infra/clickhouse/queries/03-watcher-sample.sql`, `scripts/ci/invariants.d/0{6,7}-*.sh`, `Makefile` *(owner this wave)* | T25–T29 |
-| W2 | `leg/deploy/<platform>-v1` | `infra/deploy/**` except `README.md`, `infra/deploy/config/<env>/**` | T40 (starts when DEC-A1/A2 land) |
 | W3 | `leg/silver/backfill-v1` | `infra/clickhouse/backfill/**`, `infra/clickhouse/migrations/0006_repoint_metric_rollup.sql`, `Makefile` *(owner this wave)* | T30–T34 |
 | W3 | `leg/flow-ui/silver-boards-v1` | `services/flow-ui/src/flow_ui/clickhouse.py`, `src/flow_ui/pipeline.py`, `services/flow-ui/tests/test_clickhouse.py`, `tests/test_pipeline.py`, `services/flow-ui/ARCHITECTURE.md`, `services/flow-ui/static/app.js` | T36–T39 |
 | W4 | `leg/security/transport-v1` | `services/collector-rust/Cargo.toml`, `Cargo.lock`, `deny.toml`, `Dockerfile`, `src/grpc.rs` | T42 |
 | W4 | `leg/security/secrets-v1` | `infra/deploy/secrets/**`, `infra/deploy/config/<env>/**` | T43, T44 |
-| W4 | `leg/deploy/<platform>-v1` | continues | T40, T41 |
+| W4 | `leg/deploy/<platform>-v1` | `infra/deploy/**` except `README.md`, `infra/deploy/config/<env>/**` | T40 (starts when DEC-A1/A2 land and T05, T22 are done), T41 |
 | each | `leg/docs/wave-<n>-v1` | `README.md`, `CLAUDE.md`, `.claude/**` is **excluded** | T45–T48 |
 
 W3 disjointness: `0006_*.sql` sits in the backfill leg (not the W2 watcher-models leg) because
@@ -361,6 +360,7 @@ resolve relative volume paths from the **including** file's directory or the inc
 mount; `docker compose version` then `docker compose -f outer.yml config` → the printed absolute
 `source:` path is the observable. Record it and the Compose version floor in the README, plus
 which form T12 must use (or `extends:` if resolution is from the including file).
+**Resolved 2026-10-05:** resolution is from the **included** file; T12 uses `include:` with `./init.d/...` mounts in the shared file. `extends:` rebases identically. The T12 CI assert (REQ-I-07) must inspect merged `docker compose config` output, because a same-name local service silently wins.
 
 ### T04 — arm64 + x86_64 musl/TLS spike, toolchain target, CI `platforms:`
 **Leg** `leg/ci/rust-ci-v1` · **Blocked by** — · **REQ** H-13, H-10, NFR-02 · **Seam** S4
@@ -644,7 +644,8 @@ file, and this plan runs no `gh`. Substitute: the Captain configures the rule fr
 `docs/ci-gates.md` and records the date in that file; a reviewer compares the two.
 
 ### T22 — `release.yml` — registry, OIDC, provenance, SBOM, signing
-**Leg** `leg/release/registry-provenance-v1` · **Blocked by** DEC-A1 · **REQ** A-01, A-02, A-03 · **Seam** S4
+**Leg** `leg/release/registry-provenance-v1` · **Blocked by** — · **REQ** A-01, A-02, A-03 · **Seam** S4
+**DEC-A1 blocker removed (2026-10-05):** `design-spec.md` §5.1 lists registry, provenance, OIDC and `release.yml` as A-inv, invariant to the compute form (DEC-A1 gates only the deploy side, T40/T43), and every DEC-A1 option is a Google Cloud target, so the Workload Identity Federation push path is the same for all of them.
 **Files** +`.github/workflows/release.yml` (on `push: main` and tags;
 `docker/build-push-action` with `provenance: mode=max`, `sbom: true`,
 `platforms: linux/amd64,linux/arm64`; cosign keyless via the same OIDC identity; GitHub OIDC →
@@ -762,10 +763,10 @@ future `rows_missing_any` column exists. No test substitutes for understanding t
 DDL comment and `ARCHITECTURE.md`, and it is why T38 keeps its fallback longest.
 
 ### T29 — `0005d` `silver.call_edges_1m` + determinism / no-verdict asserts
-**Leg** `leg/silver/watcher-models-v1` · **Blocked by** T28, DEC-V3a, T01 · **REQ** D-05, D-07, D-12 · **Seam** S1
+**Leg** `leg/silver/watcher-models-v1` · **Blocked by** T28, T01 *(DEC-V3a folded into DEC-I1)* · **REQ** D-05, D-07, D-12 · **Seam** S1
 **Files** ~`infra/clickhouse/migrations/0005_silver_watcher_models.sql` (+`call_edges_1m` and
-either `call_edges_1m_rmv` with `REFRESH EVERY 1 MINUTE` **or** DEC-V3a's scheduled-INSERT +
-partition-swap fallback) · ~`infra/clickhouse/tests/03-watcher-models.test.sql` ·
+`call_edges_1m_rmv` with `REFRESH EVERY 1 MINUTE`; the scheduled-INSERT +
+partition-swap fallback only if DEC-I1 selects 24.3) · ~`infra/clickhouse/tests/03-watcher-models.test.sql` ·
 +`scripts/ci/invariants.d/06-silver-mv-determinism.sh` ·
 +`scripts/ci/invariants.d/07-no-verdict-in-silver.sh`
 **Does** `src → dst` span and error counts per window. **This cannot be an incremental MV and that
@@ -776,10 +777,14 @@ parents to one row per `(TraceId, SpanId)` a 15-minute window produced **445,229
 16,154 children**, a 27.6× fan-out **[E]**. Hence the `GROUP BY trace_id, span_id` collapse and the
 join on `trace_id` **and** `parent_span_id`. Trailing 24 h, TTL 2 days — the table holds 24 h of
 history, not 30 days, said in the DDL rather than left implicit.
-**`[V-3a]`: refreshable MVs exist on both versions but ONLY under
-`allow_experimental_refreshable_materialized_view=1` — the assumption as written in `SPEC §11` is
-FALSE.** DEC-V3a chooses: accept the flag as recorded risk, or take the fallback (a scheduler per
-environment, no new concept). **Do not implement before DEC-V3a.**
+**`[V-3a]` (corrected 2026-10-05, `SPEC §11.1`): refreshable MVs are ungated on 25.4.13.22 (no
+setting needed; the flag is `Obsolete`) and gated only on 24.3.18.7.** The earlier claim of an
+experimental gate on both versions was a probe error (the setting was always set, never omitted).
+So this is a consequence of DEC-I1, not an independent decision: on 25.4+ the scheduled-INSERT
+fallback is unnecessary. **Do not implement before DEC-I1**; if it selects 24.3, the fallback (a
+scheduler per environment; it cannot reuse `backfill.sh`, issue #48) or the flag as recorded risk
+applies. This ticket MUST also assert refreshable-MV availability in CI, **without** the
+experimental setting, against the version DEC-I1 selects (issue #49).
 **Proof** `make test-silver` → exit 0 with: `throwIf((SELECT count() FROM silver.call_edges_1m
 WHERE src_service = dst_service) != 0, …)`; **no edge absent from
 `services/generator-python/config/topology/default.yaml`'s declared DAG** (the eight-phantom-edge
@@ -1117,8 +1122,10 @@ gate: a reader who has not seen this plan should be able to run the system from 
    `REPLACE PARTITION` behaves differently there, **E loses its primitive and there is no second
    design that leaves the base tables' engine alone.** DEC-A2 must know this before it chooses
    hosting; T30 declares the edge.
-2. **`[V-4]` Compose `include:`** — a Compose-version question, unprobed. T03 exists to close it
-   and blocks T12.
+2. **`[V-4]` Compose `include:`** — resolved 2026-10-05 (T03 / `infra/clickhouse/README.md`), with
+   the premise reversed: `include:` resolves relative `source:` paths from the **included** file's
+   directory, so T12 uses `include:` with the shared file in `infra/clickhouse/`. Measured on
+   Compose v5.1.4 only.
 3. **NFR-05's three re-measurements** (T36, T37, T38). The house style requires the new figure
    beside the old one in the docstring; those numbers need a running stack.
 4. **Whether `sentinel_collector` really needs only `INSERT`.** The `clickhouse` crate may probe
@@ -1130,3 +1137,14 @@ gate: a reader who has not seen this plan should be able to run the system from 
    one-line `[V]` to run alongside T03's probe.
 7. **`SPEC`'s `0004`-vs-`0006` numbering inconsistency** for the view re-point, resolved here in
    favour of `0006` (§0). If Pod 3 disagrees, only the filename changes.
+
+---
+
+## Correction note — 2026-10-05
+
+Two count claims in this plan were wrong.
+
+- **36 of 48** implementation tickets sit behind at least one decision, not 38 (computed from the §1 table by following `Blocked by` edges to a `DEC-*` node). *After* the T22 change below, the figure is **33 of 48**.
+- **DEC-I1 blocks 26 tickets transitively; DEC-A3 blocks none** (T05 has no blockers; DEC-A3 shapes only T05's form). This contradicts "Four are W1 blockers in practice: DEC-A1, DEC-A2, DEC-A3, DEC-I1" in §1. In practice DEC-I1 is the W1 blocker; DEC-A2 (12) and DEC-A1 gate W3/W4, and DEC-V3a is folded into DEC-I1.
+
+Other edits made the same day: T22's DEC-A1 blocker was removed (DEC-A1 now blocks 6 tickets, not 10); T40 is Wave 4 in both §4 and §8; DEC-V3a is a consequence of DEC-I1.

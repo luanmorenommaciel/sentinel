@@ -2,6 +2,8 @@
 
 **Owner** Pod 3 · **Unblocks** T29 directly; transitively T33, T34, T37, T39, T46, T47
 
+> **Folded into DEC-I1 (2026-10-05).** `spec/core-spec.md` §11.1 records refreshable MVs as ungated on 25.4.13.22 and gated only on 24.3.18.7. On 25.4+ the scheduled-INSERT fallback is unnecessary, so this is a consequence of DEC-I1, not an independent decision. T29 no longer lists it as a blocker; it inherits DEC-I1 through T28. The brief below is kept for its evidence. Re-asserting the result in CI is issue #49.
+
 Tags: **[M]** measured this session · **[S]** per spec §11.1, not re-run · **[D]** document assertion · **[R]** reasoned.
 
 ## 1. The question
@@ -11,7 +13,7 @@ Does `silver.call_edges_1m` use a `REFRESH EVERY 1 MINUTE` materialized view (`c
 ## 2. Why it's open
 
 - It "cannot be an incremental MV": an MV sees one insert block, and a call edge joins a child span to its parent across blocks (`spec` §6.3d; `clickhouse.py:311-331`: joining on `SpanId` alone invented eight phantom edges, 27.6x fan-out without the collapse) **[D]**.
-- Spec §11.1 `[V-3a]` records the feature as experimental-gated on both versions and therefore prefers the fallback "or accept the flag as an explicit, recorded risk". The decision exists because of that probe.
+- Spec §11.1 `[V-3a]` originally recorded (before the 2026-10-05 correction) the feature as experimental-gated on both versions and therefore preferred the fallback "or accept the flag as an explicit, recorded risk". The decision exists because of that probe.
 - **My re-probe disagrees with it for 25.4** (below), which changes what this decision is.
 
 ## 3. Options

@@ -15,6 +15,10 @@
 > requirements are appended at the end of each candidate's block (`REQ-A-13+`, `REQ-B-12+`,
 > `REQ-D-10+`, `REQ-E-11+`, `REQ-H-13+`, `REQ-I-07+`).
 >
+> **Naming.** Decision IDs here were `ADR-A*`/`ADR-I*`/`ADR-D*` in earlier drafts and in
+> `design-spec.md` §9; they are renamed `DEC-*` to match `plan/core-plan.md` and
+> `plan/decisions/`. `ADR-0004`-style numbers are real repository ADRs and are unchanged.
+>
 > *Written 2026-10-05 against HEAD `3af2ee7`. The stack was not run; `.claude/` was read via
 > `git show HEAD:.claude/...` only.*
 
@@ -103,7 +107,7 @@ five of which change a requirement.
 | 5 | DSP §8 R-03: a backfill that destroys a live silver row is **silent**, because the 18 assertions "compare totals that are both wrong in the same direction" | **Wrong — the failure is loud and permanent.** `infra/clickhouse/tests/02-silver-layer.test.sql:16-33` are **exact equalities between silver and bronze**, not silver-to-silver. A destroyed silver row leaves its bronze row untouched, so `count(silver.log_events) != count(bronze.otel_logs)` and stays unequal for the TTL lifetime of that partition | **[E]** `02-silver-layer.test.sql:16-21, 22-27, 28-33` | R-03's *severity* drops (the loss is detected) but its *irreversibility* does not: detection happens after the fact and the evidence is gone. The response is still a prohibition, not a test — §8.4 |
 | 6 | REQ-E-03 (row-identical backfill output) is phrased as a property to test | **Promoted to MANDATORY, and it is the only check with teeth.** Count equality is blind to content divergence at constant cardinality: a `Map` column copied with a different key order, a `Float64` computed by a different expression, a wrong `metric_kind` — all pass all 18 assertions | **[E]** §8.3; the determinism result below | REQ-E-03 changes level from "a backfill MUST produce rows byte-identical" (already MUST) to **MUST be verified by an order-insensitive content checksum on every backfilled partition, in the runner, not only in a test** — new REQ-E-11 |
 | 7 | "verify the six MV bodies for determinism" | **There are five materialized views in the repository, not six** — four in silver, one in bronze. The "six" are the six plain read `VIEW`s. Full result in §8.3 | **[E]** `grep -rn "MATERIALIZED VIEW" infra/` → `01-bronze-otel.sql:79`; `02-silver-layer.sql:43, 95, 143, 165` | The four silver MVs are deterministic, so correction 6 is sound. `bronze.otel_traces_trace_id_ts_mv` is **not**, and that bounds what the backfill may touch — §7.5 |
-| 8 | DSP R-04 / §4.H.2: `rust-toolchain.toml:19` adds only the x86_64 musl target, so an arm64 TLS build breaks the team's machines | **Line 17, and the gap is narrower and differently shaped.** `Dockerfile:22-35` maps `TARGETARCH` to its own musl triple and runs `rustup target add` *inside the builder*, so the **image** build already handles arm64 natively. The two real gaps are: (i) `rust-ci.yml:119-132`'s `docker-build` passes **no `platforms:`**, so arm64 is never built in CI at all; (ii) `rust-toolchain.toml:17` lacks `aarch64-unknown-linux-musl`, so the *host-side* spike (`cargo build --target aarch64-...`) fails until someone adds the target | **[E]** `rust-toolchain.toml:17`; `Dockerfile:22-35, 60`; `rust-ci.yml:119-132` | The spike is still first-wave and still decides ADR-A4, but it is a **CI matrix + toolchain** change, not a Dockerfile rewrite — REQ-H-13 |
+| 8 | DSP R-04 / §4.H.2: `rust-toolchain.toml:19` adds only the x86_64 musl target, so an arm64 TLS build breaks the team's machines | **Line 17, and the gap is narrower and differently shaped.** `Dockerfile:22-35` maps `TARGETARCH` to its own musl triple and runs `rustup target add` *inside the builder*, so the **image** build already handles arm64 natively. The two real gaps are: (i) `rust-ci.yml:119-132`'s `docker-build` passes **no `platforms:`**, so arm64 is never built in CI at all; (ii) `rust-toolchain.toml:17` lacks `aarch64-unknown-linux-musl`, so the *host-side* spike (`cargo build --target aarch64-...`) fails until someone adds the target | **[E]** `rust-toolchain.toml:17`; `Dockerfile:22-35, 60`; `rust-ci.yml:119-132` | The spike is still first-wave and still decides DEC-A4, but it is a **CI matrix + toolchain** change, not a Dockerfile rewrite — REQ-H-13 |
 | 9 | DSP §4.D.2(a) proposes `volume_1m` keyed `ORDER BY (service_name, window_start)`, mirroring bronze | **Wrong key for the actual query.** `clickhouse.py:273-277` filters on **time only** — there is no `ServiceName` predicate anywhere in `volume_band`; the service is a `GROUP BY` **[E]**. Leading with `service_name` puts the only filtered column second | **[E]** `clickhouse.py:272-290`; `01-bronze-otel.sql:122` | All three new rollups lead with `window_start` — §6.3. This is the one place this spec contradicts DSP's design, and it is a correction, not a preference |
 | 10 | DSP and three docstrings call the band function `pipeline._volume_state` | It is **public**: `volume_state`, `services/flow-ui/src/flow_ui/pipeline.py:78` | **[E]** `pipeline.py:78`; stale references at `clickhouse.py:251`, `pipeline.py` docstrings, `static/app.js:1874` | Cosmetic, but S2 is named on it — the seam is `volume_state`, and the stale name is fixed in the same leg that touches those docstrings (REQ-E-09's leg) |
 
@@ -126,9 +130,9 @@ which is said explicitly.
 | REQ-A-05 | The `init.d` boot path MUST keep working unchanged for the local stack (`make up` stays one step) and for `rust-ci.yml:93`. | MUST | S1 |
 | REQ-A-06 | Configuration MUST be delivered as files, not environment variables; secrets MUST be delivered as mounted files referenced **by path** from config. | MUST | S3 |
 | REQ-A-07 | At least two promotion stages (`staging`, `prod`) MUST exist, promoting **the same image digest**. Rebuild-on-promote is forbidden. | MUST | S4 |
-| REQ-A-08 | Infrastructure MUST be declared as code in-repo with no manual console step in the documented path. | MUST | — (review gate; ADR-A1 sets the target) |
+| REQ-A-08 | Infrastructure MUST be declared as code in-repo with no manual console step in the documented path. | MUST | — (review gate; DEC-A1 sets the target) |
 | REQ-A-09 | A deploy MUST apply DDL migrations as a distinct step that reaches terminal success **before** any ingest workload starts. | MUST | S1 |
-| REQ-A-10 | Compute form and ClickHouse hosting MUST NOT be chosen inside an implementation leg (ADR-A1, ADR-A2). Work invariant to them MAY proceed first. | MUST | — (process) |
+| REQ-A-10 | Compute form and ClickHouse hosting MUST NOT be chosen inside an implementation leg (DEC-A1, DEC-A2). Work invariant to them MAY proceed first. | MUST | — (process) |
 | REQ-A-11 | flow-ui SHOULD be deployable and un-deployable independently, in any order, with nothing depending on it. | SHOULD | S2 |
 | REQ-A-12 | The collector's readiness MUST be determined **without executing anything inside its container** — an external HTTP probe against `:9090/metrics`. | MUST | S1 |
 | **REQ-A-13** | **NEW.** The migration runner MUST refuse to apply a file whose checksum differs from the recorded one for that version, MUST exit non-zero, and MUST name both checksums. Migrations are append-only; a changed file is a mistake, not an edit. | MUST | S1 |
@@ -201,13 +205,13 @@ which is said explicitly.
 | REQ-H-04 | The reader role MUST include `SELECT` on `system.tables` and `system.columns`; flow-ui queries both (`clickhouse.py:429, 503, 505`). | MUST | S1 |
 | REQ-H-05 | The collector's config MUST gain `user` and `password_file` for ClickHouse, reading the secret from a file, not an env var. | MUST | S3 |
 | REQ-H-06 | Grants MUST be **proven by CI**, not asserted: the live jobs connect as the least-privilege roles. | MUST | S1 |
-| REQ-H-07 | In a deployed environment all four hops MUST be encrypted in transit. | MUST | — (deploy-time; ADR-A1/A2) |
-| REQ-H-08 | OTLP `:4317` MUST NOT be reachable without authentication in a deployed environment. | MUST | — (edge; ADR-A1) |
+| REQ-H-07 | In a deployed environment all four hops MUST be encrypted in transit. | MUST | — (deploy-time; DEC-A1/A2) |
+| REQ-H-08 | OTLP `:4317` MUST NOT be reachable without authentication in a deployed environment. | MUST | — (edge; DEC-A1) |
 | REQ-H-09 | Secrets MUST come from a managed secret store, delivered as files, never committed and never passed as a deploy argument. | MUST | S3 + S4 |
 | REQ-H-10 | If TLS terminates inside the collector, the dependency change MUST be re-evaluated against the static-musl/distroless property and `deny.toml`, and the Dockerfile's purity claim MUST be corrected if it stops holding. | MUST | S4 |
 | REQ-H-11 | A real-telemetry tripwire SHOULD exist: a signal whose `sentinel.synthetic` is not `true` SHOULD be surfaced, not silent. | SHOULD | S1 |
 | REQ-H-12 | Container image scanning SHOULD gate the registry push. | SHOULD | S4 |
-| **REQ-H-13** | **NEW — replaces DSP R-04's framing (correction 8).** Before ADR-A4 is taken, a spike MUST produce a static musl binary **with the TLS feature enabled** for **both** `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, and MUST run `cargo deny check` against the resulting licence set. This requires (i) adding `aarch64-unknown-linux-musl` to `rust-toolchain.toml:17` and (ii) adding `platforms: linux/amd64,linux/arm64` to `rust-ci.yml`'s `docker-build`, which builds **no arm64 today**. The spike is first-wave and is independent of whether TLS ships. | MUST | S4 |
+| **REQ-H-13** | **NEW — replaces DSP R-04's framing (correction 8).** Before DEC-A4 is taken, a spike MUST produce a static musl binary **with the TLS feature enabled** for **both** `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, and MUST run `cargo deny check` against the resulting licence set. This requires (i) adding `aarch64-unknown-linux-musl` to `rust-toolchain.toml:17` and (ii) adding `platforms: linux/amd64,linux/arm64` to `rust-ci.yml`'s `docker-build`, which builds **no arm64 today**. The spike is first-wave and is independent of whether TLS ships. | MUST | S4 |
 | **REQ-H-14** | **NEW.** `:9090/metrics` MUST remain unauthenticated on the wire, because it **is** the readiness probe (REQ-A-12) and the probe is invariant to compute form. It MUST NOT be exposed outside the trust boundary; where the platform demands an authenticated probe, that authentication MUST be the platform's own identity, never an application credential embedded in the collector. | MUST | S1 |
 | **REQ-H-15** | **NEW.** The `METRICS_PORT` env override rebinds to `0.0.0.0:<port>`, **discarding the host part of a config-supplied `metrics.listen`** (`src/config.rs:373-397`) **[E]**. Deployed configuration MUST set `metrics.listen` in the YAML file and MUST NOT set `METRICS_PORT`, because the env path cannot express a loopback-only bind. | MUST | S3 |
 
@@ -219,10 +223,10 @@ which is said explicitly.
 | REQ-I-02 | Exactly one ClickHouse service definition MUST exist as source; any second consumer includes it rather than restating it. | MUST | S1 |
 | REQ-I-03 | `services/collector-rust/infra/docker-compose.yml` MUST keep working for `rust-ci.yml:93,103` — it is load-bearing. | MUST | S1 |
 | REQ-I-04 | CI's integration ClickHouse MUST mount the silver DDL as well as bronze (= REQ-B-12). | MUST | S1 |
-| REQ-I-05 | The port-8080 collision between `clickstack` (`services/generator-python/docker-compose.yaml:41`) and flow-ui (`docker-compose.yml:70`) MUST be eliminated. | MUST | S1 (grep assert) |
+| REQ-I-05 | The port collisions between `services/generator-python/docker-compose.yaml` and the root `docker-compose.yml` MUST be eliminated: **8080** (`clickstack` `:41` vs flow-ui `:70`), **4317** (`clickstack` `:42` vs collector `:41`) and **8123** (the generator file's ClickHouse `:12` vs the root ClickHouse `:11`). | MUST | S1 (grep assert) |
 | REQ-I-06 | `README.md` is canonical for "how do I run this"; any removed Compose file MUST have its worked examples preserved in the owning service's README. | MUST | — (review gate) |
-| **REQ-I-07** | **NEW — the silent break the unification would cause.** `make test-silver` runs `docker compose exec -T clickhouse …` against the service **literally named `clickhouse`** (`Makefile:72`) **[E]**. The single ClickHouse definition MUST keep the service name `clickhouse` in every Compose file that includes it, or **S1 breaks silently** — `make test-silver` would fail to find the service and a wrapper that swallowed the error would report nothing. A CI assert MUST fail if no Compose file defines a service named `clickhouse`. | MUST | S1 |
-| **REQ-I-08** | **NEW.** The unified definition MUST mount the DDL by the same relative path from every consumer. `services/collector-rust/infra/docker-compose.yml:34` reaches it with `../../../infra/clickhouse/init.d/...`; an `include:` changes the resolution base, which is the most likely way REQ-I-03 breaks. **[V-4]** | MUST | S1 |
+| **REQ-I-07** | **NEW — the silent break the unification would cause.** `make test-silver` runs `docker compose exec -T clickhouse …` against the service **literally named `clickhouse`** (`Makefile:72`) **[E]**. The single ClickHouse definition MUST keep the service name `clickhouse` in every Compose file that includes it, or **S1 breaks silently** — `make test-silver` would fail to find the service and a wrapper that swallowed the error would report nothing. A CI assert MUST fail if no Compose file defines a service named `clickhouse`. **The assert MUST inspect the merged `docker compose config` output, not the source files:** a local service with the same name as an included one silently wins and `config` exits 0 (measured, Compose v5.1.4, `infra/clickhouse/README.md`), so a source-file grep can pass while the stack runs a different `clickhouse` than the shared definition. | MUST | S1 |
+| **REQ-I-08** | **NEW.** The unified definition MUST mount the DDL by the same relative path from every consumer. `services/collector-rust/infra/docker-compose.yml:34` reaches it with `../../../infra/clickhouse/init.d/...`; the `[V-4]` premise that an `include:` shifts the base to the including file is **false** (resolved 2026-10-05, §11.1): Compose resolves relative `source:` paths from the **included** file's directory, so the shared file in `infra/clickhouse/` mounts `./init.d/...` and every consumer gets the same absolute path. T12 uses `include:`; `extends:` rebases identically and offers nothing. `services/collector-rust/infra/docker-compose.yml:34` is affected only if its mount moves into the shared file, in which case its own mount MUST be removed. **[V-4]** | MUST | S1 |
 
 ### 5.7 Non-functional
 
@@ -729,7 +733,7 @@ run**, and CI's instance has no silver at all (REQ-B-12).
 
 **Converge on 25.4** or the newest pinned minor the hosting choice supports. In order: CI
 already runs it so it is the more-tested of the two; `call_edges_1m` needs production-grade
-refreshable MVs **[V-3]**; and if ADR-A2 picks managed ClickHouse, the local stack should not
+refreshable MVs **[V-3]**; and if DEC-A2 picks managed ClickHouse, the local stack should not
 be older than the deployed one. Cost: a `make reset`, which is free — all data is synthetic.
 
 ```
@@ -741,10 +745,12 @@ services/generator-python/docker-compose.yaml      # DELETED (§6.8)
 
 **The service name stays `clickhouse` in every consumer (REQ-I-07).** `Makefile:72`'s
 `docker compose exec -T clickhouse` is S1's entry point for the 18 assertions; rename it and
-the seam breaks quietly. **[V-4]** Compose `include:` requires v2.20+ and changes the base
-against which relative volume paths resolve — `services/collector-rust/infra/docker-compose.yml:34`
-currently reaches the DDL with `../../../infra/clickhouse/init.d/…`. Verify before relying on
-it; the fallback is `extends:` per service, older and more verbose but equivalent here.
+the seam breaks quietly. **[V-4]** Compose `include:` requires v2.20+. It resolves relative
+volume paths from the **included** file's directory (resolved 2026-10-05, §11.1), so the shared
+definition lives in `infra/clickhouse/` and writes its mounts as `./init.d/…`;
+`services/collector-rust/infra/docker-compose.yml:34` currently reaches the DDL with
+`../../../infra/clickhouse/init.d/…` and drops that mount when it includes the shared file.
+`extends:` rebases the same way and is not a fallback.
 
 ### 6.8 `services/generator-python/docker-compose.yaml` — delete it
 
@@ -879,9 +885,13 @@ Two consequences this spec carries forward:
   consecutive 2 s samples **and** `sum(bronze live-table counts) == that total`, cap at 60 s,
   fail printing both numbers. This is better than a sleep because it asserts the invariant the
   recorded snapshot claims (ingested == persisted).
-- **Graceful-shutdown headroom bounds `batch_size` and `flush_interval_ms` from above** on any
-  platform that SIGTERMs with a short grace period. Named in ADR-A1's trade-offs, not decided
-  here.
+- **The collector does not flush on SIGTERM — an existing defect, not a platform trade-off.**
+  `services/collector-rust/src/main.rs:131-141` handles only `ctrl_c` (SIGINT). Observed: the
+  image kept running on SIGTERM, exited 0 on SIGINT, and `docker stop -t 12` took the full 12 s
+  and exited 137. Filed as luanmorenommaciel/sentinel#45. **Limit:** probed in log-only mode, so
+  the flush path itself was not exercised. Once fixed, the flush window still bounds
+  `batch_size` and `flush_interval_ms` from above on any platform with a short grace period
+  (DEC-A1).
 
 ### 7.5 The non-`POPULATE` consequence, as a standing state invariant
 
@@ -1185,9 +1195,9 @@ and no skip guard, and is invoked by `make test-generator-integration` from the 
 
 DSP §5.1's four-wave graph stands. The deltas this spec introduces:
 
-**Wave 0 — decisions, no code:** ADR-A1 (compute form) · ADR-A2 (ClickHouse hosting **and
-operational owner**) · ADR-A3 (migration tooling) · ADR-A4 (TLS in-process vs edge) · ADR-I1
-(version + Compose deletion) · ADR-I2 (the doc-rule conflict, §12.3) · ADR-D1 (typed resource
+**Wave 0 — decisions, no code:** DEC-A1 (compute form) · DEC-A2 (ClickHouse hosting **and
+operational owner**) · DEC-A3 (migration tooling) · DEC-A4 (TLS in-process vs edge) · DEC-I1
+(version + Compose deletion) · DEC-I2 (the doc-rule conflict, §12.3) · DEC-D1 (typed resource
 keys in silver). **Run as one sync agenda item, not seven documents** — the team's
 demonstrated ratification throughput is approximately zero per quarter, and six of seven
 existing ADRs are still `Proposed`.
@@ -1195,12 +1205,12 @@ existing ADRs are still `Proposed`.
 **Wave 1 — four parallel lanes, plus one spike:** B (python-ci + the live job) · I+H1 (compose
 unification, version pin, drop `otelgen`, three roles, collector auth) · MIG (migration
 runner) · A-inv (registry, provenance, OIDC, `release.yml`). **Plus REQ-H-13's arm64/musl
-TLS spike, pulled into wave 1**: it decides ADR-A4, it is independent of whether TLS ships, and
+TLS spike, pulled into wave 1**: it decides DEC-A4, it is independent of whether TLS ships, and
 a TLS-enabled musl build that fails on arm64 breaks the team's own machines before any cloud
 does.
 
 **Hard blocks, unchanged:** **[V-1]** before any of D · D → E strictly · E phase 1 → phase 2 ·
-H1 → H2 · ADR-A1 → A-compute and H2 · ADR-A3 → MIG's form · ADR-I1 → I.
+H1 → H2 · DEC-A1 → A-compute and H2 · DEC-A3 → MIG's form · DEC-I1 → I.
 
 **New hard block:** **REQ-D-10** — migration `0006` (the view re-point) is blocked on E phase 2
 for every environment holding pre-existing `silver.metric_observations` partitions. On a fresh
@@ -1229,15 +1239,16 @@ of each wave — which is the conflict §12.3 escalates.
 > **Status as of 2026-10-05: `[V-1]`, `[V-2]` and `[V-3b]` are VERIFIED PASS. `[V-3a]` is
 > PASS on 25.4.13.22 with no settings and gated only on 24.3.18.7 — the earlier
 > "experimental-gated on both" claim was a probe error, corrected in §11.1. The
-> `SharedMergeTree` half of `[V-3]` and all of `[V-4]` remain open. Measurements and their limits are in §11.1 below — read it before acting on
+> `SharedMergeTree` half of `[V-3]` remains open. `[V-4]` is RESOLVED but its premise was backwards: the gate as written **fails**
+> while the risk it guarded against is gone (§11.1). Measurements and their limits are in §11.1 below — read it before acting on
 > the fallback column, which is now partly obsolete.**
 
 | | Assumption | Gates | Fallback if false |
 |---|---|---|---|
 | **[V-1]** | A materialized view on table `T` fires on inserts into `T` produced by another MV writing `TO T` (chained MV firing) | **all of D** (§6.3, §6.4) | Every D rollup reads **bronze** directly, re-paying the 1.26 s unindexed `Map` probe and losing the typed dimensions. Material redesign of `0005`; REQ-E-11 and REQ-D-06 survive it, NFR-05 does not |
 | **[V-2]** | `SimpleAggregateFunction(sumMap, Map(LowCardinality(String), UInt64))` is supported on the pinned version | `resource_key_presence_1m` (§6.3c) | (i) `AggregateFunction(sumMap, …)` + `sumMapMerge` at read; (ii) `Tuple(Array(K), Array(V))` |
-| **[V-3]** | Refreshable MVs are production-grade (not experimental) on the pinned version; and `REPLACE PARTITION` behaves identically if a managed provider substitutes `SharedMergeTree` for `MergeTree` | `call_edges_1m` (§6.3d); **the entire E primitive** on managed ClickHouse | `call_edges_1m` → scheduled `INSERT` + partition swap (a scheduler per environment, no new concept). For `REPLACE PARTITION` on `SharedMergeTree` there is **no second idea** that does not change the base tables' engine — if it differs, E must be redesigned and ADR-A2 should know that before it chooses |
-| **[V-4]** | Compose `include:` is available in the team's Compose version **and** resolves relative volume paths from the including file's directory | REQ-I-02, I-03, I-08 | `extends:` per service — older, more verbose, equivalent here |
+| **[V-3]** | Refreshable MVs are production-grade (not experimental) on the pinned version; and `REPLACE PARTITION` behaves identically if a managed provider substitutes `SharedMergeTree` for `MergeTree` | `call_edges_1m` (§6.3d); **the entire E primitive** on managed ClickHouse | `call_edges_1m` → scheduled `INSERT` + partition swap (a scheduler per environment, no new concept). For `REPLACE PARTITION` on `SharedMergeTree` there is **no second idea** that does not change the base tables' engine — if it differs, E must be redesigned and DEC-A2 should know that before it chooses |
+| **[V-4]** | Compose `include:` is available in the team's Compose version **and** resolves relative volume paths from the including file's directory | REQ-I-02, I-03, I-08 | **RESOLVED 2026-10-05, and the gate as written FAILS:** `include:` is available (Compose v5.1.4) but the base is the **included** file's directory, not the including file's. The risk the gate guarded against (the base shifting under the existing `../../../` mount) is gone, so `include:` is used as planned. `extends:` rebases identically and is not a better fallback |
 
 ### 11.1 Probe results — `[V-1]`, `[V-2]`, `[V-3]` RESOLVED 2026-10-05
 
@@ -1262,10 +1273,21 @@ five MV bodies in `infra/clickhouse/init.d/` chain correctly — that still need
 `MergeTree` only. **The `SharedMergeTree` half of `[V-3]` remains unverified and unverifiable
 locally** — it needs a managed provider, and §11's warning stands unchanged: if it differs, E
 loses its primitive and there is no second design that leaves the base tables' engine alone.
-**ADR-A2 must settle this before E is implemented.**
+**DEC-A2 must settle this before E is implemented.**
 
-**`[V-4]` (Compose `include:`) remains unverified** — it is a Compose-version question, not a
-ClickHouse one, and was not probed.
+**`[V-4]` (Compose `include:`) — RESOLVED 2026-10-05; the premise was backwards, and the gate as
+written technically FAILS.** Measured on Compose v5.1.4 (full detail in
+`infra/clickhouse/README.md`): `include:` resolves relative bind-mount `source:` paths from the
+**included** file's directory, not the including file's. Observable: `docker compose config`
+printed `source: <scratchpad>/v4/marker/ddl.sql` with both candidate targets present, so Compose
+chose the path rather than it being inferred from a missing file. This is not a clean pass: the
+gate asserted "from the including file's directory" and that is false. What matters is that the
+risk it guarded against is gone: a shared file in `infra/clickhouse/` with `./init.d/...` mounts
+resolves identically for every consumer. T12 uses `include:`; `extends:` rebases identically and
+offers nothing. `include:` with `project_directory: .` does resolve from the including file, but
+is not needed. A second finding, recorded in REQ-I-07: a local service of the same name as an
+included one silently wins and `config` exits 0. Limits: one Compose version (v5.1.4); the v2.20
+floor was not re-verified.
 
 ---
 
@@ -1323,7 +1345,7 @@ DDL) is one the repo should keep.
   **who operates ClickHouse at all**, which is a staffing decision recorded as unassigned
   (`docs/proposals/canonical-read-schema.md:123`; `git show HEAD:.claude/CLAUDE.md`) **[E]**.
   The hosting choice determines whether the runner is a convenience or the only option.
-- **Owner: ADR-A3 → Pod 3** (DDL owner) with Pod 2 consulted; **ADR-A2 → Commander**, because
+- **Owner: DEC-A3 → Pod 3** (DDL owner) with Pod 2 consulted; **DEC-A2 → Commander**, because
   the ownership question gates the technology one and not the reverse.
 
 ### 12.3 "Fix stale docs in the same PR" vs "every leg declares disjoint paths"
@@ -1345,7 +1367,7 @@ are obliged by check 2 to update what they invalidated in `README.md` and `CLAUD
   pre-pr-discipline ("fix the ones that do not hold in the same PR") by making doc updates lag
   their code by one leg. That is a change to a repo rule, not an engineering judgement.
 - **Owner: Captain / Commander** — both documents are theirs, and this is the same class of
-  amendment ADR-0009 already has pending. **ADR-I2.**
+  amendment ADR-0009 already has pending. **DEC-I2.**
 
 ### 12.4 The WoW names seven CI gates; four of them have never been configured
 
@@ -1398,7 +1420,7 @@ live documents; `main` is protected either way.
 musl binary on `gcr.io/distroless/static-debian12:nonroot` is achievable **[E]**.
 `core-intent.md §5` calls that image the strongest single artifact in the baseline's security
 posture. Adding TLS to the collector adds a TLS implementation, and `rustls` pulls a crypto
-provider (`ring` or `aws-lc-rs`), neither of which is pure Rust. If ADR-A2 picks managed
+provider (`ring` or `aws-lc-rs`), neither of which is pure Rust. If DEC-A2 picks managed
 ClickHouse, **client** TLS is not optional.
 
 - **Engineering can decide:** hop 1 (server TLS) is avoided entirely by terminating at the
@@ -1415,7 +1437,7 @@ ClickHouse, **client** TLS is not optional.
   The alternative is a TLS-terminating sidecar: preserves purity exactly, costs a second image,
   a second config and a second thing to patch. **That is a disproportionality judgement about
   the collector's own invariants.**
-- **Owner: Pod 2** — it owns the collector, the Dockerfile and `deny.toml`. **ADR-A4.** Note
+- **Owner: Pod 2** — it owns the collector, the Dockerfile and `deny.toml`. **DEC-A4.** Note
   NFR-02 already says any change adding a shell, a package manager or a dynamic libc requires
   an ADR; this is that ADR, arriving before the change rather than after.
 
@@ -1429,8 +1451,8 @@ changes.
 | # | Surface | Method / path | Request | Response | Status / error semantics | Auth before | Auth after H |
 |---|---|---|---|---|---|---|---|
 | **1** | collector `/metrics`, `:9090` | `/metrics`, **any method** — `src/metrics_server.rs:65` checks the **path only** **[E]** | none | Prometheus text exposition, `Content-Type: text/plain; version=0.0.4; charset=utf-8` (`metrics_server.rs:57`). Five pinned families | `200` render ok · `404 "not found\n"` any other path (`:65-69`) · `500 "internal error rendering metrics\n"` on encode failure (`:80-87`). No `405` | none; binds `0.0.0.0:9090` by default (`config.rs:163, 170`) | **unchanged on the wire, deliberately** — this endpoint **is** the readiness/startup probe (REQ-A-12), invariant to compute form. Not exposed outside the trust boundary; platform-internal TLS only; no application credential (REQ-H-14) |
-| **2** | collector OTLP gRPC `:4317` | `opentelemetry.proto.collector.{trace,logs,metrics}.v1.*/Export` | `ExportTraceServiceRequest` / `ExportLogsServiceRequest` / `ExportMetricsServiceRequest` | the matching `Export*ServiceResponse` | `OK` on accept · **`RESOURCE_EXHAUSTED`** when the buffer is saturated, all-or-nothing, with the pending/available counts in the message (`grpc.rs:219-222, 293-296, 373-376`; `buffer.rs:99-102`) **[E]** · `INVALID_ARGUMENT` on malformed OTLP | none; `[::]:4317`, zero TLS code in `grpc.rs`/`config.rs`/`clickhouse_exporter.rs` **[E]** | TLS + authentication at the **platform edge** (REQ-H-07, H-08); the process still speaks h2c inside the boundary and gains no peer identity (ADR-A1's named cost) |
-| **3** | ClickHouse HTTP `:8123` | **`POST /`** with the SQL as the **raw body** (flow-ui, `clickhouse.py:64-74` — a url-encoded `query=` makes ClickHouse parse the literal string and fail) **[E]**; RowBinary `INSERT` from the collector's `clickhouse` 0.13 crate; `GET /?query=SELECT+1` as the Compose healthcheck | SQL text / RowBinary rows | `FORMAT TSV` or `FORMAT JSONEachRow` as the query asks | `200` + body · HTTP 4xx/5xx with the ClickHouse error text; flow-ui raises via `raise_for_status()` and each caller degrades to `[]` with a `log.warning` | **passwordless `default`, opened to `::/0`** by `infra/clickhouse-users.d/zz-default-network.xml` **[E]**, plus a **second route** via `CLICKHOUSE_USER` + `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT` in CI's compose (REQ-B-14) **[E]**; a vestigial `otelgen`/`otelgen_secret` with `ALL ON bronze.*` **and** `ALL ON default.*` **[E]** | **`default` back to localhost-only; `otelgen` deleted; three least-privilege roles** (§14.1); collector authenticates with `user` + `password_file`; HTTPS when ADR-A2 picks managed (REQ-H-07, H-10) |
+| **2** | collector OTLP gRPC `:4317` | `opentelemetry.proto.collector.{trace,logs,metrics}.v1.*/Export` | `ExportTraceServiceRequest` / `ExportLogsServiceRequest` / `ExportMetricsServiceRequest` | the matching `Export*ServiceResponse` | `OK` on accept · **`RESOURCE_EXHAUSTED`** when the buffer is saturated, all-or-nothing, with the pending/available counts in the message (`grpc.rs:219-222, 293-296, 373-376`; `buffer.rs:99-102`) **[E]** · `INVALID_ARGUMENT` on malformed OTLP | none; `[::]:4317`, zero TLS code in `grpc.rs`/`config.rs`/`clickhouse_exporter.rs` **[E]** | TLS + authentication at the **platform edge** (REQ-H-07, H-08); the process still speaks h2c inside the boundary and gains no peer identity (DEC-A1's named cost) |
+| **3** | ClickHouse HTTP `:8123` | **`POST /`** with the SQL as the **raw body** (flow-ui, `clickhouse.py:64-74` — a url-encoded `query=` makes ClickHouse parse the literal string and fail) **[E]**; RowBinary `INSERT` from the collector's `clickhouse` 0.13 crate; `GET /?query=SELECT+1` as the Compose healthcheck | SQL text / RowBinary rows | `FORMAT TSV` or `FORMAT JSONEachRow` as the query asks | `200` + body · HTTP 4xx/5xx with the ClickHouse error text; flow-ui raises via `raise_for_status()` and each caller degrades to `[]` with a `log.warning` | **passwordless `default`, opened to `::/0`** by `infra/clickhouse-users.d/zz-default-network.xml` **[E]**, plus a **second route** via `CLICKHOUSE_USER` + `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT` in CI's compose (REQ-B-14) **[E]**; a vestigial `otelgen`/`otelgen_secret` with `ALL ON bronze.*` **and** `ALL ON default.*` **[E]** | **`default` back to localhost-only; `otelgen` deleted; three least-privilege roles** (§14.1); collector authenticates with `user` + `password_file`; HTTPS when DEC-A2 picks managed (REQ-H-07, H-10) |
 | **4** | flow-ui `:8080` | `GET /` (HTML) · `GET /stream` (**SSE**) · `GET /api/snapshot` · `GET /api/graph` · `GET /api/history` · `GET /healthz` · `GET /static/*` — `src/flow_ui/main.py:95, 110, 141, 147, 168, 179, 63` **[E]** | none (no query parameters, no body, no write verb anywhere) | see below | FastAPI defaults: `200`/`404`/`422`. `docs_url=None, redoc_url=None` (`main.py:62`) — no OpenAPI surface. No CORS header is set anywhere, pinned by a test, which is **why the browser never reaches surfaces 1 and 3** | none | **unchanged in shape**; placed behind platform auth in a deployed environment. It discloses topology and volumes, never a credential. Reads as `sentinel_reader` (REQ-H-03, H-04) |
 
 **Surface 4 response shapes** (all `application/json` except `/` and `/stream`):
@@ -1565,10 +1587,10 @@ Rules, each testable at S3:
 
 | Hop | Today | Design | Gated on |
 |---|---|---|---|
-| generator → collector `:4317` | plaintext gRPC on `[::]:4317`; **zero TLS code** in the collector **[E]** | **terminate at the platform edge.** The generator already has `--otlp-secure`, `--otlp-api-key`, `--otlp-header`, so the client side needs no code | ADR-A1 |
-| collector → ClickHouse `:8123` | plaintext HTTP, passwordless `default` | HTTPS + `user`/`password_file`. **Forced, not optional, if ADR-A2 picks managed ClickHouse** | ADR-A2, ADR-A4, REQ-H-05, H-10, H-13 |
-| flow-ui → ClickHouse | plaintext HTTP | `https://` + `sentinel_reader`; `httpx` needs no code change | ADR-A2 |
-| flow-ui → collector `/metrics` | plaintext HTTP | platform-internal TLS, or stay inside the trust boundary (REQ-H-14) | ADR-A1 |
+| generator → collector `:4317` | plaintext gRPC on `[::]:4317`; **zero TLS code** in the collector **[E]** | **terminate at the platform edge.** The generator already has `--otlp-secure`, `--otlp-api-key`, `--otlp-header`, so the client side needs no code | DEC-A1 |
+| collector → ClickHouse `:8123` | plaintext HTTP, passwordless `default` | HTTPS + `user`/`password_file`. **Forced, not optional, if DEC-A2 picks managed ClickHouse** | DEC-A2, DEC-A4, REQ-H-05, H-10, H-13 |
+| flow-ui → ClickHouse | plaintext HTTP | `https://` + `sentinel_reader`; `httpx` needs no code change | DEC-A2 |
+| flow-ui → collector `/metrics` | plaintext HTTP | platform-internal TLS, or stay inside the trust boundary (REQ-H-14) | DEC-A1 |
 
 Hop 2 is the sharp edge and §12.6 is its escalation. Hop 1 being avoidable by edge termination
 is a concrete reason the Cloud Run recommendation is cheaper than it looks, and it is also why
@@ -1674,7 +1696,7 @@ refused outright, no flag).
 **Where this spec contradicts an ADR.** Nowhere directly — but §12.3 and §12.5 both say
 plainly that this plan **cannot satisfy ADR-0009's disjoint-paths rule together with
 pre-pr-discipline check 2**, and picks a convention that violates the letter of the latter,
-pending ADR-I2. That is stated rather than silently overridden, per the ground rules.
+pending DEC-I2. That is stated rather than silently overridden, per the ground rules.
 
 **The highest value-per-line item in the whole plan** is H.1 — delete `otelgen`, remove the
 `::/0` override, create three roles, give the collector `user`/`password_file`. It needs no
@@ -1691,8 +1713,8 @@ Promoting a gate before its flake rate is known is how teams learn to bypass gat
 **What this spec could not determine.** (i) `[V-1]`, `[V-2]` and `[V-3b]` were unverified when
 the body was written and have since been **measured PASS on both 24.3.18.7 and 25.4.13.22** —
 see §11.1, which also records the three limits on what those probes prove. `[V-3a]` is
-ungated on 25.4.13.22 and gated only on 24.3.18.7, so it follows DEC-I1; the **`SharedMergeTree` half of `[V-3]`** and all of
-**`[V-4]`** remain genuinely open. (ii) flow-ui's
+ungated on 25.4.13.22 and gated only on 24.3.18.7, so it follows DEC-I1; the **`SharedMergeTree` half of `[V-3]`** remains
+genuinely open, and `[V-4]` is resolved (§11.1) with its premise reversed. (ii) flow-ui's
 **73-vs-63** collected-test gap — static count 71 functions + one `parametrize`×3 = 73, while
 `CLAUDE.md` claims 63; not resolvable statically, and REQ-B-09 deliberately does not ask anyone
 to resolve it by hand. (iii) Every `NFR-05` re-measurement for the three migrated flow-ui

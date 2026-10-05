@@ -122,7 +122,7 @@ MUST / SHOULD / MAY per RFC-2119 sense. Each ID is stable and referenced by §4�
 | REQ-A-07 | At least two promotion stages (`staging`, `prod`) MUST exist, promoting **the same image digest** — rebuild-on-promote is forbidden. | MUST |
 | REQ-A-08 | Infrastructure MUST be declared as code in-repo, with no manual console step in the documented path. | MUST |
 | REQ-A-09 | A deploy MUST apply DDL migrations as a distinct step that completes before any ingest workload starts (DS-10). | MUST |
-| REQ-A-10 | The compute form and the ClickHouse hosting model MUST NOT be chosen inside an implementation leg; both are ADR decisions (§9 ADR-A1, ADR-A2). Work that is invariant to them MAY proceed first. | MUST |
+| REQ-A-10 | The compute form and the ClickHouse hosting model MUST NOT be chosen inside an implementation leg; both are ADR decisions (§9 DEC-A1, DEC-A2). Work that is invariant to them MAY proceed first. | MUST |
 | REQ-A-11 | flow-ui SHOULD be deployable and un-deployable independently, in any order, with no other component depending on it (DS-05). | SHOULD |
 | REQ-A-12 | The collector's readiness MUST be determined without executing anything inside its container (DS-04) — i.e. by an external probe against `:9090/metrics`. | MUST |
 
@@ -225,8 +225,8 @@ MUST / SHOULD / MAY per RFC-2119 sense. Each ID is stable and referenced by §4�
 `core-intent.md §3` records that nothing commits to a compute form, and that **ClickHouse
 operational ownership is unassigned** — which it correctly calls the real blocker on
 managed-vs-self-hosted. Those are *different* decisions with *different* owners, and the second
-is a staffing decision masquerading as a technology one. Both go to ADRs (§9 **ADR-A1**,
-**ADR-A2**). What follows is a recommendation with its rationale and its cost, not a fait
+is a staffing decision masquerading as a technology one. Both go to decision records (§9 **DEC-A1**,
+**DEC-A2**; these IDs were `ADR-A1`/`ADR-A2` in earlier drafts and are renamed `DEC-*` to match `plan/`). What follows is a recommendation with its rationale and its cost, not a fait
 accompli.
 
 **Decision matrix — compute form for the three services**
@@ -247,23 +247,26 @@ accompli.
 *managed* ClickHouse for storage.** The rationale is a single sentence: *the binding constraint
 is that nobody owns ClickHouse operationally, so the design should buy ownership where it can
 and avoid creating a second unowned platform (a cluster) where it can't.* GKE is the better
-answer the moment ADR-A2 assigns an owner and self-hosting is chosen, because then ClickHouse
+answer the moment DEC-A2 assigns an owner and self-hosting is chosen, because then ClickHouse
 lives in the cluster and co-locating the collector there removes a network hop.
 
 **What the recommendation gives up, stated plainly:**
 - **No mTLS identity inside the collector.** TLS terminates at the Cloud Run edge; the process
   still speaks plaintext h2c. Authentication on `:4317` becomes an edge concern (REQ-H-08) and
   the collector gains no peer identity. On GKE with a mesh it could.
-- **Shutdown headroom.** Cloud Run sends SIGTERM and does not wait long. The collector's
-  graceful final flush (`README.md §8`) must complete inside that window, which bounds
-  `flush_interval_ms` and batch size from above. On GKE this is a tunable field.
+- **Shutdown headroom, and a known bug.** Cloud Run sends SIGTERM and does not wait long, which
+  would bound `flush_interval_ms` and batch size from above (on GKE this is a tunable field).
+  That is moot today because the collector handles only SIGINT
+  (`services/collector-rust/src/main.rs:131-141`), so no platform's stop signal triggers the
+  final flush. This is an existing defect, not a cost of the platform choice; see
+  `spec/core-spec.md` §7.4 and luanmorenommaciel/sentinel#45.
 - **flow-ui pinned to one instance.** Its `Snapshot` is per-process; two instances would show
   two different histories to two viewers. `min=max=1` is correct and caps it.
 - **Managed ClickHouse removes the `init.d` bootstrap entirely** — see A.3. This is the single
   largest consequence of the recommendation and it is *good*: it forces the migration runner
   that `core-intent.md §6` already named as the biggest obstacle to non-destructive deployment.
 
-**Decision matrix — ClickHouse hosting** (ADR-A2; the owner question gates it)
+**Decision matrix — ClickHouse hosting** (DEC-A2; the owner question gates it)
 
 | | Managed (ClickHouse Cloud / equivalent) | Self-hosted on GKE (operator) | Self-hosted on a GCE VM |
 |---|---|---|---|
@@ -271,7 +274,7 @@ lives in the cluster and co-locating the collector there removes a network hop.
 | Backup/restore (today: none at all) | included | ours to build | ours to build |
 | `init.d` bootstrap available | **no** → migration runner required | yes | yes |
 | Engine | SharedMergeTree substituted for MergeTree **[V-3]** | MergeTree as written | MergeTree as written |
-| `REPLACE PARTITION` (the backfill primitive, §4.E) | supported **[V-3]** | supported | supported |
+| `REPLACE PARTITION` (the backfill primitive, §4.E) | **unverified** on `SharedMergeTree`; defers to `spec/core-spec.md` §11.1 (only `MergeTree` measured) | supported | supported |
 | Forces TLS on the collector's client path | **yes** (HTTPS only) → REQ-H-10 | no | no |
 | Cost shape | per-compute + storage, opex | node cost + our time | cheapest, least resilient |
 
@@ -621,7 +624,7 @@ Two viable forms:
 
 **Recommendation: refreshable MV, conditional on REQ-I-01 landing on a version where it is not
 experimental** — which is a direct, concrete reason to converge on the newer ClickHouse rather
-than the older one (§4.I.1). If ADR-A2 picks a version where it is experimental, fall back to a
+than the older one (§4.I.1). If DEC-A2 picks a version where it is experimental, fall back to a
 scheduled `INSERT` + partition swap using the same primitive as the backfill (§E.1), which costs
 a scheduler but no new concept.
 
@@ -791,10 +794,10 @@ deliberately *not* claiming the grant lists above are complete — the Rust expo
 
 | Hop | Today | Design | Depends on |
 |---|---|---|---|
-| generator → collector `:4317` | plaintext gRPC, `[::]:4317`, zero TLS code (grep for `tls`/`ServerTlsConfig`/`certificate` in `src/grpc.rs`, `src/config.rs`, `src/clickhouse_exporter.rs` → 0 hits) | **Terminate at the platform edge.** The generator already has `--otlp-secure`, `--otlp-api-key`, `--otlp-header` (`src/otelgen/cli.py`), so the client side needs no code | ADR-A1 |
-| collector → ClickHouse `:8123` | plaintext HTTP, passwordless `default` | HTTPS + `user`/`password_file`. **Forced, not optional, if ADR-A2 picks managed ClickHouse** | ADR-A2, REQ-H-05 |
-| flow-ui → ClickHouse | plaintext HTTP | `https://` + `sentinel_reader`; `httpx` needs no code change | ADR-A2 |
-| flow-ui → collector `/metrics` | plaintext HTTP | platform-internal TLS or stay inside the trust boundary | ADR-A1 |
+| generator → collector `:4317` | plaintext gRPC, `[::]:4317`, zero TLS code (grep for `tls`/`ServerTlsConfig`/`certificate` in `src/grpc.rs`, `src/config.rs`, `src/clickhouse_exporter.rs` → 0 hits) | **Terminate at the platform edge.** The generator already has `--otlp-secure`, `--otlp-api-key`, `--otlp-header` (`src/otelgen/cli.py`), so the client side needs no code | DEC-A1 |
+| collector → ClickHouse `:8123` | plaintext HTTP, passwordless `default` | HTTPS + `user`/`password_file`. **Forced, not optional, if DEC-A2 picks managed ClickHouse** | DEC-A2, REQ-H-05 |
+| flow-ui → ClickHouse | plaintext HTTP | `https://` + `sentinel_reader`; `httpx` needs no code change | DEC-A2 |
+| flow-ui → collector `/metrics` | plaintext HTTP | platform-internal TLS or stay inside the trust boundary | DEC-A1 |
 
 **REQ-H-10 is the sharp edge.** `services/collector-rust/Dockerfile:3-6` states the dependency
 tree is pure Rust — "cityhash-rs + lz4_flex, no `*-sys` / OpenSSL / ring" — and that this is
@@ -832,7 +835,7 @@ this cycle precisely because it is cheap now and unaffordable to retrofit after 
 
 - **H.1 (users, grants, collector auth) — now.** No deployment needed; it is the highest
   value-per-line item in the whole plan and it removes a committed plaintext credential.
-- **H.2/H.3 (TLS, secret store, edge auth) — after ADR-A1/A2.** "Enable TLS" has no meaning
+- **H.2/H.3 (TLS, secret store, edge auth) — after DEC-A1/A2.** "Enable TLS" has no meaning
   without a terminator, and "mount from Secret Manager" has no meaning without a runtime. Doing
   these before the compute form is chosen builds for a platform that may not be picked.
 
@@ -849,7 +852,7 @@ bundled one (`:39`). **CI tests the bronze DDL on an engine the local stack does
 
 **Converge on 25.4** (or the newest pinned minor the hosting choice supports). Reasons, in order:
 CI already runs it, so it is the more-tested of the two; it unlocks production-grade refreshable
-materialized views, which §4.D.2(c) needs for `call_edges_1m` **[V-3]**; and if ADR-A2 picks
+materialized views, which §4.D.2(c) needs for `call_edges_1m` **[V-3]**; and if DEC-A2 picks
 managed ClickHouse, the local stack should not be older than the deployed one. Cost: a
 `make reset` (the volume cannot be upgraded in place for a changed DDL anyway — `CLAUDE.md`
 *Gotchas*), and re-verification of the 18 assertions on 25.4, which `e2e-silver` does
@@ -904,7 +907,7 @@ stays in the CLI (`src/otelgen/cli.py:70,268-270`) and `OTELGEN_OTLP_API_KEY` st
 
 Alternative considered: keep it, strip the credentials, move HyperDX to `8081`, add a superseded
 banner. Rejected — it leaves a third ClickHouse definition alive to drift again, which is the
-problem Candidate I exists to end. Flagged as an owner decision in §9 (ADR-I1) only because
+problem Candidate I exists to end. Flagged as an owner decision in §9 (DEC-I1) only because
 deleting a file someone may be using is a social act, not a technical one.
 
 `services/collector-rust/infra/docker-compose.collector.yml` (the fourth file,
@@ -920,10 +923,10 @@ TTL caveat (`:13-15`), which §4.B.3 depends on. Deleting it is churn with no dr
 
 ```
                         ┌──────────────── W0: DECISIONS (no code) ───────────────┐
-                        │ ADR-A1 compute form                                    │
-                        │ ADR-A2 ClickHouse hosting + operational OWNER          │
-                        │ ADR-A3 migration tooling (bespoke runner vs off-shelf) │
-                        │ ADR-I1 ClickHouse version + delete generator compose   │
+                        │ DEC-A1 compute form                                    │
+                        │ DEC-A2 ClickHouse hosting + operational OWNER          │
+                        │ DEC-A3 migration tooling (bespoke runner vs off-shelf) │
+                        │ DEC-I1 ClickHouse version + delete generator compose   │
                         └───┬──────────────────────┬─────────────────────────────┘
                             │                      │
  ┌──────────────────────────┼──────────────────────┼───────────────────────────────┐
@@ -931,8 +934,8 @@ TTL caveat (`:13-15`), which §4.B.3 depends on. Deleting it is churn with no dr
  │  B  python-ci + e2e-silver ◀── soft: easier after I                             │
  │  I+H1  compose unify · version pin · drop otelgen · 3 roles                     │
  │         └─ leg I/H1-a infra+compose   leg I/H1-b collector src (user/pwd_file)  │
- │  MIG   migration runner (REQ-A-04/05)  ◀── ADR-A3                               │
- │  A-inv registry · provenance · OIDC · release.yml   ◀── ADR-A1 only for deploy  │
+ │  MIG   migration runner (REQ-A-04/05)  ◀── DEC-A3                               │
+ │  A-inv registry · provenance · OIDC · release.yml   ◀── DEC-A1 only for deploy  │
  └──────────┬──────────────────┬────────────────────────────┬──────────────────────┘
             │                  │                            │
             ▼                  ▼                            ▼
@@ -940,7 +943,7 @@ TTL caveat (`:13-15`), which §4.B.3 depends on. Deleting it is churn with no dr
    │ W2  D silver    │  │ W2  A-compute    │      │ (gated on MIG + D)  │
    │  stats_1m       │  │  IaC · envs ·    │      │                     │
    │  volume_1m      │  │  deploy pipeline │      │                     │
-   │  key_presence   │  │  ◀── ADR-A1/A2   │      │                     │
+   │  key_presence   │  │  ◀── DEC-A1/A2   │      │                     │
    │  call_edges_1m  │  └────────┬─────────┘      │                     │
    └────────┬────────┘           │                └─────────────────────┘
             ▼                    │
@@ -957,11 +960,11 @@ TTL caveat (`:13-15`), which §4.B.3 depends on. Deleting it is churn with no dr
 ```
 
 **Hard blocks**
-- `ADR-A1` → A-compute, H2 (nothing to terminate TLS at), REQ-A-12's probe form.
-- `ADR-A2` → whether the collector needs client TLS at all (REQ-H-10), and MIG's necessity.
-- `ADR-A3` → MIG's form. MIG → D's non-destructive application on existing volumes, and E in
+- `DEC-A1` → A-compute, H2 (nothing to terminate TLS at), REQ-A-12's probe form.
+- `DEC-A2` → whether the collector needs client TLS at all (REQ-H-10), and MIG's necessity.
+- `DEC-A3` → MIG's form. MIG → D's non-destructive application on existing volumes, and E in
   deployed environments.
-- `ADR-I1` → I. I → the version everything else is tested on.
+- `DEC-I1` → I. I → the version everything else is tested on.
 - **D → E, strictly.** E migrates onto D's three read models; there is nothing to migrate to
   before D.
 - **E phase 1 → E phase 2**, enforced in the runner (REQ-E-04).
@@ -975,7 +978,7 @@ after I (one engine version, silver mounted in CI). Design B to call only Make t
 survives either order — which is REQ-B-03's second payoff.
 
 **Near-cycle, called out:** A-compute wants TLS (H2); H2's shape depends on A-compute. Broken by
-putting the *decision* in W0 and both *implementations* downstream. If ADR-A1/A2 stall, A-inv
+putting the *decision* in W0 and both *implementations* downstream. If DEC-A1/A2 stall, A-inv
 still ships and H1 still ships; A-compute and H2 stall together.
 
 ### 5.2 Legs and declared paths (ADR-0009, DS-13)
@@ -1035,7 +1038,7 @@ each wave, which collects the invalidated claims from that wave's legs. The cost
 updates lag their code by one leg — which violates the letter of
 `.claude/rules/pre-pr-discipline.md` ("fix the ones that do not hold **in the same PR**"). That
 is a real conflict between two repo rules, and it needs the Captain's call, not mine. It is
-ADR-I2 in §9.
+DEC-I2 in §9.
 
 ---
 
@@ -1094,7 +1097,7 @@ found.
 |---|---|---|
 | **A — invariant parts** | `release.yml` on `push: main` pushes SHA-tagged, signed images. Additive; nothing consumes them yet, so the first weeks are provenance accumulating with no risk. | Revert the workflow. Published images are immutable and harmless. |
 | **A — migration runner** | Add `migrations/` + `migrate.sh`; re-point `init.d` at the same files; prove `make up` and `rust-ci / integration` unchanged **before** anything depends on it. | Revert; `init.d` returns to standalone files. No data touched (all DDL is `IF NOT EXISTS`). |
-| **A — compute** | **Partly undefined until ADR-A1.** Invariant to the choice: DDL migration job → collector → generator job → flow-ui last (REQ-A-11, DS-05). Variant: whether "roll" means a Cloud Run revision split, a k8s rolling update, or `docker compose up` on a VM. **Blue/green, canary and rolling cannot be chosen before the orchestrator is** — `core-intent.md §6` is right about that and this spec does not pretend otherwise. | Re-point the previous image digest (REQ-A-01/A-07 is what makes this possible for the first time). **DDL rollback is the unsolved half**: a forward-only runner has no `down` step. The honest position is that bronze/silver changes in this cycle are **additive only** (REQ-D-08), so rollback is "deploy the old image against the new schema", which works for additive DDL and for nothing else. A genuine down-migration story is out of scope and should be an ADR when the first destructive change is proposed. |
+| **A — compute** | **Partly undefined until DEC-A1.** Invariant to the choice: DDL migration job → collector → generator job → flow-ui last (REQ-A-11, DS-05). Variant: whether "roll" means a Cloud Run revision split, a k8s rolling update, or `docker compose up` on a VM. **Blue/green, canary and rolling cannot be chosen before the orchestrator is** — `core-intent.md §6` is right about that and this spec does not pretend otherwise. | Re-point the previous image digest (REQ-A-01/A-07 is what makes this possible for the first time). **DDL rollback is the unsolved half**: a forward-only runner has no `down` step. The honest position is that bronze/silver changes in this cycle are **additive only** (REQ-D-08), so rollback is "deploy the old image against the new schema", which works for additive DDL and for nothing else. A genuine down-migration story is out of scope and should be an ADR when the first destructive change is proposed. |
 | **B** | Land both workflows **non-required**; watch one week of real PRs; then set required (REQ-B-10). Promoting a gate before its flake rate is known is how teams learn to bypass gates. | Un-require the check; delete the workflow. Zero runtime impact. |
 | **D** | DDL is additive (`IF NOT EXISTS`, new objects only, REQ-D-08). On a fresh volume it arrives via `init.d`; on an existing one via `migrate.sh`. The rollups are empty until ingest or E runs — and **that empty state is correct and visible**, not a failure. | `DROP` the new objects; re-point `metric_rollup_1m` at its original `VIEW` body. No existing table altered, so nothing to undo. |
 | **E** | **Per-partition, oldest first, closed partitions only.** Observe one partition end to end before the loop. flow-ui needs no deploy coordination: the coverage check flips each board over on its own as coverage grows, so there is no cutover moment and no history gap (REQ-E-06). | **Per-partition and genuinely safe**, which is the design's main virtue: a bad partition is re-swapped from a corrected recompute, because the content is a pure function of bronze (§4.E.1). flow-ui falls back to bronze automatically while silver coverage is short. The irreversible case is a backfill of the **live** partition racing the MV — hence REQ-E-01's default excluding it. |
@@ -1112,12 +1115,12 @@ own attempt to break the plan. It is not reassuring, by design.
 **R-01 — Excluding Candidate C while raising seven ADRs is the most likely way this stalls.**
 Six of seven existing ADRs are `Proposed`, the oldest since 2026-06 (`docs/adr/`, `CLAUDE.md`
 drift table). The team's demonstrated ADR throughput is approximately **zero ratifications per
-quarter**. This plan's W0 is four ADRs, two of which (`ADR-A2` ClickHouse ownership,
-`ADR-I2` the pre-PR-discipline conflict) require the Captain *and* Commander. If W0 does not
+quarter**. This plan's W0 is four ADRs, two of which (`DEC-A2` ClickHouse ownership,
+`DEC-I2` the pre-PR-discipline conflict) require the Captain *and* Commander. If W0 does not
 clear, W1's four parallel lanes shrink to **two** (B and I+H1), and A and D/E do not start at
 all. This is not a technical risk; it is the plan's single largest schedule risk and it was
 created by the scope selection. **The mitigation is to run W0 as one sync agenda item, not four
-documents** — and to accept that `ADR-A2` is really a staffing request.
+documents** — and to accept that `DEC-A2` is really a staffing request.
 
 **R-02 — [V-1] chained materialized views. I could not verify it and the whole of D rests on it.**
 `metric_stats_1m_mv`, `volume_1m` and `resource_key_presence_1m` all read *silver* base tables
@@ -1163,7 +1166,7 @@ Four lanes in W1 look parallel; three of them want the same 99-line Makefile, pl
 non-owning legs must either defer their Make target to the next wave or coordinate a
 cross-leg edit, which is precisely what ADR-0009's disjointness rule forbids. And it puts the
 plan in direct conflict with `.claude/rules/pre-pr-discipline.md`'s "fix it in the same PR".
-**Two repo rules collide here and this plan cannot resolve it** — see ADR-I2.
+**Two repo rules collide here and this plan cannot resolve it** — see DEC-I2.
 
 **R-07 — flow-ui's three migrated queries lose their measured justification.**
 Each of `contract_violations`, `volume_band` and `call_edges` carries a docstring recording the
@@ -1211,13 +1214,13 @@ singly owned; contracts are jointly owned by the Pods on both sides").
 
 | ADR | Question | Options | Owner |
 |---|---|---|---|
-| **ADR-A1** | What compute form hosts the three Sentinel services? | Cloud Run (services + Jobs) · GKE Autopilot · GKE Standard · GCE VMs + Compose | **Captain / Commander** — crosses all Pods; no Pod owns deployment today |
-| **ADR-A2** | **Who owns ClickHouse operationally, and is it managed or self-hosted?** The ownership question gates the technology one, not the reverse. | Assign an owner + self-host (GKE operator / GCE VM) · buy ownership via managed ClickHouse · leave unassigned and do not deploy storage | **Commander** — `docs/proposals/canonical-read-schema.md:123` and `.claude/CLAUDE.md` both record this as unassigned; it is a staffing decision |
-| **ADR-A3** | What applies ClickHouse DDL in a deployed environment? | Bespoke ordered-SQL runner (§4.A.3) · an off-the-shelf migration tool · managed-provider tooling · keep `init.d` and accept no non-destructive path | **Pod 3** (bronze/silver DDL owner, DS-09) with Pod 2 consulted |
-| **ADR-A4** | Does the collector terminate TLS itself, or does the platform? Consequence: whether DS-04/NFR-02's pure-Rust static-musl property survives. | Edge termination (recommended) · in-process `rustls` + a crypto provider · TLS-terminating sidecar | **Pod 2** — it owns the collector and `deny.toml` |
-| **ADR-I1** | One ClickHouse version, one service definition — and is deleting `services/generator-python/docker-compose.yaml` acceptable? | 25.4 everywhere + `include:` + delete (recommended) · pin 24.3 · keep the file with a superseded banner and port 8081 | **Pod 1** owns the file; **Pod 3** owns the ClickHouse version |
-| **ADR-I2** | `.claude/rules/pre-pr-discipline.md` says fix invalidated docs **in the same PR**; ADR-0009 says every leg declares **disjoint paths**. `README.md` and `CLAUDE.md` cannot satisfy both under a parallel fleet. Which rule yields? | Per-wave docs leg (this spec's choice) · serialize legs that touch docs · allow a shared-path exception for docs only | **Captain / Commander** — both documents are theirs; this is the same class of amendment ADR-0009 already has pending |
-| **ADR-D1** | Does silver materialise the Sentinel resource keys as typed columns? README §9 item 3 and ADR-0007's trade-offs leave it open; §4.D.2(b)'s key-agnostic `resource_key_presence_1m` deliberately **does not** decide it, and REQ-D-06 depends on it staying undecided in flow-ui's favour. | Keep `Map` probes + a key-agnostic rollup (this spec) · materialise typed columns in silver · materialise in bronze (a contract change → Candidate F territory) | **Pod 3** with **Pod 2** (joint contract owners of the bronze read boundary) |
+| **DEC-A1** | What compute form hosts the three Sentinel services? | Cloud Run (services + Jobs) · GKE Autopilot · GKE Standard · GCE VMs + Compose | **Captain / Commander** — crosses all Pods; no Pod owns deployment today |
+| **DEC-A2** | **Who owns ClickHouse operationally, and is it managed or self-hosted?** The ownership question gates the technology one, not the reverse. | Assign an owner + self-host (GKE operator / GCE VM) · buy ownership via managed ClickHouse · leave unassigned and do not deploy storage | **Commander** — `docs/proposals/canonical-read-schema.md:123` and `.claude/CLAUDE.md` both record this as unassigned; it is a staffing decision |
+| **DEC-A3** | What applies ClickHouse DDL in a deployed environment? | Bespoke ordered-SQL runner (§4.A.3) · an off-the-shelf migration tool · managed-provider tooling · keep `init.d` and accept no non-destructive path | **Pod 3** (bronze/silver DDL owner, DS-09) with Pod 2 consulted |
+| **DEC-A4** | Does the collector terminate TLS itself, or does the platform? Consequence: whether DS-04/NFR-02's pure-Rust static-musl property survives. | Edge termination (recommended) · in-process `rustls` + a crypto provider · TLS-terminating sidecar | **Pod 2** — it owns the collector and `deny.toml` |
+| **DEC-I1** | One ClickHouse version, one service definition — and is deleting `services/generator-python/docker-compose.yaml` acceptable? | 25.4 everywhere + `include:` + delete (recommended) · pin 24.3 · keep the file with a superseded banner and port 8081 | **Pod 1** owns the file; **Pod 3** owns the ClickHouse version |
+| **DEC-I2** | `.claude/rules/pre-pr-discipline.md` says fix invalidated docs **in the same PR**; ADR-0009 says every leg declares **disjoint paths**. `README.md` and `CLAUDE.md` cannot satisfy both under a parallel fleet. Which rule yields? | Per-wave docs leg (this spec's choice) · serialize legs that touch docs · allow a shared-path exception for docs only | **Captain / Commander** — both documents are theirs; this is the same class of amendment ADR-0009 already has pending |
+| **DEC-D1** | Does silver materialise the Sentinel resource keys as typed columns? README §9 item 3 and ADR-0007's trade-offs leave it open; §4.D.2(b)'s key-agnostic `resource_key_presence_1m` deliberately **does not** decide it, and REQ-D-06 depends on it staying undecided in flow-ui's favour. | Keep `Map` probes + a key-agnostic rollup (this spec) · materialise typed columns in silver · materialise in bronze (a contract change → Candidate F territory) | **Pod 3** with **Pod 2** (joint contract owners of the bronze read boundary) |
 
 Also noted, not new ADRs but prerequisites this plan inherits: **ADR-0007's Pod 3 sign-off** is
 what moves the Pod 2 → Pod 3 read contract from "agreed boundary" to accepted, and every one of
