@@ -328,10 +328,11 @@ green individually, used deliberately and once.
 **Does** Makes repo invariants executable, and gives every later ticket a place to add its own
 assert **as a new file** so no two legs edit the same one — the prefactor that makes T16, T29 and
 T44's asserts cheap instead of a path collision.
-**Proof** `bash scripts/ci/run-invariants.sh` → exit 0 for `04`/`05` today
-(`grep -rn "INSERT\|ALTER TABLE\|CREATE TABLE" services/flow-ui/src/flow_ui/` → no hits **[E]**);
-`01`/`02`/`03` are authored to the **post-T15** state and fail until then — land them
-`continue-on-error: true` and flip the flag in T15. Negative proof per assert, each reverted: a
+**Proof** `bash scripts/ci/run-invariants.sh` → `05` passes today; `01`/`02`/`03` are authored to
+the **post-T15** state and `04` to the **post-T19** state, so they fail until those tickets land.
+The harness exits non-zero while any assert fails; land it `continue-on-error: true` and flip the
+flag in T15. (`grep -rn "INSERT\|ALTER TABLE\|CREATE TABLE" services/flow-ui/src/flow_ui/` → no
+hits **[E]**.) Negative proof per assert, each reverted: a
 second `image: clickhouse/clickhouse-server:` line; a renamed service; `8080:8080` published
 twice; `otelgen_secret` in a scratch file; `await self._query("INSERT INTO x VALUES")` in
 `clickhouse.py` → each exits non-zero naming the file.
