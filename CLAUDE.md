@@ -84,3 +84,19 @@ Pod 2's Rust collector is verified end-to-end on `main`: generator → OTLP `:43
 | ADR-0009 amends the WoW's "squash-merge to main" rule | `docs/adr/0009-agentic-gitflow.md` | Captain / Commander |
 
 Historical records under `docs/research/`, `docs/proposals/`, `docs/clickhouse-schema-divergence*.md` and `.claude/sdd/` are point-in-time artifacts — they mention the Go collector by design. Don't "fix" them; they carry a superseded banner.
+
+## Agent skills
+
+Per-repo configuration for the engineering skills, written by `/setup-matt-pocock-skills`.
+
+### Issue tracker
+
+Issues live in GitHub Issues on `luanmorenommaciel/sentinel`, driven by the `gh` CLI — propose, never create unprompted. See [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+The five canonical triage roles, label strings unchanged (`needs-triage` · `needs-info` · `ready-for-agent` · `ready-for-human` · `wontfix`). See [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Single-context: one root `CONTEXT.md` (not yet written) plus the shared `docs/adr/`; ADRs are history, so conflicts get flagged, not rewritten. See [`docs/agents/domain.md`](docs/agents/domain.md).
