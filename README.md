@@ -263,7 +263,22 @@ This workload met the collector health gates: no signal loss, no contract reject
 
 ### Delivery path and SDLC hardening (`sdlc-e2e-review` cycle)
 
-This cycle hardened how the pipeline is built, checked and published rather than what it computes. The ticket registry is [`plan/core-plan.md`](plan/core-plan.md). Landed, with its limits stated:
+This cycle hardened how the pipeline is built, checked and published rather than what it computes. The ticket registry is [`plan/core-plan.md`](plan/core-plan.md).
+
+**15 of 48 tickets are done. 33 remain, and none of them is startable.** Every remaining ticket sits behind a Wave 0 decision — this is the plan's own frontier order (`plan/core-plan.md` §3), not an estimate. T35 was the last ticket whose blockers were all clear, which is why the queue stops where it does.
+
+| Remaining | Tickets | Count | Waiting on |
+|---|---|---:|---|
+| Compose unification, roles/auth, CI gates | T12–T21 | 10 | **DEC-I1** |
+| Pod 3 silver read models | T25–T29 | 5 | T16 + T20 → DEC-I1 |
+| Backfill runner | T30–T34 | 5 | T19 + **DEC-A2** |
+| flow-ui dual-source boards | T36–T39 | 4 | T27 / T28 / T29 → DEC-I1 |
+| Deploy, TLS, edge auth, secrets | T40–T44 | 5 | **DEC-A1**, **DEC-A2**, **DEC-A4** |
+| Docs legs | T45–T48 | 4 | **DEC-I2** (+ their waves) |
+
+So the remaining work is **six decisions, not thirty-three tickets**. [DEC-I1](plan/decisions/DEC-I1.md) alone gates 26 of them, and as of 2026-10-06 it has no open residual — its last one dissolved when ClickHouse Cloud turned out to expose no engine-version pin at all, which separates the repo pin (ours, decidable now) from the deployed engine version (a moving fact, DEC-A2's problem). Of the eight `DEC-*` items, DEC-V3a is folded into DEC-I1 and DEC-D1 is deliberately left open until T28, leaving six that need a human: **I1, A1, A2, A3, A4, I2**. The plan's advice is to run them as one sync agenda item rather than eight documents.
+
+Landed, with its limits stated:
 
 | Area | Landed | Limit |
 |---|---|---|
