@@ -11,7 +11,7 @@ DURATION  ?= 60s
 STEP      ?= 1s
 RATE      ?= 200
 
-.PHONY: help up init generate generate-stream ui e2e down reset logs ps \
+.PHONY: help up init migrate generate generate-stream ui e2e down reset logs ps \
         build test test-generator test-collector-rust test-flow-ui \
         test-generator-integration audit-python \
         test-silver sample-silver lint lint-generator lint-collector-rust lint-flow-ui
@@ -38,6 +38,19 @@ up:                  ## Start ClickHouse + the Rust collector
 
 init:                ## No-op: the canonical bronze schema auto-applies on ClickHouse boot
 	@echo "Rust → canonical bronze schema (bronze.*) auto-applies on ClickHouse boot via infra/clickhouse/init.d/; nothing to apply"
+
+# One operator interface for the runner (REQ-B-03): CI invokes this target, and
+# never a re-declared `migrate.sh` command line. `CH_CLIENT` is injected rather
+# than guessed because getting it wrong migrates the wrong database — and it
+# carries no `--multiquery` (the script appends that itself) and no credential
+# (`ps` shows an argv to every user on the box; the script reads
+# `CLICKHOUSE_PASSWORD` instead).
+#
+# The service name is literally `clickhouse`, as at `:80` — REQ-I-07 depends on
+# that name surviving the Compose unification in T12–T15.
+migrate:             ## Apply ClickHouse DDL migrations, recording each in _meta.schema_migrations
+	CH_CLIENT="docker compose exec -T clickhouse clickhouse-client" \
+		bash infra/clickhouse/migrate.sh
 
 generate:            ## Run the generator → OTLP :4317 (SCENARIO / SEED / WINDOW configurable)
 	docker compose run --rm generator \
