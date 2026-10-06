@@ -87,13 +87,67 @@ cosign verify "$IMG@$D" \
 > registry** — no registry, project or WIF provider exists yet. Confirm on the first
 > publish and correct this section.
 
+## Vulnerability scanning (REQ-H-12)
+
+`release.yml` scans each image by digest, between the push and the signature, and is
+**warn-only**: `exit-code: "0"` is the single flag to flip. The same warn-then-promote
+reasoning as REQ-B-07 applies — a base image acquires a new CVE with no change from us,
+so a gate that is blocking on day one turns unrelated pushes red and gets switched off.
+Promotion to blocking, and the severity threshold that blocks, are policy and belong to
+T21's required-check set.
+
+> **It does not gate the push, despite REQ-H-12's wording.** The scan runs *after*
+> `push: true`, so by the time a finding is printed the bytes are already in the registry.
+> A multi-arch manifest cannot be `load`ed into the runner's daemon to be scanned before
+> pushing, so the pre-push scan REQ-H-12 literally asks for is not available in this shape.
+> Two honest options when the gate flips: push the SHA tag only, scan, then apply the
+> channel tags on a clean result; or leave the push ungated and gate the **promotion** hop
+> below, which is where an unscanned image is actually stopped from reaching an
+> environment. Unresolved — it is a policy call, not a test.
+
+## Promotion by digest (REQ-A-07)
+
+`main` → `:staging`, a `v*` tag → `:prod`. The `promote` job contains no build step; it
+re-points a channel tag at a digest that already exists:
+
+```sh
+crane tag "$IMG@$D" staging
+```
+
+Before it moves anything it runs `cosign verify` on the source digest, so an unsigned
+digest fails **before** a tag moves — the publish-side half of REQ-A-02. After it moves,
+it re-reads the tag and asserts the digest is unchanged; digest equality is the whole
+assertion.
+
+**A tag push sources prod from `:staging`, not from its own build.** A `v*` push re-runs
+`publish`, and that rebuild is not guaranteed bit-reproducible — `provenance: mode=max`
+plus a warm `type=gha` cache can land on a different digest for the same commit. Sourcing
+prod from the SHA tag would then promote bytes that never sat in staging. The job
+cross-checks `crane digest "$IMG:staging"` against `crane digest "$IMG:<sha>"` and fails
+loudly on a mismatch rather than swapping silently.
+
+Verifying a promotion by hand:
+
+```sh
+D1=$(crane digest "$IMG:<git-sha>")
+D2=$(crane digest "$IMG:prod")
+[ "$D1" = "$D2" ] && echo same-bytes
+```
+
+> **Unverified.** No registry, project or WIF provider exists yet, so neither the promote
+> job nor the `crane tag` idiom has run against a real Artifact Registry. Two things to
+> confirm on the first real run: that `crane tag` moves a tag on a **multi-arch index**
+> as expected, and that the rebuild-on-tag mismatch described above is real rather than
+> theoretical. If rebuilds turn out to be reproducible, the cross-check becomes redundant
+> — delete it rather than leaving a check nobody can trip.
+
 ## Not here yet
 
-- **Promotion staging→prod by digest** — T23. Re-tags by digest, never rebuilds;
-  per-environment differences will live only in `infra/deploy/config/<env>/`.
-- **Vulnerability scanning as the push gate** — T24 (REQ-H-12).
-- **Signature verification before admission** — the admission half of REQ-A-02 is only
-  provable once a platform exists, and is asserted in T40 behind DEC-A1.
+- **Signature verification before admission** — the *admission* half of REQ-A-02 is only
+  provable once a platform exists, and is asserted in T40 behind DEC-A1. The promote job
+  above covers the publish-side half only: nothing yet stops a deployer naming an
+  unverified digest directly.
+- **The contents of `config/<env>/`** — the location is decided, the shape is T40's.
 
 ## Why there is no `make` target
 
