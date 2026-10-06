@@ -26,12 +26,25 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-# Published host ports of one Compose file, one per line. `docker compose config`
-# normalises every short-form mapping to long form, so one grep covers all shapes.
-published_ports() {
+# Merged config of one Compose file, or non-zero with the error on stdout.
+#
+# Separated from port extraction on 2026-10-06. It used to be one function that
+# swallowed `config` failures with `2>/dev/null`, so an unparseable Compose file
+# produced no ports, no ports produced no duplicates, and the assert printed "no
+# host port published twice" and exited 0. Measured: a file with broken YAML
+# passed. A check that cannot tell "clean" from "could not be evaluated" is
+# indistinguishable from no check, so the failure is now loud — the same reason
+# the image scan in release.yml carries no `continue-on-error`.
+compose_config() {
     local path="$1"
-    (cd "$(dirname "$path")" && docker compose -f "$(basename "$path")" config 2>/dev/null) |
-        grep -E '^[[:space:]]*published:' |
+    (cd "$(dirname "$path")" && docker compose -f "$(basename "$path")" config 2>&1)
+}
+
+# Published host ports from merged config text, one per line. `docker compose
+# config` normalises every short-form mapping to long form, so one grep covers
+# all shapes.
+ports_of() {
+    grep -E '^[[:space:]]*published:' |
         sed -E 's/.*published:[[:space:]]*"?([0-9]+)"?.*/\1/'
 }
 
@@ -40,7 +53,13 @@ rc=0
 # (a) intra-file duplicates
 while IFS= read -r path; do
     rel="${path#"$ROOT"/}"
-    dupes="$(published_ports "$path" | sort | uniq -d)"
+    if ! cfg="$(compose_config "$path")"; then
+        echo "docker compose config failed for $rel:"
+        printf '%s\n' "$cfg" | sed 's/^/    /'
+        rc=1
+        continue
+    fi
+    dupes="$(printf '%s\n' "$cfg" | ports_of | sort | uniq -d)"
     if [[ -n "$dupes" ]]; then
         echo "$rel publishes the same host port more than once: $(tr '\n' ' ' <<<"$dupes")"
         rc=1
@@ -54,8 +73,18 @@ done < <(
 # (b) the generator Compose file vs the root stack
 GEN="$ROOT/services/generator-python/docker-compose.yaml"
 if [[ -f "$GEN" ]]; then
-    root_ports="$(published_ports "$ROOT/docker-compose.yml" | sort -u)"
-    gen_ports="$(published_ports "$GEN" | sort -u)"
+    if ! root_cfg="$(compose_config "$ROOT/docker-compose.yml")"; then
+        echo "docker compose config failed for docker-compose.yml:"
+        printf '%s\n' "$root_cfg" | sed 's/^/    /'
+        exit 1
+    fi
+    if ! gen_cfg="$(compose_config "$GEN")"; then
+        echo "docker compose config failed for services/generator-python/docker-compose.yaml:"
+        printf '%s\n' "$gen_cfg" | sed 's/^/    /'
+        exit 1
+    fi
+    root_ports="$(printf '%s\n' "$root_cfg" | ports_of | sort -u)"
+    gen_ports="$(printf '%s\n' "$gen_cfg" | ports_of | sort -u)"
     overlap="$(comm -12 <(echo "$root_ports") <(echo "$gen_ports"))"
     if [[ -n "$overlap" ]]; then
         echo "services/generator-python/docker-compose.yaml collides with the root stack on host port(s): $(tr '\n' ' ' <<<"$overlap")"
