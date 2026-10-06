@@ -1,0 +1,1 @@
+Take our `/intent/[ore-intent.md` and `/spec/core-spec.md` files and use the `/to-tickets` skill to generate a structured `/plan/core-plan.md` file. Detail exact target file locations, step-by-step task execution order, global constraints, and specific test-based proof-of-completion criteria for each task.
