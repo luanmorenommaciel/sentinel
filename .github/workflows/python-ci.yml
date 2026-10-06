@@ -1,0 +1,88 @@
+# Python CI for Pod 1's generator and flow-ui (issue #34).
+#
+# These gates were never written: `mypy` appears zero times in the repository and
+# flow-ui had no `[tool.ruff]`, so `make lint-flow-ui` ran bare ruff defaults
+# (88 columns, E+F) over src tests scripts. This workflow authors the two gates
+# engineering can author on its own — ruff and pytest — across the interpreters
+# the two packages declare.
+#
+# Everything here calls a Make target and nothing else (REQ-B-03). A command
+# re-declared in YAML is a command that drifts from the one the team runs
+# locally; `PYTHON_IMAGE` exists precisely so the matrix can sweep interpreters
+# without a second copy of the pytest invocation.
+#
+# Deliberately NOT here, and why: `mypy --strict`, a coverage floor, and
+# promotion of the supply-chain job to required are not engineering calls —
+# nine documents assert seven gates that have never existed (SPEC §12.4), so
+# they go to DEC-I2's sync. See docs/ci-gates.md (T21) for the required-check set.
+#
+# Path-filtered on the same polyglot-monorepo rule as rust-ci.yml: a Rust-only
+# or docs-only PR does not trigger Python builds. The matching Rust lint fix —
+# `-- -D warnings` on `make lint-collector-rust`, without which
+# `expect_used = "warn"` is silently un-denied — lands in the Makefile with this
+# ticket and runs in rust-ci.yml's `gates` job, not here.
+
+name: python-ci
+
+on:
+  pull_request:
+    paths:
+      - "services/generator-python/**"
+      - "services/flow-ui/**"
+      - "contracts/generator/v1/**"
+      - "Makefile"
+      - ".github/workflows/python-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/generator-python/**"
+      - "services/flow-ui/**"
+      - "contracts/generator/v1/**"
+      - "Makefile"
+      - ".github/workflows/python-ci.yml"
+
+concurrency:
+  group: python-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── ruff over both packages ───────────────────────────────────────────────
+  # One job, not one per package: ruff is version-independent (it runs from its
+  # own pinned container image, not the interpreter under test), so sweeping it
+  # across the matrix would buy three identical results.
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generator lint
+        run: make lint-generator
+
+      - name: flow-ui lint
+        run: make lint-flow-ui
+
+  # ── pytest across the declared interpreters ───────────────────────────────
+  test:
+    name: test (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    env:
+      PYTHON_IMAGE: python:${{ matrix.python }}-slim
+    steps:
+      - uses: actions/checkout@v4
+
+      # The generator declares requires-python >=3.10, so every cell runs it.
+      - name: Generator unit tests
+        run: make test-generator
+
+      # flow-ui declares >=3.11. Running it on 3.10 fails at `pip install -e .`
+      # with "requires a different Python" — correct behaviour, not a gate, so
+      # the cell is skipped rather than expected-to-fail. This is the first time
+      # that floor is exercised at all.
+      - name: flow-ui unit tests
+        if: matrix.python != '3.10'
+        run: make test-flow-ui

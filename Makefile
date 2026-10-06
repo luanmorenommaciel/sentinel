@@ -18,11 +18,18 @@ RATE      ?= 200
 # Docker runner for per-service build/test/lint — no host toolchains required.
 DK_RUN := docker run --rm --user $(shell id -u):$(shell id -g) -v "$(CURDIR)":/w
 
+# The Python image the test targets run in. Overridable so CI can sweep the
+# supported interpreters against one Make target rather than re-declaring the
+# command per version (REQ-B-03): `PYTHON_IMAGE=python:3.10-slim make test-generator`.
+# The generator declares >=3.10 and flow-ui >=3.11, so 3.10 is expected to FAIL
+# for flow-ui — that floor is only testable because the image is a variable.
+PYTHON_IMAGE ?= python:3.12-slim
+
 help:                ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "  SCENARIO=$(SCENARIO)  SEED=$(SEED)  WINDOW=$(WINDOW)"
+	@echo "  SCENARIO=$(SCENARIO)  SEED=$(SEED)  WINDOW=$(WINDOW)  PYTHON_IMAGE=$(PYTHON_IMAGE)"
 	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)   (generate-stream)"
 
 up:                  ## Start ClickHouse + the Rust collector
@@ -76,7 +83,7 @@ sample-silver:          ## Print representative rows from the Silver models
 
 test-generator:      ## Generator unit tests (pytest)
 	$(DK_RUN) -w /w/services/generator-python -e HOME=/tmp -e CONTRACTS_DIR=/w/contracts/generator/v1 \
-		python:3.12-slim bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest jsonschema && /tmp/v/bin/python -m pytest tests/unit -q"
+		$(PYTHON_IMAGE) bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest jsonschema && /tmp/v/bin/python -m pytest tests/unit -q"
 
 test-collector-rust: ## Rust collector tests (cargo test; live-ClickHouse tests are #[ignore]d)
 	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \
@@ -86,7 +93,7 @@ lint: lint-generator lint-collector-rust lint-flow-ui  ## Lint all services
 
 test-flow-ui:        ## flow-ui unit tests (pytest)
 	$(DK_RUN) -w /w/services/flow-ui -e HOME=/tmp \
-		python:3.12-slim bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest && /tmp/v/bin/python -m pytest tests -q"
+		$(PYTHON_IMAGE) bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest && /tmp/v/bin/python -m pytest tests -q"
 
 lint-flow-ui:        ## flow-ui lint (ruff)
 	$(DK_RUN) -w /w/services/flow-ui ghcr.io/astral-sh/ruff:latest check src tests scripts
@@ -96,4 +103,4 @@ lint-generator:      ## Python lint (ruff)
 
 lint-collector-rust: ## Rust fmt check + clippy
 	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \
-		rust:1.96 bash -c "cargo fmt --check && cargo clippy --locked"
+		rust:1.96 bash -c "cargo fmt --check && cargo clippy --locked -- -D warnings"
