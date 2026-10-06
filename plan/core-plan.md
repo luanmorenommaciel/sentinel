@@ -375,7 +375,11 @@ recorded E2E snapshot is arm64 **[E]**. Independent of whether TLS ships — seq
 **Proof** `docker buildx build --platform linux/amd64,linux/arm64 services/collector-rust` → both
 manifests, exit 0. Per target,
 `cargo build --release --features tls-spike --target {x86_64,aarch64}-unknown-linux-musl` → exit 0
-and `file target/<t>/release/collector | grep -q "statically linked"` → exit 0 for **both**. Then
+and `file target/<t>/release/collector | grep -qE "statically linked|static-pie linked"` → exit 0
+for **both**. Both spellings are static — measured 2026-10-06, aarch64 reports `statically linked`
+and x86_64 reports `static-pie linked`, a position-independent static executable with no dynamic
+loader — so matching only the first reported a false negative on x86_64 for a binary that is
+genuinely static. Fixed in `rust-ci.yml` at the same time. Then
 `cargo deny check --all-features` → exit 0, or a named licence needing a reviewed `deny.toml` entry.
 **Judgement** Whether to **accept** the trade is DEC-A4's and is not test-provable: a crypto
 provider breaks `Dockerfile:3-6`'s no-`*-sys`/OpenSSL/ring claim, which `core-intent.md §5` calls
@@ -514,8 +518,10 @@ why T16 and T19 are blocked on this ticket)
 **`default` reverts to localhost-only here**, so the collector's export breaks until T18 — green as
 a Compose-config change, runtime green deferred to T19 on `swim/infra/ch-posture` (§4).
 **Proof** `docker compose config` → exit 0 with exactly one service named `clickhouse` carrying the
-T12 image and both DDL mounts. `grep -c "image: clickhouse/clickhouse-server" docker-compose.yml` →
-0. `bash scripts/ci/run-invariants.sh` → `02-service-named-clickhouse.sh` passes.
+T12 image and both DDL mounts. `grep -cE '^[[:space:]]*image:[[:space:]]*.?clickhouse/(clickhouse-server|clickstack-all-in-one)[:@]' docker-compose.yml`
+→ 0 — the alternation and the anchor both matter, and assert 01 was corrected the same way on
+2026-10-06: `clickstack-all-in-one` bundles a ClickHouse server, so matching only
+`clickhouse-server` would call the file clean while it pinned a second ClickHouse version. `bash scripts/ci/run-invariants.sh` → `02-service-named-clickhouse.sh` passes.
 
 ### T14 — CI Compose → `include:` + silver mount + drop env route *(migrate batch 2)*
 **Leg** `leg/infra/clickhouse-unify-v1` · **Blocked by** T12, T09 · **REQ** I-03, I-04, I-08, B-12, B-14 · **Seam** S1
@@ -1117,8 +1123,13 @@ owned by the container's non-root user) · ~`infra/deploy/config/<env>/*.secret.
 which this proof asked for until 2026-10-06, counts an occurrence of the *filename* and says
 nothing about whether the secret's **value** is also in the output. A leak would not change that
 count.
-`<platform> logs <collector> | grep -ci "password\|secret"` → `0`.
-`crane export <digest> - | tar -t | grep -c secrets` → `0` (no secret in any image layer).
+`<platform> logs <collector> | grep -c -F "$(cat /run/secrets/ch_password)"` → `0` — the
+secret's **value**, as in T18: `grep -ci "password\|secret"` → 0 passes a log that prints the
+credential without using either word, and fails one that merely says "reading password_file".
+`crane export <digest> - | tar -xO | grep -c -F "$(cat /run/secrets/ch_password)"` → `0` — no
+secret **value** in any image layer. `tar -t | grep -c secrets` → 0, which this proof asked for
+until 2026-10-06, only counts path components named `secrets`: it is satisfied by an image that
+embeds the credential in any file not called that, which is every realistic leak.
 `bash scripts/ci/invariants.d/04-no-plaintext-secrets.sh`, extended to fail on any file under
 `infra/secrets/` that is not `*.example` → exit 0, with a committed non-example file as the
 negative proof.
