@@ -475,6 +475,42 @@ class ClickHouse:
         "run_summary": ("per run", "services, traces, operations, errors"),
     }
 
+    async def silver_coverage(self) -> dict[str, float]:
+        """Oldest row per silver base table, as a unix timestamp.
+
+        This probe drives the dual-source decision: a board reads silver only when silver's
+        history reaches back past the window it needs. Measured against `now`, it is one
+        query on the slow lane (contract cadence, 30 s) and never per board per tick.
+
+        Returns `{table_name: min(event_time)}` in unix timestamp format. Empty on any
+        failure, which degrades the dual-source decision rather than erroring.
+        """
+        out: dict[str, float] = {}
+        try:
+            # `HAVING count() > 0` is what keeps an empty-but-existing table out of the
+            # result. Without it `min(event_time)` on an empty table returns the DateTime
+            # epoch, which `toUnixTimestamp` renders as 0 — and a coverage of 0 reads as
+            # "silver reaches back to 1970", so every board would choose silver and draw
+            # nothing. No rows must mean no coverage, the same answer an absent `silver`
+            # gives, or REQ-E-14's degrade-to-bronze inverts exactly when silver is empty.
+            sql = "\nUNION ALL\n".join(
+                f"SELECT '{t}' AS tbl, toUnixTimestamp(min(event_time)) AS oldest "
+                f"FROM silver.{t} HAVING count() > 0"
+                for t in self.SILVER_MODELS
+            )
+            sql += " FORMAT TSV"
+            for line in (await self._query(sql)).splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    tbl, ts = line.split("\t")
+                    out[tbl] = float(ts)
+                except (ValueError, IndexError):
+                    continue
+        except httpx.HTTPError as exc:
+            log.debug("silver coverage unavailable: %s", exc)
+        return out
+
     async def silver_graph(self) -> dict:
         """Every object in `silver`, what kind it is, and what it reads — from ClickHouse.
 

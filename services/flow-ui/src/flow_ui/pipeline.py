@@ -212,6 +212,12 @@ class Snapshot:
     #: MVs do not `POPULATE` and only see inserts made after the DDL was applied.
     silver: dict = field(default_factory=dict)
 
+    #: Oldest row per silver base table, as a unix timestamp. Drives the dual-source
+    #: decision: a board reads silver only when silver's history reaches back past the window
+    #: it needs. Probed on the 30 s lane and defaulting to empty on any failure, which
+    #: degrades to bronze rather than erroring.
+    silver_coverage: dict[str, float] = field(default_factory=dict)
+
     #: Per-producer latency and error rate, read from `silver.service_health_1m`. The first
     #: thing this service reads out of Silver rather than deriving from Bronze — and an
     #: addition, not a migration: Silver's MVs do not `POPULATE`, so it only knows what
@@ -520,6 +526,15 @@ class Poller:
                 self.latest.contract_violations = await self._ch.contract_violations()
             except Exception as exc:                      # noqa: BLE001 — never kill the loop
                 log.debug("contract refresh failed: %s", exc)
+            # Its own handler, not the one above: the coverage probe shares this lane but
+            # not its fate. Folded into the block above, a failing `contract_violations`
+            # would blank `silver_coverage` and flip every board to bronze for a reason
+            # that has nothing to do with silver.
+            try:
+                self.latest.silver_coverage = await self._ch.silver_coverage()
+            except Exception as exc:                      # noqa: BLE001 — degrade, never raise
+                log.debug("silver coverage refresh failed: %s", exc)
+                self.latest.silver_coverage = {}
             await asyncio.sleep(self._s.contract_interval_s)
 
     async def _run(self) -> None:

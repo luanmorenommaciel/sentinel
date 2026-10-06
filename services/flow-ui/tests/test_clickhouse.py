@@ -202,3 +202,31 @@ def test_the_query_stub_answers_per_statement_and_counts_what_it_was_asked(ch_st
 def _coverage_rows(tsv: str) -> list[tuple[str, int]]:
     return [(parts[0], int(parts[1]))
             for parts in (line.split("\t") for line in tsv.splitlines() if line.strip())]
+
+
+@pytest.fixture
+def coverage(run_query):
+    def _coverage(rows: str | Exception) -> dict[str, float]:
+        return run_query(rows, lambda ch: ch.silver_coverage())
+
+    return _coverage
+
+
+def test_coverage_reads_oldest_row_per_table_as_unix_timestamp(coverage, silver_coverage):
+    """The probe drives the dual-source decision: silver is read only when its history
+    reaches back past the window the board needs."""
+    result = coverage(silver_coverage.covering(window_minutes=60))
+    assert set(result) == set(silver_coverage.tables)
+    assert all(isinstance(v, float) for v in result.values())
+    # All tables have the same oldest timestamp for the test.
+    assert len(set(result.values())) == 1
+
+
+def test_coverage_handles_an_empty_silver(coverage, silver_coverage):
+    """A volume older than the Silver DDL has no rows to report a minimum over."""
+    assert coverage(silver_coverage.absent()) == {}
+
+
+def test_coverage_handles_an_unreachable_clickhouse(coverage):
+    """A probe failure degrades rather than raising, leaving silver_coverage empty."""
+    assert coverage(httpx.ConnectError("refused")) == {}

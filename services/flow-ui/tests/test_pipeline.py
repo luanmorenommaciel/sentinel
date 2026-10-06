@@ -9,6 +9,10 @@ so the two distributions do not overlap on either axis.
 """
 from __future__ import annotations
 
+import asyncio
+
+import httpx
+
 from flow_ui.config import Settings
 from flow_ui.pipeline import (
     MODE_BATCH,
@@ -224,3 +228,97 @@ def test_a_series_no_band_fits_is_unmonitored_rather_than_eight_alerts(band_row)
                            latest=10_000, series=series))
     assert v["state"] == "unmonitored"
     assert "not single-mode" in v["why"]
+
+
+class _LaneStopped(BaseException):
+    """Ends a `while True:` refresh lane after exactly one pass.
+
+    The lanes sleep at the end of every iteration and never return on their own, so
+    awaiting one directly hangs the suite rather than failing it. Raising from the sleep is
+    what ends the pass. `BaseException` is deliberate: a lane whose sleep later moves
+    inside its `except Exception` must not be able to swallow the stop and hang again.
+    """
+
+
+def _one_pass(lane, monkeypatch) -> None:
+    """Run one iteration of a refresh lane, stopping at its first sleep."""
+    async def _stop(_delay: float) -> None:
+        raise _LaneStopped
+
+    monkeypatch.setattr(asyncio, "sleep", _stop)
+    try:
+        asyncio.run(lane())
+    except _LaneStopped:
+        pass
+
+
+def test_the_contract_lane_populates_silver_coverage(ch_stub, silver_coverage, monkeypatch):
+    """One pass of the 30 s lane leaves the probe's answer on the snapshot."""
+    ch, _stub = ch_stub({"min(event_time)": silver_coverage.covering(window_minutes=60)})
+    p = poller()
+    p._ch = ch
+
+    _one_pass(p._refresh_contract, monkeypatch)
+
+    assert set(p.latest.silver_coverage) == set(silver_coverage.tables)
+    assert all(isinstance(v, float) for v in p.latest.silver_coverage.values())
+
+
+def test_a_failing_probe_degrades_to_empty_rather_than_raising(ch_stub, monkeypatch):
+    """REQ-E-14: an unreachable silver degrades the decision, it does not error the lane."""
+    ch, _stub = ch_stub(httpx.ConnectError("refused"))
+    p = poller()
+    p._ch = ch
+
+    _one_pass(p._refresh_contract, monkeypatch)
+
+    assert p.latest.silver_coverage == {}
+
+
+def test_a_contract_violations_failure_does_not_blank_silver_coverage(
+    ch_stub, silver_coverage, monkeypatch
+):
+    """The two queries share the lane but not its fate.
+
+    Sharing one `try` would let a failing `contract_violations` blank the coverage map and
+    flip every board to bronze for a reason that has nothing to do with silver.
+
+    The failure here is a `RuntimeError` rather than a connection error on purpose:
+    `contract_violations` already catches `(httpx.HTTPError, ValueError)` and returns `[]`,
+    so an unreachable ClickHouse never reaches the lane's handler and could not show this.
+    Only an unexpected error class escapes that far, which is exactly the case the lane's
+    `except Exception` exists for — and exactly the case that must not take silver with it.
+    """
+    ch, _stub = ch_stub({
+        # `mapContains` is contract_violations' own SQL and appears in no other query;
+        # the coverage probe carries `min(event_time)` and never `mapContains`.
+        "mapContains": RuntimeError("unexpected"),
+        "min(event_time)": silver_coverage.covering(window_minutes=60),
+    })
+    p = poller()
+    p._ch = ch
+
+    _one_pass(p._refresh_contract, monkeypatch)
+
+    assert p.latest.contract_violations == []
+    assert set(p.latest.silver_coverage) == set(silver_coverage.tables)
+
+
+def test_silver_coverage_is_probed_only_on_the_30s_lane(ch_stub, silver_coverage, monkeypatch):
+    """REQ-E-14: one probe per 30 s tick, and none on the 1 s or 5 s lanes.
+
+    An unmatched fragment answers with an empty string, so the other boards' queries need
+    no stubbing here — only the fragment being counted does.
+    """
+    ch, stub = ch_stub({"min(event_time)": silver_coverage.covering(window_minutes=60)})
+    p = poller()
+    p._ch = ch
+
+    asyncio.run(p._tick())
+    assert stub.count_matching("min(event_time)") == 0, "the 1 s lane must not probe"
+
+    _one_pass(p._refresh_lineage, monkeypatch)
+    assert stub.count_matching("min(event_time)") == 0, "the 5 s lane must not probe"
+
+    _one_pass(p._refresh_contract, monkeypatch)
+    assert stub.count_matching("min(event_time)") == 1
