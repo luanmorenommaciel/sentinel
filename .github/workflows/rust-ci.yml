@@ -77,6 +77,31 @@ jobs:
         working-directory: services/collector-rust
         run: cargo test --locked
 
+  # ── temporary evidence for DEC-A4; it must not select a TLS design ───────
+  musl-tls-spike:
+    name: musl TLS spike (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/collector-rust
+      - name: Install pinned toolchain and target
+        working-directory: services/collector-rust
+        run: rustup show
+      - name: Compile static TLS experiment
+        working-directory: services/collector-rust
+        run: cargo build --release --locked --features tls-spike --target ${{ matrix.target }}
+      - name: Verify static linkage
+        working-directory: services/collector-rust
+        run: file target/${{ matrix.target }}/release/sentinel-collector | grep -q "statically linked"
+
   # ── live round-trip against a real ClickHouse ─────────────────────────────
   integration:
     name: integration (ClickHouse round-trip)
@@ -159,6 +184,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: services/collector-rust
+          platforms: linux/amd64,linux/arm64
           push: false
           tags: sentinel-collector:ci
           cache-from: type=gha
