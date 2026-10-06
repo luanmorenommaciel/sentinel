@@ -98,9 +98,17 @@ jobs:
       - name: Compile static TLS experiment
         working-directory: services/collector-rust
         run: cargo build --release --locked --features tls-spike --target ${{ matrix.target }}
+      # Both spellings are static. `file` says "statically linked" for the
+      # aarch64 build and "static-pie linked" for x86_64, which is a
+      # position-independent static executable and no less static — measured
+      # 2026-10-06, both targets, see plan/decisions/DEC-A4.md §4. Matching only
+      # the first spelling reported a false negative on x86_64 for a binary that
+      # has no dynamic loader at all, which would have fed DEC-A4 bad evidence.
       - name: Verify static linkage
         working-directory: services/collector-rust
-        run: file target/${{ matrix.target }}/release/sentinel-collector | grep -q "statically linked"
+        run: |
+          file "target/${{ matrix.target }}/release/sentinel-collector" \
+            | grep -qE "statically linked|static-pie linked"
 
   # ── live round-trip against a real ClickHouse ─────────────────────────────
   #

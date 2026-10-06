@@ -2,7 +2,7 @@
 
 **Owner** Pod 2 · **Unblocks** T42 (and only T42)
 
-Tags: **[M]** measured this session · **[S]** per spec §11.1 · **[D]** document assertion · **[R]** reasoned.
+Tags: **[M]** measured this session · **[S]** per spec §11.1 · **[D]** document assertion · **[R]** reasoned · **[M2]** measured 2026-10-06, T04's spike run locally.
 
 ## 1. The question
 
@@ -31,6 +31,38 @@ Does the collector terminate TLS itself (server TLS on `:4317` and/or client TLS
 - **[M]** `rust-toolchain.toml:17` lists only `x86_64-unknown-linux-musl`; `rust-ci.yml:119-132` builds no arm64. The Dockerfile already maps `TARGETARCH` to each musl triple (`Dockerfile:22-35`), so the image build handles arm64 locally but CI never exercises it (`spec` §4 row 8).
 - **[D]** The recorded E2E snapshot is arm64, so an arm64 TLS failure breaks the team's own machines first (`spec` §10).
 - Which `clickhouse` 0.13 crate feature enables TLS, and which provider it selects, was **not checked**. T04 must record it.
+
+**[M2] T04 has now reported, and the prerequisite is satisfied on both targets.** The brief said
+"do not decide before T04 reports". T04's job (`rust-ci.yml:musl-tls-spike`) landed in this cycle
+but has never run, because GitHub Actions has been failing account-wide since 2026-10-05. Its exact
+command was therefore run locally on 2026-10-06, in `rust:1.96` containers with `musl-tools`:
+
+| Target | `cargo build --release --locked --features tls-spike` | `file` says | Static? |
+|---|---|---|---|
+| `aarch64-unknown-linux-musl` | exit 0, 19.1 s (native on arm64) | `ELF 64-bit … statically linked, stripped` | yes |
+| `x86_64-unknown-linux-musl` | exit 0, 55.4 s (emulated amd64) | `ELF 64-bit … static-pie linked, stripped` | yes |
+
+So **a TLS-enabled static musl binary builds on both targets**, and the tie-breaker the brief named
+— "failing on aarch64 … a sidecar looks better" — does not obtain. aarch64 is the target that
+passed most cleanly.
+
+Two details the decision should carry:
+
+- **The TLS provider resolved is rustls, not OpenSSL.** `tonic/tls` pulled `tokio-rustls 0.26.5` and
+  `rustls-webpki 0.103.15`; no `openssl-sys` entered the graph. That narrows the licence review the
+  brief anticipates to Apache-2.0 / ISC / MIT, and it is *why* static musl survives — there is no C
+  TLS library to link against.
+- **T04's own verification step was reporting a false negative on x86_64.** It ran
+  `file … | grep -q "statically linked"`, which does not match `static-pie linked` — the spelling
+  `file` uses for a position-independent static executable, which has no dynamic loader and is no
+  less static. Had Actions been running, the x86_64 leg would have reported failure for a binary
+  that is genuinely static, and this decision would have been taken on it. Fixed in the same commit
+  that recorded this table; the pattern now accepts both spellings.
+
+**[R]** `cargo deny` over the TLS feature is *not* covered by the above: the spike job does not run
+it, and the `supply-chain (cargo deny)` job builds without `--features tls-spike`. So the licence
+and advisory status of the rustls subtree is still unmeasured, and remains a precondition the brief
+correctly lists.
 
 ## 5. What it unblocks
 
