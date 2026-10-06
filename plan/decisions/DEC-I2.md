@@ -2,7 +2,7 @@
 
 **Owner** Captain / Commander · **Unblocks** T45 directly (the plan header says T45-T48); the other three docs legs are separately blocked by T29, T39/T34, T44
 
-Tags: **[M]** measured this session · **[D]** document assertion · **[R]** reasoned.
+Tags: **[M]** measured this session · **[D]** document assertion · **[R]** reasoned · **[M2]** re-measured 2026-10-06, after the cycle's own doc changes.
 
 ## 1. The question
 
@@ -10,7 +10,7 @@ When a leg invalidates a claim in `README.md` or `CLAUDE.md`, does the repo (a) 
 
 ## 2. Why it's open
 
-- `.claude/rules/pre-pr-discipline.md` check 2: a doc that describes something that no longer exists "is broken by the change that made it wrong"; fix the ones that do not hold "**in the same PR**" (`git show HEAD:.claude/rules/pre-pr-discipline.md`, last reviewed 2026-09-02). That file is deleted in the working tree and being recreated by its owner, so the wording may change.
+- `.claude/rules/pre-pr-discipline.md` check 2: a doc that describes something that no longer exists "is broken by the change that made it wrong"; fix the ones that do not hold "**in the same PR**" (`git show HEAD:.claude/rules/pre-pr-discipline.md`, last reviewed 2026-09-02). **[M2] That file is now permanently gone, not pending recreation:** `7689c16` deleted the whole `.claude/` tree, and `9b9b8c1` restated the rule's substance inline in `docs/agents/issue-tracker.md` rather than re-pointing at it. So rule 2 no longer exists as a standalone rule — its only surviving statement is the *What could this break* section of `.github/PULL_REQUEST_TEMPLATE.md` ("Fix the ones that no longer hold, here"), which is checked in and live. The conflict has not gone away; it has moved to **a live PR template versus an unratified ADR**.
 - ADR-0009 R1: "Two open legs in a swimlane **may not** declare overlapping paths. If they must overlap, they are one leg — or the shared part is extracted into a leg that lands first" (`docs/adr/0009-agentic-gitflow.md:198-201`). ADR-0009 is `Proposed`, not ratified.
 - Spec §12.3 and plan §4 pick a per-wave docs leg (T45-T48) and say plainly this violates the letter of check 2. `leg/docs/wave-<n>-v1` satisfies R1 (its paths are disjoint) and breaks rule 2 (docs lag code by one leg).
 
@@ -29,6 +29,12 @@ When a leg invalidates a claim in `README.md` or `CLAUDE.md`, does the repo (a) 
 - **[M] The premise "all nine W1 legs invalidate a claim in `README.md`/`CLAUDE.md`" is not supported by grep.** Today `README.md` (274 lines) and `CLAUDE.md` (102 lines) contain **zero** occurrences of `24.3`, `25.4`, `docker-compose.yaml`, `generator-python/docker-compose`, or `63`. The claims W1 plausibly invalidates are about six lines: `README.md:169` (workflows list: "rust-ci.yml · pr-linked-issue.yml"), `README.md:211` ("Today only `rust-ci.yml`..."), `README.md:263` (open item 6, "Python CI gate... not yet added"), `CLAUDE.md:44-45` (Make target table), `CLAUDE.md:67` (the `default`-user and vestigial `otelgen` gotcha). By leg, that points at roughly `python-gates`, `invariants`, `registry-provenance` and `ch-migrate`, not nine. This is a grep over specific patterns, not an audit; other claims could exist.
 - **[M] T45's W1 proofs are already satisfied before any change.** `grep -rn "clickhouse-server:24.3" README.md CLAUDE.md` and `grep -rn "generator-python/docker-compose" README.md` return 0 today, so they prove nothing. The `otelgen` proof is satisfied only by the word in `CLAUDE.md:10,23,52` (the generator's CLI name) and `README.md:163`, and the vestigial-user mention at `CLAUDE.md:67`.
 - **[M] The "73-vs-63" test-count gap is not in `CLAUDE.md`.** `63` appears in `services/flow-ui/README.md:95,238` and `services/flow-ui/ARCHITECTURE.md:252`. Plan §10 item 5 and T45 attribute it to `CLAUDE.md`.
+- **[M2] The six-line measurement is stale, and the surface grew — this cycle's own docs work caused it.** Re-running the brief's greps on 2026-10-06: `README.md` is 349 lines (was 274) and now contains `24.3` ×1, `25.4` ×1 and `generator-python/docker-compose.yaml` ×3, where the 2026-10-05 measurement found **zero** of each. All of them arrived with §8's new invariants table and blocked-work list, which describe the very state T12–T15 will change. `CLAUDE.md` is 101 lines and still carries none. So option (a)'s cost — docs wrong between a leg merging and its wave's docs leg — is now higher than the brief assumed, and the thing that raised it was documenting the blockers accurately.
+
+- **[M2] One of T45's two W1 proofs has gained teeth; the other is mis-specified and would pass while the README is wrong.** `grep -rn "generator-python/docker-compose" README.md` now returns **3** (was 0), so T45's second proof will genuinely fire once T15 deletes that file. But the first, `grep -rn "clickhouse-server:24.3" README.md CLAUDE.md`, still returns **0** — not because the claim is absent, but because the README writes the pin as `` `24.3` (root compose) `` and never with the `clickhouse-server:` prefix the proof greps for. **T45's proof as written cannot detect the stale claim it exists to detect.** That is a defect in the ticket's proof specification, independent of how DEC-I2 is ruled, and it should be fixed either way.
+
+- **[M2] Option (c) has now been run once, by accident, and the measurement is partial.** `9b9b8c1` fixed 8 dangling references across 7 files in the same PR as the commit that broke them (`7689c16`), crossing several legs' declared paths — exactly the shape (c) permits and R1 forbids. It produced no textual conflict. That is **not** evidence that (c) is cheap: only one leg was open, so the parallel fan-out R1 protects was never exercised. What it does show is the benefit side — the repo never carried a broken reference on a pushed branch — and that a single agent can do the sweep in one pass once `git ls-files | xargs grep -ln` names the files. The cost side of (c) remains unmeasured and only appears with two or more concurrent legs.
+
 - **[D]** Squash vs merge-commit (spec §12.5) is a separate unratified question the same owners must settle; it interacts with how docs-leg attribution survives.
 - **[R]** Under (a), a docs leg that collects four legs' claims per wave also needs to know what they changed; each leg's PR description would have to carry its invalidated claims, or the docs leg re-greps. The plan does not say which.
 
@@ -40,4 +46,5 @@ T45 (W1 docs leg; blocked by T24 + DEC-I2). Plan header says T45-T48; the ticket
 
 - Which rule is right.
 - Whether the six-line measurement generalises to W2-W4 (silver inventory, deployment posture).
-- Whether `.claude/rules/pre-pr-discipline.md` is reworded when recreated.
+- ~~Whether `.claude/rules/pre-pr-discipline.md` is reworded when recreated~~ — **[M2]** moot: it was not recreated, and will not be. What the owners are now ranking is `.github/PULL_REQUEST_TEMPLATE.md` (live, checked in) against ADR-0009 R1 (`Proposed`). If (a) or (b) wins, the template's "Fix the ones that no longer hold, here" needs rewording in the same ruling, or the repo keeps a live instruction that contradicts the decision.
+- Whether the cost of (c) is tolerable under real parallelism. The one instance measured ran with a single open leg.

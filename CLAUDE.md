@@ -82,7 +82,7 @@ Pod 2's Rust collector is verified end-to-end on `main`: generator → OTLP `:43
 | Pod↔layer mapping unratified (README POD3 = storage/read-layer vs the removed `.claude/CLAUDE.md`'s B3 = watchers). The second source is gone as of `7689c16`, so README is now the only statement — ratify it rather than reconcile two | `README.md` | Captain / Commander |
 | ADR-0009 amends the WoW's "squash-merge to main" rule | `docs/adr/0009-agentic-gitflow.md` | Captain / Commander |
 
-Historical records under `docs/research/`, `docs/proposals/`, `docs/clickhouse-schema-divergence*.md`, and `intent/` / `spec/` / `plan/` are point-in-time artifacts — they mention the Go collector by design. Don't "fix" them; they carry a superseded banner.
+Historical records under `docs/research/`, `docs/proposals/`, `docs/clickhouse-schema-divergence*.md`, `intent/` and `spec/` are point-in-time artifacts — they mention the Go collector by design. Don't "fix" them; they carry a superseded banner. **`plan/` is not in that set:** `plan/core-plan.md` is the live ticket registry and `plan/decisions/` are live briefs that gain evidence until their decision is taken. Amend those; don't freeze them.
 
 ## Agent skills
 

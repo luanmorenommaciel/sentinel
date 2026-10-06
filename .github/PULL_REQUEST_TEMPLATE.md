@@ -32,9 +32,9 @@ Closes #
 
          git ls-files '*.md' | xargs grep -ln "<what you touched>"
 
-     Fix the ones that no longer hold, here. Leave `docs/adr/`, `intent/`, `spec/`, `plan/` and
+     Fix the ones that no longer hold, here. Leave `docs/adr/`, `intent/`, `spec/` and
      `docs/proposals/` alone — those are records, and rewriting history to match the present
-     is what makes an ADR unreadable.
+     is what makes an ADR unreadable. `plan/` is live, not a record: amend it.
 
      Until CI runs every suite (#34), this section is the only thing standing between a
      regression and `main`. -->

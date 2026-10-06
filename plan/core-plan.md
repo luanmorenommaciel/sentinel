@@ -1097,9 +1097,9 @@ negative proof.
 
 ### T45–T48 — one docs leg per wave
 **Leg** `leg/docs/wave-{1,2,3,4}-v1` · **Blocked by** T24 + DEC-I2 (W1) · T29 (W2) · T39, T34 (W3) · T44 (W4) · **REQ** B-09, I-06, NFR-08 · **Seam** none
-**Files** ~`README.md` · ~`CLAUDE.md`. **`.claude/**` is excluded** — deleted in the working tree,
-being recreated by its owner, no leg writes there. `docs/adr/0*`, `docs/proposals/`,
-`docs/research/`, `.claude/sdd/**` are **not touched** (NFR-08).
+**Files** ~`README.md` · ~`CLAUDE.md`. **`.claude/**` is excluded** — as of `7689c16` it is
+deleted outright and not being recreated, so nothing writes there. `docs/adr/0*`,
+`docs/proposals/`, `docs/research/`, `intent/` and `spec/` are **not touched** (NFR-08).
 **Does** Collects the claims that wave's legs invalidated. W1: the Compose inventory, the ClickHouse
 version, the auth posture, the gate list, and the test counts **taken from CI's own output**
 (REQ-B-09 — not recounted by hand; this is also where the **73-vs-63** flow-ui gap is settled by
@@ -1107,8 +1107,13 @@ printing the real number). W2: the silver object inventory. W3: silver's history
 flow-ui's dual-source boards. W4: the deployment and TLS posture.
 **Proof** `git ls-files '*.md' | xargs grep -ln "<each old fact>"` → the only remaining hits are in
 protected records. For W1 specifically:
-`grep -rn "clickhouse-server:24.3" README.md CLAUDE.md` → 0;
+`grep -rnE "clickhouse-server:24\\.3|\\b24\\.3\\b" README.md CLAUDE.md` → 0;
 `grep -rn "generator-python/docker-compose" README.md` → 0;
+**The first pattern was widened on 2026-10-06 and it matters.** As originally written
+(`clickhouse-server:24.3`) it returned 0 against a README that *did* carry the stale pin, because
+§8 writes it as `` `24.3` (root compose) `` and never with the image prefix — the proof could pass
+while the claim it exists to catch was still there. The second pattern, which returned 0 on
+2026-10-05 and so proved nothing, now returns **3**; it will fire properly once T15 lands.
 `grep -rn "otelgen" README.md CLAUDE.md` → only a historical sentence.
 **Judgement** **This ticket exists only because `pre-pr-discipline` and ADR-0009 cannot both be
 satisfied** (§4): it violates the letter of check 2 by making doc updates lag their code by one leg.
