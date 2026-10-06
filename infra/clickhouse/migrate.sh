@@ -74,20 +74,31 @@ sha256() {
     fi
 }
 
-# Milliseconds since the epoch. `date +%s%3N` is GNU-only and `date +%s` alone
-# rounds every migration to 0 ms, which is the one value `duration_ms` must not
-# always hold. Bash 5's EPOCHREALTIME is `seconds.microseconds` in the C locale
-# and needs no external binary; pre-5 shells fall back to whole seconds.
-now_ms() {
-    if [[ -n "${EPOCHREALTIME:-}" ]]; then
-        local whole="${EPOCHREALTIME%%[.,]*}"
-        local frac="${EPOCHREALTIME#"$whole"}"
-        frac="${frac#[.,]}"
-        frac="${frac}000000"
-        printf '%s%s' "$whole" "${frac:0:3}"
-    else
-        printf '%s000' "$(date +%s)"
+# A migration is timed by Bash's own `time` keyword, reported through TIMEFORMAT.
+# EPOCHREALTIME would be the obvious clock and is unusable: macOS ships Bash 3.2,
+# where it is unset, so a two-sample clock falls back to whole seconds and records
+# 0 ms for every migration on the primary dev platform — the one value
+# `duration_ms` must not always hold — while CI's Bash 5 hides it. `date +%s%3N` is
+# GNU-only, and NFR-11 rules out a helper binary, which leaves `time`: a builtin,
+# sub-second in every Bash we run on, and it times the migration itself rather than
+# straddling it with two clock reads.
+#
+# The report is newline-led and tagged because it shares one capture with the
+# migration's own output, which step 3 peels it back off: a client whose last line
+# arrived without a newline would otherwise have the timing glued onto it.
+ELAPSED_TAG='migrate-elapsed'
+TIMEFORMAT=$'\n'"$ELAPSED_TAG %3R"
+
+# `%3R` is seconds and milliseconds, separated by whatever radix character the
+# locale asks for, so both are accepted. Any other shape yields 0 rather than a
+# half-read number: `duration_ms` is UInt32, and it must not be what fails the one
+# INSERT that must not fail.
+real_to_ms() {
+    if [[ ! $1 =~ ^([0-9]+)[.,]([0-9]{3})$ ]]; then
+        printf '0'
+        return
     fi
+    printf '%s' $(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} ))
 }
 
 if [[ ! -d "$MIGRATIONS_DIR" ]]; then
@@ -168,17 +179,18 @@ for file in "$MIGRATIONS_DIR"/[0-9][0-9][0-9][0-9]_*.sql; do
     fi
 
     log "applying         $filename"
-    started="$(now_ms)"
-    if ! out="$(ch < "$file" 2>&1)"; then
+    # The capture carries the client's output and, on its own last line, the
+    # TIMEFORMAT report; the two are split apart before either is used, so the
+    # failure path still prints only what the client said.
+    captured="$( { time ch < "$file"; } 2>&1 )"
+    rc=$?
+    out="${captured%$'\n'"$ELAPSED_TAG" *}"
+    if (( rc != 0 )); then
         err "migrate: $filename failed; nothing recorded, so the next run retries it"
         err "$out"
         exit 4
     fi
-    duration_ms=$(( $(now_ms) - started ))
-    # `duration_ms` is UInt32; a backwards clock would otherwise fail the INSERT.
-    if (( duration_ms < 0 )); then
-        duration_ms=0
-    fi
+    duration_ms="$(real_to_ms "${captured##*$'\n'"$ELAPSED_TAG" }")"
 
     if ! out="$(printf "INSERT INTO _meta.schema_migrations (version, filename, checksum, applied_by, duration_ms, runner_host) VALUES ('%s', '%s', '%s', '%s', %d, '%s')\n" \
         "$(sql_quote "$version")" "$(sql_quote "$filename")" "$checksum" \
