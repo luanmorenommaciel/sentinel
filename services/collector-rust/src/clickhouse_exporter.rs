@@ -39,6 +39,7 @@ use serde::Serialize;
 use thiserror::Error;
 use time::OffsetDateTime;
 
+use crate::config::{ClickHouseConfig, ConfigError};
 use crate::contract::{LogSignal, MetricSignal, MetricType, Signal, SpanSignal, StatusCode};
 use crate::Counts;
 
@@ -110,6 +111,32 @@ pub fn build_client_with_database(url: &str, database: &str) -> clickhouse::Clie
     clickhouse::Client::default()
         .with_url(url)
         .with_database(database)
+}
+
+/// Build the client a `clickhouse:` config section describes, resolving its
+/// credential **at startup** (REQ-H-05, SPEC §14.2).
+///
+/// This is the call site that reads `password_file` off disk, and the only one:
+/// every other path through the binary goes through here, so there is one place
+/// a startup credential failure can originate. A section with no
+/// `user`/`password_file` yields exactly what [`build_client_with_database`]
+/// returns — no credential is sent at all, which is the local-dev
+/// passwordless `default` path.
+///
+/// # Errors
+///
+/// [`ConfigError::CredentialUnreadable`] when `password_file` names a file that
+/// cannot be read. Its `Display` carries the path and nothing else, and this
+/// function never logs: the caller decides what to report.
+pub fn build_client_from_config(ch: &ClickHouseConfig) -> Result<clickhouse::Client, ConfigError> {
+    let mut client = build_client_with_database(&ch.url, &ch.database);
+    if let Some(user) = ch.user.as_deref() {
+        client = client.with_user(user);
+    }
+    if let Some(password) = ch.credential()? {
+        client = client.with_password(password);
+    }
+    Ok(client)
 }
 
 /// Convenience wrapper for integration tests and the binary entry point.
@@ -787,5 +814,36 @@ mod tests {
             ra.get("contract_version").map(String::as_str),
             Some("1.0.0")
         );
+    }
+
+    // ── REQ-H-05 — the startup credential read (SPEC §14.2) ─────────────────
+
+    fn ch_config(password_file: Option<std::path::PathBuf>) -> ClickHouseConfig {
+        ClickHouseConfig {
+            url: "http://ch:8123".to_string(),
+            database: "bronze".to_string(),
+            user: Some("sentinel_collector_u".to_string()),
+            password_file,
+            batch_size: 1000,
+            flush_interval_ms: 500,
+        }
+    }
+
+    #[test]
+    fn client_builds_without_a_credential() {
+        // No password_file: a client is still built, and nothing is sent.
+        assert!(build_client_from_config(&ch_config(None)).is_ok());
+    }
+
+    #[test]
+    fn an_unreadable_credential_fails_the_client_build() {
+        let missing = std::env::temp_dir().join("sentinel-exporter-cred-does-not-exist");
+        let _ = std::fs::remove_file(&missing);
+        // `clickhouse::Client` is not `Debug`, so `expect_err` is unavailable.
+        let Err(err) = build_client_from_config(&ch_config(Some(missing.clone()))) else {
+            panic!("startup must fail rather than connect passwordless");
+        };
+        assert!(matches!(err, ConfigError::CredentialUnreadable { .. }));
+        assert!(err.to_string().contains(&missing.display().to_string()));
     }
 }

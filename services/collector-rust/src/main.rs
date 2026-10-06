@@ -94,16 +94,29 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
         sentinel_collector::buffer::BufferConfig::default,
         sentinel_collector::config::ClickHouseConfig::buffer_config,
     );
-    let client: Option<clickhouse::Client> = config.clickhouse.as_ref().map(|ch| {
-        info!(
-            url = %ch.url,
-            database = %ch.database,
-            batch_size = ch.batch_size,
-            flush_interval_ms = ch.flush_interval_ms,
-            "export mode: ClickHouse target configured (EP2.2 buffered exporter)"
-        );
-        clickhouse_exporter::build_client_with_database(&ch.url, &ch.database)
-    });
+    let client: Option<clickhouse::Client> = match config.clickhouse.as_ref() {
+        Some(ch) => {
+            info!(
+                url = %ch.url,
+                database = %ch.database,
+                user = ch.user.as_deref().unwrap_or("<client default>"),
+                password_file = ?ch.password_file,
+                batch_size = ch.batch_size,
+                flush_interval_ms = ch.flush_interval_ms,
+                "export mode: ClickHouse target configured (EP2.2 buffered exporter)"
+            );
+            // An unreadable `password_file` is a startup failure, not a
+            // silently passwordless connection (REQ-H-05).
+            match clickhouse_exporter::build_client_from_config(ch) {
+                Ok(client) => Some(client),
+                Err(err) => {
+                    error!(error = %err, "clickhouse credential unavailable");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        None => None,
+    };
 
     if client.is_none() {
         info!("log-only mode: no clickhouse section configured");
@@ -233,8 +246,20 @@ async fn run(config: &Config) -> ExitCode {
 
     let counts = match &config.clickhouse {
         Some(ch) => {
-            info!(url = %ch.url, database = %ch.database, "export mode");
-            let client = clickhouse_exporter::build_client_with_database(&ch.url, &ch.database);
+            info!(
+                url = %ch.url,
+                database = %ch.database,
+                user = ch.user.as_deref().unwrap_or("<client default>"),
+                password_file = ?ch.password_file,
+                "export mode"
+            );
+            let client = match clickhouse_exporter::build_client_from_config(ch) {
+                Ok(client) => client,
+                Err(err) => {
+                    error!(error = %err, "clickhouse credential unavailable");
+                    return ExitCode::FAILURE;
+                }
+            };
             match clickhouse_exporter::export(&client, signals).await {
                 Ok(export_counts) => export_counts,
                 Err(err) => {

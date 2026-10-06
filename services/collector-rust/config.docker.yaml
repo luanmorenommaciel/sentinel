@@ -5,9 +5,28 @@
 clickhouse:
   url: http://clickhouse:8123
   database: bronze   # official POD3 bronze schema (bronze.*)
+  # Credentials are a PATH, never a value (REQ-H-05, SPEC §14.2) — which is also
+  # the only shape compatible with clippy.toml's std::env::var ban, and why there
+  # is deliberately no `password` key. Commented out here because the local stack
+  # still connects as the passwordless `default` user; migration 0002 creates the
+  # role and T18 switches this file over to it:
+  #
+  # user: sentinel_collector_u
+  # password_file: /etc/sentinel/secrets/ch_password
+  #
+  # Deployed, that path is a projected volume from a managed secret store, mounted
+  # 0400 and owned by the container's non-root user. An unreadable file is a
+  # startup failure naming the path only.
 
 grpc:
   listen: "[::]:4317"   # all interfaces, OTLP port
+
+# Set in YAML, never through the environment (REQ-H-15). The env port override
+# rebinds to 0.0.0.0:<port> and discards any host part this file supplies, so it
+# cannot express a loopback-only bind; a deployed environment must leave that
+# variable unset. See src/config.rs `apply_env_overrides`.
+metrics:
+  listen: "0.0.0.0:9090"
 
 contract:
   expected_version: "1.0.0"
