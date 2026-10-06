@@ -48,10 +48,39 @@ passed most cleanly.
 
 Two details the decision should carry:
 
-- **The TLS provider resolved is rustls, not OpenSSL.** `tonic/tls` pulled `tokio-rustls 0.26.5` and
-  `rustls-webpki 0.103.15`; no `openssl-sys` entered the graph. That narrows the licence review the
-  brief anticipates to Apache-2.0 / ISC / MIT, and it is *why* static musl survives — there is no C
-  TLS library to link against.
+- **The TLS provider resolved is rustls, not OpenSSL — but it is not pure Rust either, and the
+  first version of this note got that wrong.** `tonic/tls` pulls `rustls 0.23.45` → and with it
+  **`ring 0.17.14`**, which is C and assembly (BoringSSL-derived). `cargo tree -i ring` is
+  unambiguous about when it arrives:
+
+  ```
+  default features          → ring NOT in the graph
+  --features tls-spike      → ring v0.17.14
+                                ├── rustls → tokio-rustls → tonic → sentinel-collector
+                                └── rustls-webpki → rustls
+  ```
+
+  So three separate properties have to be kept apart, and an earlier draft of this section ran two
+  of them together:
+
+  | Property | With in-process TLS |
+  |---|---|
+  | Static musl binary on both targets | **survives** — measured above, `ring` links fine |
+  | No OpenSSL anywhere | **survives** — no `openssl-sys` in the graph |
+  | Pure-Rust dependency tree | **lost** — `ring` is C + asm |
+
+  The third is the property `services/collector-rust/Dockerfile:3` asserts ("Our dependency tree is
+  pure Rust … no `*-sys` / OpenSSL"), and it is the one DEC-A4's question actually puts on the
+  table. Note the Dockerfile line is already loose today: `Cargo.lock` carries `js-sys` and
+  `windows-sys`, both platform-gated and never built for Linux musl, so the claim is true of the
+  shipped artifact and false of the tree. T42's proof already anticipates this — it requires that
+  grep to come back "absent or rewritten to the truth".
+
+  Licence consequence, therefore, is **larger than "Apache-2.0 / ISC / MIT"**: `ring` carries a
+  non-standard composite licence with OpenSSL-derived portions, which is exactly the shape a
+  nine-licence permissive allow-list rejects by omission. `cargo deny` over this subtree stays
+  unmeasured, and there is now a specific reason to expect it to need a reviewed `deny.toml`
+  addition rather than passing silently.
 - **T04's own verification step was reporting a false negative on x86_64.** It ran
   `file … | grep -q "statically linked"`, which does not match `static-pie linked` — the spelling
   `file` uses for a position-independent static executable, which has no dynamic loader and is no

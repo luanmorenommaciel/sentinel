@@ -25,8 +25,20 @@ fi
 # could only originate in Python. SQL keywords are written uppercase throughout
 # this repo's query strings, so a case-sensitive match avoids flagging English
 # prose in a docstring.
+#
+# The keyword list was an explicit enumeration until 2026-10-06, and 11 of 15
+# real ClickHouse writes walked straight through it: `DELETE FROM` (the
+# lightweight delete, which `ALTER TABLE ... DELETE` does not cover), `OPTIMIZE`,
+# `RENAME`, `ATTACH`, `DETACH`, `SYSTEM`, `GRANT`, `REVOKE`, `KILL`, and every
+# `CREATE`/`DROP` object other than the four spelled out — `CREATE VIEW` and
+# `DROP VIEW` among them, which matters because flow-ui reads `silver.*` views.
+# An enumeration of a DDL surface is a list that silently rots as the engine
+# grows statements, so the shape is now: a handful of whole-word verbs, plus
+# `CREATE`/`DROP`/`ALTER` followed by any uppercase word, plus `DELETE FROM`.
+# Verified 0 hits against the current sources and 15/15 against the writes above.
 hits="$(
-    grep -rn --include='*.py' -E '\b(INSERT|ALTER TABLE|ALTER DATABASE|CREATE TABLE|CREATE DATABASE|CREATE MATERIALIZED VIEW|DROP TABLE|DROP DATABASE|TRUNCATE)\b' \
+    grep -rn --include='*.py' -E \
+        '\b(INSERT|TRUNCATE|GRANT|REVOKE|KILL|OPTIMIZE|ATTACH|DETACH|RENAME|SYSTEM)\b|\b(CREATE|DROP|ALTER)[[:space:]]+[A-Z]|\bDELETE[[:space:]]+FROM\b' \
         "$SRC" 2>/dev/null | sed "s#^$ROOT/##" || true
 )"
 
