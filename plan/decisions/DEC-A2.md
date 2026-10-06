@@ -26,6 +26,8 @@ Who operates ClickHouse in a deployed environment, and is it managed or self-hos
 
 ## 4. Established facts
 
+- **[X] A managed version is not a choice, it is a moving target.** ClickHouse Cloud exposes no engine-version pin (documentation fetched 2026-10-06): release channels and Enterprise-only scheduled windows control *when* an upgrade lands, never *which* version arrives, and the `compatibility` setting preserves old setting defaults rather than the engine version. So the option table's "version is whatever the provider offers" is sharper than it reads — there is nothing to ask the provider for, and nothing to agree with DEC-I1 about. DEC-I1 is decidable without this decision (see `DEC-I1.md` §3); what managed hosting actually costs here is a deployed engine that moves under the 18 silver assertions, which T20 must therefore run against the deployed instance and not only a pinned local one.
+
 - **[M] `SharedMergeTree` cannot be tested locally.** On `clickhouse-server:25.4.13.22`: `CREATE TABLE … ENGINE=SharedMergeTree` → `Code: 56 Unknown table engine SharedMergeTree`. The engine list has `MergeTree` and `Replicated*` variants only.
 - **[S]** `REPLACE PARTITION` works on plain `MergeTree` (spec §11.1 `[V-3b]`: destination's pre-existing row gone, 2 rows summing to 3). Not re-run by me.
 - **[D, contradicted by §11.1]** `design-spec.md` matrix says `REPLACE PARTITION` on managed is "supported **[V-3]**". Spec §11.1 says that half is unverified. The design-spec row asserts what the spec says is unknown.
