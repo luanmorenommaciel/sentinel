@@ -103,11 +103,22 @@ jobs:
         run: file target/${{ matrix.target }}/release/sentinel-collector | grep -q "statically linked"
 
   # ── live round-trip against a real ClickHouse ─────────────────────────────
+  #
+  # Runs EVERY #[ignore]d test, not one named target. The previous
+  # `--test clickhouse_roundtrip` filter meant
+  # tests/grpc_export_roundtrip.rs's otlp_grpc_payload_lands_in_clickhouse ran
+  # nowhere: the gRPC ingest path — the only path that drives the silver MVs
+  # under real inserts — had zero live coverage, and the whole silver lane rests
+  # on it. The orphan check below is what keeps that from recurring.
   integration:
-    name: integration (ClickHouse round-trip)
+    name: integration (every #[ignore]d test)
+    # Lean default (PR #59): this job needs a live ClickHouse service, so it runs
+    # weekly + on demand, not on every PR. See docs/ci-gates.md.
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      CLICKHOUSE_URL: http://localhost:8123
     steps:
       - uses: actions/checkout@v4
 
@@ -125,11 +136,63 @@ jobs:
       - name: Start ClickHouse
         run: docker compose -f services/collector-rust/infra/docker-compose.yml up -d --wait
 
-      - name: Round-trip test (golden file → ClickHouse)
+      # Every #[ignore]d test in every target. No --test filter: a filter is how
+      # the gRPC round-trip came to run nowhere. The log is kept for the orphan
+      # check below, which asserts against what actually ran.
+      - name: Live tests (all #[ignore]d)
         working-directory: services/collector-rust
-        env:
-          CLICKHOUSE_URL: http://localhost:8123
-        run: cargo test --test clickhouse_roundtrip --locked -- --ignored
+        run: |
+          set -o pipefail
+          cargo test --locked -- --ignored 2>&1 | tee "$RUNNER_TEMP/ignored.log"
+
+      # Fails if a test is #[ignore]d in tests/*.rs and did not appear in that
+      # run. Checking the LOG rather than `--list` is deliberate: it catches a
+      # reintroduced `--test <target>` filter, which is the exact regression
+      # this ticket repairs, and a `--list` would answer about a different
+      # invocation than the one that ran.
+      #
+      # The rule is "every #[ignore]d test in tests/*.rs must run here". A test
+      # that is deliberately not meant to run in this job — behind a cargo
+      # feature, say — would need this check amended rather than the test
+      # quietly excluded. That is the trade: no silent exclusions.
+      - name: No orphaned #[ignore]d tests
+        working-directory: services/collector-rust
+        run: |
+          declared="$(
+            awk '/^[[:space:]]*#\[ignore/ {f=1; next}
+                 f && match($0, /fn [a-z0-9_]+/) {
+                   print substr($0, RSTART + 3, RLENGTH - 3); f = 0
+                 }' tests/*.rs | sort -u
+          )"
+          ran="$(
+            sed -n 's/^test \([a-z0-9_:]*\) \.\.\. ok$/\1/p' "$RUNNER_TEMP/ignored.log" |
+              sed 's/.*:://' | sort -u
+          )"
+          echo "declared #[ignore]d in tests/*.rs:"; printf '%s\n' "$declared" | sed 's/^/  /'
+          echo "ran in the step above:";             printf '%s\n' "$ran"      | sed 's/^/  /'
+
+          if [ -z "$declared" ]; then
+            echo "::error::no #[ignore]d test found in tests/*.rs — the detector is broken"
+            exit 1
+          fi
+
+          orphans="$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$ran"))"
+          if [ -n "$orphans" ]; then
+            echo "::error::#[ignore]d tests that CI does not run:"
+            printf '%s\n' "$orphans" | sed 's/^/  /'
+            exit 1
+          fi
+
+          # Every integration target must have been attempted, not just the one
+          # holding a live test today.
+          targets="$(ls tests/*.rs | wc -l | tr -d ' ')"
+          attempted="$(grep -c '^     Running tests/' "$RUNNER_TEMP/ignored.log" || true)"
+          echo "integration targets: $targets declared, $attempted attempted"
+          if [ "$attempted" -ne "$targets" ]; then
+            echo "::error::$attempted of $targets integration targets attempted"
+            exit 1
+          fi
+          echo "no orphans"
 
       - name: Tear down ClickHouse
         if: always()

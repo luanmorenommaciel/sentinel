@@ -14,8 +14,8 @@
 //! ```
 //!
 //! `CLICKHOUSE_URL` (default `http://localhost:8123`) and
-//! `CLICKHOUSE_DATABASE` (default `sentinel`, the bronze database) may be
-//! overridden via environment variables.
+//! `CLICKHOUSE_DATABASE` (default `bronze`) may be overridden via environment
+//! variables.
 //!
 //! # Timestamp note
 //!
@@ -62,13 +62,18 @@ const TIMESTAMP_NANOS: u64 = 1_900_000_000_000_000_000;
 /// Build a ClickHouse client from the environment.
 ///
 /// Uses `CLICKHOUSE_URL` (defaults to `http://localhost:8123`) and
-/// `CLICKHOUSE_DATABASE` (defaults to `sentinel`, the bronze database).
+/// `CLICKHOUSE_DATABASE` (defaults to `bronze`).
+///
+/// The default was `sentinel` — a database name retired when the bronze split
+/// schema landed. Nothing caught it because this test is `#[ignore]`d and the
+/// only CI invocation of an ignored test named one other target, so it had
+/// never been executed since (REQ-B-13).
 fn client_from_env() -> clickhouse::Client {
     #[allow(clippy::disallowed_methods)]
     let url =
         std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
     #[allow(clippy::disallowed_methods)]
-    let database = std::env::var("CLICKHOUSE_DATABASE").unwrap_or_else(|_| "sentinel".to_string());
+    let database = std::env::var("CLICKHOUSE_DATABASE").unwrap_or_else(|_| "bronze".to_string());
     clickhouse_exporter::build_client_with_database(&url, &database)
 }
 
