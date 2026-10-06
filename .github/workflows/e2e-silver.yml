@@ -1,0 +1,149 @@
+# The live-ClickHouse oracle (T20, REQ-B-04, B-05, B-09, H-06).
+#
+# 18 silver SQL assertions and the Python suites ran on a laptop and nowhere else
+# (issue #34). This stands up the real pipeline — generator → collector → bronze →
+# silver — and runs them against it.
+#
+# It is also the oracle for the role grants. REQ-H-06 makes this job, not SPEC
+# §14.1 and not a reviewer, the authority on whether the least-privilege grants are
+# complete: the services connect as `sentinel_collector_u` and `sentinel_reader_u`,
+# so a missing grant fails here instead of in staging. That already happened once —
+# `0002_roles.sql` records the SELECT the `clickhouse` crate turned out to need.
+#
+# NOT a required check yet, deliberately. SPEC §16 names this the job most likely
+# to flake and the quiescence loop below is reasoned rather than measured, so it
+# lands reporting honestly and gets promoted in T21 after a week of real PRs.
+# Note that "non-required" is a branch-protection setting, not `continue-on-error`:
+# the flag is deliberately absent, because a job that always reports green tells
+# you nothing about its own flake rate.
+name: e2e-silver
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: e2e-silver-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-silver:
+    name: e2e-silver (live ClickHouse)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The role password. `make migrate` refuses to run without it, and the root
+      # stack mounts it into the collector and flow-ui, so it must exist before
+      # `make up` — Docker would otherwise create a directory at the mount path.
+      # Generated per run and never printed: this is a throwaway credential for a
+      # container that lives for one job.
+      - name: Create the CI role password
+        run: |
+          set -euo pipefail
+          mkdir -p infra/secrets
+          openssl rand -hex 24 > infra/secrets/ch_password
+          chmod 0400 infra/secrets/ch_password
+
+      - name: Up (ClickHouse + collector)
+        run: make up
+
+      - name: Migrate
+        run: make migrate
+
+      - name: Generate
+        run: make generate
+
+      # Quiescence, not a sleep (REQ-B-05). `make generate` returning says the
+      # generator finished, not that the collector flushed: the channel holds 64
+      # envelopes (`buffer.rs:141`), so rows are still in flight.
+      #
+      # `sentinel_signals_ingested_total` is summed across its label series rather
+      # than read from one line — it carries one series per signal type
+      # (logs/metrics/trace) plus `# HELP`/`# TYPE`, so a single grep reads the
+      # wrong number or none at all.
+      #
+      # Ingest is driven by `make generate` and never by the golden fixture: the
+      # fixture is 2023-dated and its rows are purged on the first background merge
+      # under the tables' event-time TTL
+      # (services/collector-rust/infra/docker-compose.collector.yml:13-15).
+      - name: Wait for quiescence
+        run: |
+          set -uo pipefail
+
+          ingested() {
+            curl -fsS http://localhost:9090/metrics 2>/dev/null \
+              | awk '/^sentinel_signals_ingested_total\{/ {s += $NF} END {printf "%d", s+0}'
+          }
+
+          persisted() {
+            docker compose exec -T clickhouse clickhouse-client -q "
+              SELECT (SELECT count() FROM bronze.otel_logs)
+                   + (SELECT count() FROM bronze.otel_traces)
+                   + (SELECT count() FROM bronze.otel_metrics_gauge)
+                   + (SELECT count() FROM bronze.otel_metrics_sum)" 2>/dev/null \
+              | tr -d '[:space:]'
+          }
+
+          deadline=$(( SECONDS + 60 ))
+          prev=""
+          while (( SECONDS < deadline )); do
+            cur="$(ingested)"
+            rows="$(persisted)"
+            : "${rows:=0}"
+            echo "ingested=$cur persisted=$rows"
+            # Two consecutive equal samples AND bronze caught up. Either alone is
+            # not enough: the counter plateaus between flushes, and rows can lag a
+            # plateau by a whole flush interval.
+            if [[ -n "$prev" && "$cur" == "$prev" && "$rows" == "$cur" && "$cur" != "0" ]]; then
+              echo "quiescent at $cur signals"
+              exit 0
+            fi
+            prev="$cur"
+            sleep 2
+          done
+
+          echo "::error::quiescence timed out after 60s — ingested=$(ingested) persisted=$(persisted)"
+          exit 1
+
+      - name: Silver assertions (18)
+        run: make test-silver
+
+      - name: Generator integration suite
+        run: make test-generator-integration
+
+      # REQ-B-09: CI's output becomes the authoritative count, which T45 consumes
+      # instead of recounting by hand.
+      - name: Collected counts to the job summary
+        if: always()
+        run: |
+          set -uo pipefail
+          {
+            echo "## e2e-silver"
+            echo
+            echo "| Suite | Count |"
+            echo "|---|---:|"
+            echo "| silver SQL assertions | $(grep -c 'throwIf' infra/clickhouse/tests/02-silver-layer.test.sql) |"
+            echo "| bronze rows persisted | $(docker compose exec -T clickhouse clickhouse-client -q "
+                   SELECT (SELECT count() FROM bronze.otel_logs)
+                        + (SELECT count() FROM bronze.otel_traces)
+                        + (SELECT count() FROM bronze.otel_metrics_gauge)
+                        + (SELECT count() FROM bronze.otel_metrics_sum)" 2>/dev/null | tr -d '[:space:]') |"
+            echo "| silver objects | $(docker compose exec -T clickhouse clickhouse-client -q \
+                   "SELECT count() FROM system.tables WHERE database='silver'" 2>/dev/null | tr -d '[:space:]') |"
+            echo
+            echo "ClickHouse: $(docker compose exec -T clickhouse clickhouse-client -q 'SELECT version()' 2>/dev/null | tr -d '[:space:]')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collector logs on failure
+        if: failure()
+        run: docker compose logs collector-rust | tail -100
+
+      - name: Down
+        if: always()
+        run: make reset

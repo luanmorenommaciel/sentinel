@@ -5,10 +5,12 @@
 # (one ClickHouse version, one service name, no duplicated host port, no
 # plaintext credential, flow-ui writes nothing), so any PR can break one.
 #
-# `continue-on-error: true` is temporary and deliberate: asserts 01–04 are
-# authored to the end state of Candidate I / H and fail on today's tree. T15
-# flips the flag once the single Compose definition and the role migration have
-# landed — at which point this job becomes a required check (docs/ci-gates.md).
+# The flag is gone as of T21 (2026-10-06). It had been `continue-on-error: true`
+# because asserts 01–04 were authored to the end state of Candidate I / H and
+# failed on the tree as it stood; the condition for flipping it was "once the
+# single Compose definition and the role migration have landed", which is T12–T15
+# plus T17–T19. Both are in, all six asserts pass, so this job now gates.
+# docs/ci-gates.md carries the required-check set.
 
 name: repo-invariants
 
@@ -29,5 +31,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run the invariant harness
-        continue-on-error: true
         run: bash scripts/ci/run-invariants.sh

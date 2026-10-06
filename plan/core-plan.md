@@ -666,7 +666,15 @@ No test asserts "this job's flake rate is acceptable"; a human reads a week of r
 it is required **today**)
 **Does** Makes the gate set a reviewable artifact so the WoW's claim and the configured reality can
 be compared instead of assumed (`SPEC §12.4`).
-**Proof** `grep -c "^| " docs/ci-gates.md` matches the job count across `.github/workflows/*.yml`.
+**Proof** The job rows in `docs/ci-gates.md` match the job count across
+`.github/workflows/*.yml` — **13 = 13**, measured 2026-10-06:
+`awk -F'|' '/^\| `[a-z0-9-]+` \|/ && NF==7 {n++} END {print n+0}' docs/ci-gates.md`.
+The arity check is the point. `grep -c "^| "`, which this proof asked for until
+2026-10-06, returns **21** against the file as written: it counts every table row in
+the document, including both header rows and the six rows of the second table that
+lists what `repo-invariants` gates on. It would have equalled the job count only in a
+file containing exactly one table and no header, and it reports a mismatch the moment
+anyone adds a second table — which this file needs.
 **Judgement** **Not provable from inside the repo.** Branch protection is a GitHub setting, not a
 file, and this plan runs no `gh`. Substitute: the Captain configures the rule from
 `docs/ci-gates.md` and records the date in that file; a reviewer compares the two.
