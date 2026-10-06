@@ -150,9 +150,20 @@ sentinel/
 ├── infra/                         # 🔗 SHARED · ClickHouse bootstrap
 │   ├── clickhouse-init.sql                #   db/users init (dev-only auth)
 │   ├── clickhouse-users.d/                #   default-user network override (Rust HTTP path)
+│   ├── clickhouse/migrate.sh              #   applies migrations/, recording each in the _meta ledger
+│   ├── deploy/                            #   what release.yml publishes + the GCP prerequisites
 │   └── clickhouse/init.d/            #   applied on ClickHouse boot, in order
 │       ├── 01-bronze-otel.sql         #     the BRONZE schema (bronze.*, Pod-3-owned)
 │       └── 02-silver-layer.sql        #     SILVER v1 · typed models + read views (ADR-0010)
+│
+├── scripts/ci/                    # 🔗 SHARED · repository invariant harness
+│   ├── run-invariants.sh                  #   runs every assert in invariants.d/
+│   └── invariants.d/                      #   drop-in asserts, one property each
+│
+├── intent/ · spec/ · plan/        # 🔗 SHARED · the sdlc-e2e-review cycle's document chain
+│   ├── intent/                            #   core-intent.md (As-Is) · design-spec.md (rationale)
+│   ├── spec/core-spec.md                  #   implementation-ready spec
+│   └── plan/                              #   core-plan.md (ticket registry) · decisions/DEC-*.md
 │
 ├── docs/                          # 🔗 SHARED · cross-cutting knowledge
 │   ├── adr/                       #   architecture decisions (numbered, Pod-spanning)
@@ -166,8 +177,7 @@ sentinel/
 │
 ├── .github/
 │   ├── PULL_REQUEST_TEMPLATE.md   # what · why (the linked issue) · tests/evidence
-│   └── workflows/                 # rust-ci.yml · pr-linked-issue.yml
-└── .claude/                       # Crew B knowledge env (agents · KBs · skills · standards)
+│   └── workflows/                 # rust-ci · python-ci · repo-invariants · release · pr-linked-issue
 ```
 
 **The scoping rule:** *language-specific config lives inside the component; cross-cutting config lives at the repo root.* Each component is self-contained; the root `Makefile` only coordinates the end-to-end pipeline.
@@ -206,9 +216,13 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
 
 ## 7. Ownership & boundaries
 
-- **`main` is protected.** Feature branches `feat/<area>-<short>`; Conventional Commits; signed commits; attribution trailers; 2 approvals (peer + Captain).
-- **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*: one git worktree per agent, legs declaring **disjoint paths**, squash into the swimlane and a merge commit into `main` so per-leg attribution survives. Mechanics: [`.claude/docs/AGENTIC_GITFLOW.md`](.claude/docs/AGENTIC_GITFLOW.md).
-- **Per-component CI** is path-filtered so each component's gates run independently. Today only [`rust-ci.yml`](.github/workflows/rust-ci.yml) exists — four jobs: gates (fmt · clippy · test · release build) · integration (live-ClickHouse round-trip) · supply-chain (cargo-deny) · docker-build. A Python gate for `services/generator-python/` is still open.
+- **The `main` branch policy** is feature branches `feat/<area>-<short>`, Conventional Commits, signed
+  commits, attribution trailers and 2 approvals (peer + Captain). **It is convention, not
+  enforcement:** `main` carries no GitHub branch-protection rule today (verified 2026-10-06 —
+  the API reports `protected: false`), so nothing rejects a push that skips it. Turning the
+  policy into a required-check set is T21, behind DEC-I1, and is tracked separately in issue #35.
+- **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*: one git worktree per agent, legs declaring **disjoint paths**, squash into the swimlane and a merge commit into `main` so per-leg attribution survives. The ADR is the record; the `.claude/` agent layer that carried the mechanics was removed from the repo in `7689c16`.
+- **CI is five workflows** in [`.github/workflows/`](.github/workflows/): [`rust-ci.yml`](.github/workflows/rust-ci.yml) (gates · integration · cargo-deny · docker-build), [`python-ci.yml`](.github/workflows/python-ci.yml) (ruff · pytest · supply-chain), [`repo-invariants.yml`](.github/workflows/repo-invariants.yml), [`release.yml`](.github/workflows/release.yml) and [`pr-linked-issue.yml`](.github/workflows/pr-linked-issue.yml). Component gates are path-filtered; several jobs are deliberately non-blocking today — see §8 for which, and why.
 - **Contracts are jointly owned** by the Pods on both sides of a boundary (input = Pod 1 + Pod 2; the bronze read schema = Pod 2 + Pod 3). **Components are singly owned.**
 - The **bronze DDL is Pod-3-owned** (`create_schema:false`); collectors only `INSERT`.
 
@@ -229,8 +243,8 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
 | Prometheus `/metrics` endpoint on `:9090` | ✅ |
 | Graceful shutdown with final buffer flush | ✅ |
 | Distroless Docker image + root compose orchestrator | ✅ |
-| CI: gates (fmt · clippy · test · build) · integration (live ClickHouse) · cargo-deny · docker-build | ✅ |
-| Pod 3 silver (rolling-stats rollup, read models) | 🔶 in progress |
+| CI: gates (fmt · clippy · test · build) · integration (live ClickHouse, every `#[ignore]`d test) · cargo-deny · docker-build | ✅ |
+| Pod 3 silver (rolling-stats rollup, read models) | 🔶 in progress — silver v1 DDL exists; read models (T25–T29) not started |
 
 **Latest local E2E snapshot** — Docker/Linux arm64, scenario `baseline`, seed `42`, window `5m` (2026-08-04):
 
@@ -247,7 +261,50 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
 
 This workload met the collector health gates: no signal loss, no contract rejection, no failed export, complete bronze parity, and sub-80ms export attempts. These numbers are a reproducible local snapshot, not a production SLO or a substitute for sustained-load benchmarking on target infrastructure.
 
-**Remaining:** ADR-0007 acceptance (Pod 3 sign-off); Pod 3 silver.
+### Delivery path and SDLC hardening (`sdlc-e2e-review` cycle)
+
+This cycle hardened how the pipeline is built, checked and published rather than what it computes. The ticket registry is [`plan/core-plan.md`](plan/core-plan.md). Landed, with its limits stated:
+
+| Area | Landed | Limit |
+|---|---|---|
+| **Python CI** (T07, T08) | [`python-ci.yml`](.github/workflows/python-ci.yml): ruff + pytest on a `PYTHON_IMAGE` matrix; the generator integration suite targets `CLICKHOUSE_URL` instead of starting its own ClickHouse | Closes the former "no Python gate" gap |
+| **Rust CI** (T09) | `rust-ci.yml` now runs every `#[ignore]`d integration test (one of them had never run) | |
+| **Python supply chain** (T10) | `pip-audit` + `bandit` job | **Warn-only** (`continue-on-error`); there is no lockfile yet, so `pip-audit` resolves whatever is current |
+| **Repository invariants** (T01) | [`scripts/ci/run-invariants.sh`](scripts/ci/run-invariants.sh) + drop-in [`invariants.d/`](scripts/ci/invariants.d/), run by `repo-invariants.yml` | See *Invariants* below; the CI job is non-blocking |
+| **Migrations** (T05, T11) | [`infra/clickhouse/migrate.sh`](infra/clickhouse/migrate.sh) records each applied migration in a `_meta` ledger (migration `0003`); `make migrate` runs it | |
+| **Collector credentials** (T06) | `user` / `password_file` collector config | |
+| **Cross-arch** (T04) | arm64 + musl/TLS compile spike, toolchain target, CI `platforms:` | |
+| **Test scaffolding** (T02, T03) | flow-ui two-coverage fixtures; a Compose `include:` path-resolution probe | |
+| **flow-ui** (T35) | `silver_coverage` probe on the 30 s lane | |
+| **Release** (T22) | [`release.yml`](.github/workflows/release.yml): Artifact Registry, GitHub OIDC → Workload Identity Federation (no long-lived key), SLSA provenance, SBOM, keyless cosign signing of the digest | **Unverified.** See below |
+| **Promotion** (T23) | digest promotion `main` → `:staging`, `v*` → `:prod`; `cosign verify` runs before any tag moves | **Unverified.** See below |
+| **Image scan** (T24) | trivy scan by digest | **Warn-only, and does not gate the push.** See below |
+
+Also this cycle, commit `7689c16` removed the `.claude/` agent layer and the `meetings/` archive (89 files).
+
+**Unverified: nothing in the release lane has run against a real registry.** No GCP project, Artifact Registry repository or Workload Identity provider exists yet. Signing, attestation verification and `crane tag` on a multi-arch index have therefore not been exercised; [`infra/deploy/README.md`](infra/deploy/README.md) carries the specific "Unverified" notes and what to confirm on the first publish.
+
+**The vulnerability scan does not gate the push.** It runs after `push: true`, so REQ-H-12's wording ("SHOULD gate the registry push") is not met: a multi-arch manifest cannot be loaded into the runner's daemon to be scanned beforehand. It is warn-only (`exit-code: "0"`, a single flag). Making it blocking, and the severity threshold, are policy and belong to T21.
+
+**Invariants: 4 of 5 currently fail, by design.** The asserts are written to the end state and stay red until T12–T19 land; this is not a regression. `bash scripts/ci/run-invariants.sh` (2026-10-06) reports:
+
+| Assert | Result | Why |
+|---|---|---|
+| `01-single-clickhouse-image` | FAIL | three image pins: `24.3` (root compose), `25.4` (`services/collector-rust/infra/docker-compose.yml`), `24.3` (`services/generator-python/docker-compose.yaml`) |
+| `02-service-named-clickhouse` | FAIL | `infra/clickhouse/compose.clickhouse.yml` does not exist |
+| `03-no-duplicate-host-8080` | FAIL | the generator Compose file collides with the root stack on host ports 4317, 8080 and 8123 |
+| `04-no-plaintext-secrets` | FAIL | the vestigial `otelgen` user's password sits in plaintext in `infra/clickhouse-init.sql` and the generator Compose file; migration `0002` drops the user (T17/T19) |
+| `05-flow-ui-is-read-only` | PASS | flow-ui issues no write statement |
+
+The `repo-invariants` job runs with `continue-on-error: true` until T15 flips it, so it is not a required check.
+
+**Not done.**
+
+- **T12–T21 are blocked on [DEC-I1](plan/decisions/DEC-I1.md)** (one ClickHouse image pin, and whether `services/generator-python/docker-compose.yaml` is deleted). DEC-I1 gates T12 directly and 26 tickets transitively (T12–T21, T25–T34, T36–T39, T46, T47). [DEC-A2](plan/decisions/DEC-A2.md) (ClickHouse hosting and operational owner) additionally gates T30 and T40.
+- **T20** (`e2e-silver.yml`, the live-ClickHouse silver job) and **T21** (`docs/ci-gates.md` and the required-check set) sit behind T19, and so behind DEC-I1. Until T21, no new check is required and branch protection is not configured.
+- **Pod 3 silver read models (T25–T29)** are not started.
+
+**Remaining:** DEC-I1 (the dominant blocker: it gates 26 tickets) and DEC-A2; then ADR-0007 acceptance (Pod 3 sign-off), Pod 3 silver read models, histogram/summary metrics, branch protection and the agentic layer.
 
 ---
 
@@ -260,14 +317,17 @@ This workload met the collector health gates: no signal loss, no contract reject
 | 3 | Sentinel keys are `Map` probes under bronze (no typed columns) — materialize in silver? | Open | [ADR-0007 §Trade-offs](docs/adr/0007-bronze-canonical-contract.md) |
 | 4 | `otel_metrics_1m` rolling-stats moved to Pod 3 silver (Tier-1 input) | Handoff | [read contract §2.3](contracts/collector/v1/pod2-pod3-read-contract.md) |
 | 5 | Histogram / Summary metrics not emitted (no v1.0.0 type) | Known gap | `services/collector-rust/src/otlp.rs` |
-| 6 | Python CI gate for `services/generator-python/` not yet added | Open | [`.github/workflows/`](.github/workflows/) |
-| 7 | Agentic gitflow amends the WoW's squash-to-main rule (needs ratification) | Pending | [ADR-0009](docs/adr/0009-agentic-gitflow.md) |
+| 6 | **DEC-I1** — one ClickHouse image pin; is `services/generator-python/docker-compose.yaml` deleted? Gates 26 tickets | **Blocking** | [`plan/decisions/DEC-I1.md`](plan/decisions/DEC-I1.md) |
+| 7 | **DEC-A2** — ClickHouse hosting / operational owner. Additionally gates T30 and T40 | **Blocking** | [`plan/decisions/DEC-A2.md`](plan/decisions/DEC-A2.md) |
+| 8 | Release lane (signing, attestation verification, `crane tag` on a multi-arch index) never run against a real registry | Unverified | [`infra/deploy/README.md`](infra/deploy/README.md) |
+| 9 | Image scan runs after push (REQ-H-12 not met) and is warn-only; blocking threshold is policy | Open | T21 · [`infra/deploy/README.md`](infra/deploy/README.md) |
+| 10 | Agentic gitflow amends the WoW's squash-to-main rule (needs ratification) | Pending | [ADR-0009](docs/adr/0009-agentic-gitflow.md) |
 
 ---
 
 ## 10. Pointers
 
-[Rust collector](services/collector-rust/) · [ADRs](docs/adr/README.md) · [Pod 2 → Pod 3 read contract](contracts/collector/v1/pod2-pod3-read-contract.md) · [bronze gap analysis](docs/research/pod3-bronze-gap.md) · [bronze DDL](infra/clickhouse/init.d/01-bronze-otel.sql) · [Crew B standards](.claude/docs/)
+[Rust collector](services/collector-rust/) · [ADRs](docs/adr/README.md) · [Pod 2 → Pod 3 read contract](contracts/collector/v1/pod2-pod3-read-contract.md) · [bronze gap analysis](docs/research/pod3-bronze-gap.md) · [bronze DDL](infra/clickhouse/init.d/01-bronze-otel.sql) · [ticket registry](plan/core-plan.md) · [decisions](plan/decisions/README.md) · [deployment artifacts](infra/deploy/README.md)
 
 ---
 
