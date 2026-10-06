@@ -36,7 +36,6 @@ def kv(k, v):
     return C.KeyValue(key=k, value=C.AnyValue(string_value=v))
 
 
-
 # Four of the five required keys. `sentinel.run_id` is absent — one missing key is enough.
 RES = R.Resource(attributes=[
     kv("service.name", "third-party-agent"),

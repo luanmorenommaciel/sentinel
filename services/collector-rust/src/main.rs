@@ -97,22 +97,13 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
     let client: Option<clickhouse::Client> = match config.clickhouse.as_ref() {
         Some(ch) => {
             info!(
-                url = %ch.url,
-                database = %ch.database,
-                user = ch.user.as_deref().unwrap_or("<client default>"),
-                password_file = ?ch.password_file,
                 batch_size = ch.batch_size,
                 flush_interval_ms = ch.flush_interval_ms,
                 "export mode: ClickHouse target configured (EP2.2 buffered exporter)"
             );
-            // An unreadable `password_file` is a startup failure, not a
-            // silently passwordless connection (REQ-H-05).
-            match clickhouse_exporter::build_client_from_config(ch) {
-                Ok(client) => Some(client),
-                Err(err) => {
-                    error!(error = %err, "clickhouse credential unavailable");
-                    return ExitCode::FAILURE;
-                }
+            match connect(ch) {
+                Some(client) => Some(client),
+                None => return ExitCode::FAILURE,
             }
         }
         None => None,
@@ -195,6 +186,30 @@ fn cfg_metrics_addr(
     config.metrics.listen.parse()
 }
 
+/// Log the ClickHouse target and build its client, resolving `password_file`.
+///
+/// `None` means the credential could not be read — a startup failure, not a
+/// silently passwordless connection (REQ-H-05) — and the caller returns
+/// `ExitCode::FAILURE`. Both modes enter ClickHouse through here, so the target
+/// is logged once and identically whichever mode the config selected, and the
+/// failure is reported in one place.
+fn connect(ch: &sentinel_collector::config::ClickHouseConfig) -> Option<clickhouse::Client> {
+    info!(
+        url = %ch.url,
+        database = %ch.database,
+        user = ch.user.as_deref().unwrap_or("<client default>"),
+        password_file = ?ch.password_file,
+        "ClickHouse target"
+    );
+    match clickhouse_exporter::build_client_from_config(ch) {
+        Ok(client) => Some(client),
+        Err(err) => {
+            error!(error = %err, "clickhouse credential unavailable");
+            None
+        }
+    }
+}
+
 /// Load config from an optional path argument, applying env overrides.
 ///
 /// `Ok(config)` on success; `Err(exit_code)` if a provided path fails to load
@@ -246,19 +261,9 @@ async fn run(config: &Config) -> ExitCode {
 
     let counts = match &config.clickhouse {
         Some(ch) => {
-            info!(
-                url = %ch.url,
-                database = %ch.database,
-                user = ch.user.as_deref().unwrap_or("<client default>"),
-                password_file = ?ch.password_file,
-                "export mode"
-            );
-            let client = match clickhouse_exporter::build_client_from_config(ch) {
-                Ok(client) => client,
-                Err(err) => {
-                    error!(error = %err, "clickhouse credential unavailable");
-                    return ExitCode::FAILURE;
-                }
+            info!("export mode");
+            let Some(client) = connect(ch) else {
+                return ExitCode::FAILURE;
             };
             match clickhouse_exporter::export(&client, signals).await {
                 Ok(export_counts) => export_counts,

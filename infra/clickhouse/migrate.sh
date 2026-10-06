@@ -17,16 +17,18 @@
 # migrating the wrong database:
 #
 #   CH_CLIENT="docker compose exec -T clickhouse clickhouse-client" …   # local stack
+#   CLICKHOUSE_PASSWORD="$(cat /run/secrets/pw)" \
 #   CH_CLIENT="clickhouse-client --host=ch.internal --secure \
-#              --user=sentinel_migrator_u --password=$(cat /run/secrets/pw)" … # deployed
+#              --user=sentinel_migrator_u" …                            # deployed
+#
+# The password goes in `CLICKHOUSE_PASSWORD`, which the client reads itself
+# (verified on 24.3; there is no `--password-file`), and NEVER in `CH_CLIENT`:
+# this script prints the client command on an unreachable host, and `ps` shows
+# an argv to every user on the box.
 #
 # `--multiquery` is passed by this script and is not optional: the 24.3 client
 # rejects a multi-statement `-q` with `Code: 62` where 25.4 accepts it (measured,
 # #46), and every migration file holds more than one statement.
-#
-# Idempotence lives in the LEDGER, not in the statements. That is what admits a
-# `CREATE OR REPLACE VIEW` in a migration (REQ-D-11) — a statement that is not
-# `IF NOT EXISTS`-shaped is still applied exactly once.
 #
 # Exit codes are part of the contract (spec §6.2):
 #   0  every file applied or skipped
@@ -49,6 +51,17 @@ err() { printf '%s\n' "$*" >&2; }
 # Run SQL from stdin. Every statement in this runner goes through here, so there
 # is one place the client is invoked and one place its args are set.
 ch() { "${CLIENT[@]}"; }
+
+# Escape a value for a single-quoted ClickHouse string literal. A branch name or
+# hostname carrying a quote would otherwise break — or alter — the ledger INSERT
+# after the migration has already been applied, which is the one write that must
+# not fail.
+# The quote char goes through a variable: `${1//\'/\'\'}` looks right and is not
+# — the replacement's backslashes are literal, so it yields `bran\'\'ch`.
+sql_quote() {
+    local q="'"
+    printf '%s' "${1//"$q"/$q$q}"
+}
 
 sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -84,7 +97,9 @@ fi
 
 # ── reachability (exit 2) ────────────────────────────────────────────────────
 if ! probe="$(printf 'SELECT 1\n' | ch 2>&1)"; then
-    err "migrate: cannot reach ClickHouse with '${CLIENT[*]}'"
+    # ${CLIENT[0]} only: a caller that put a credential in CH_CLIENT anyway must
+    # not have it copied into a CI log by this error path.
+    err "migrate: cannot reach ClickHouse via '${CLIENT[0]}'"
     err "${probe}"
     exit 2
 fi
@@ -166,7 +181,8 @@ for file in "$MIGRATIONS_DIR"/[0-9][0-9][0-9][0-9]_*.sql; do
     fi
 
     if ! out="$(printf "INSERT INTO _meta.schema_migrations (version, filename, checksum, applied_by, duration_ms, runner_host) VALUES ('%s', '%s', '%s', '%s', %d, '%s')\n" \
-        "$version" "$filename" "$checksum" "$APPLIED_BY" "$duration_ms" "$RUNNER_HOST" | ch 2>&1)"; then
+        "$(sql_quote "$version")" "$(sql_quote "$filename")" "$checksum" \
+        "$(sql_quote "$APPLIED_BY")" "$duration_ms" "$(sql_quote "$RUNNER_HOST")" | ch 2>&1)"; then
         err "migrate: $filename applied but the ledger row could not be written"
         err "$out"
         exit 4

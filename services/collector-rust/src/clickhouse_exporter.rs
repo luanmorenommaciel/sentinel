@@ -831,7 +831,6 @@ mod tests {
 
     #[test]
     fn client_builds_without_a_credential() {
-        // No password_file: a client is still built, and nothing is sent.
         assert!(build_client_from_config(&ch_config(None)).is_ok());
     }
 

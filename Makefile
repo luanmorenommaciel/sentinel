@@ -13,7 +13,7 @@ RATE      ?= 200
 
 .PHONY: help up init generate generate-stream ui e2e down reset logs ps \
         build test test-generator test-collector-rust test-flow-ui \
-        test-generator-integration \
+        test-generator-integration audit-python \
         test-silver sample-silver lint lint-generator lint-collector-rust lint-flow-ui
 
 # Docker runner for per-service build/test/lint — no host toolchains required.
@@ -114,6 +114,17 @@ lint-flow-ui:        ## flow-ui lint (ruff)
 
 lint-generator:      ## Python lint (ruff)
 	$(DK_RUN) -w /w/services/generator-python ghcr.io/astral-sh/ruff:latest check src
+
+audit-python:        ## Python advisories + static security scan (prints findings; non-zero if any)
+	@$(DK_RUN) -w /w -e HOME=/tmp $(PYTHON_IMAGE) bash -c '\
+		python -m venv /tmp/v >/dev/null && \
+		/tmp/v/bin/pip -q install pip-audit bandit && \
+		echo "── pip-audit: generator ──" && \
+		/tmp/v/bin/pip-audit --progress-spinner off --desc on services/generator-python; \
+		echo "── pip-audit: flow-ui ──" && \
+		/tmp/v/bin/pip-audit --progress-spinner off --desc on services/flow-ui; \
+		echo "── bandit: shipped sources ──" && \
+		/tmp/v/bin/bandit -q -r services/generator-python/src services/flow-ui/src'
 
 lint-collector-rust: ## Rust fmt check + clippy
 	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \

@@ -47,9 +47,9 @@ concurrency:
 
 jobs:
   # ── ruff over both packages ───────────────────────────────────────────────
-  # One job, not one per package: ruff is version-independent (it runs from its
-  # own pinned container image, not the interpreter under test), so sweeping it
-  # across the matrix would buy three identical results.
+  # One job, not one per package, and off the matrix: ruff runs in its own
+  # container rather than the interpreter under test, so sweeping it across the
+  # matrix would buy three identical results.
   lint:
     name: lint (ruff)
     runs-on: ubuntu-latest
@@ -108,23 +108,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install the scanners
-        run: python -m pip install --quiet pip-audit bandit
-
-      # `pip-audit <dir>` resolves the project's dependency set in an ephemeral
-      # virtualenv — the only form available without a lockfile.
-      - name: pip-audit — generator
-        run: pip-audit --progress-spinner off --desc on services/generator-python
-
-      - name: pip-audit — flow-ui
-        run: pip-audit --progress-spinner off --desc on services/flow-ui
-
-      # Scoped to the shipped sources. tests/ and scripts/ trip B101 (assert)
-      # and B404/B603 (subprocess) by design, and a scan whose output is mostly
-      # expected findings is a scan nobody reads.
-      - name: bandit
-        run: bandit -r services/generator-python/src services/flow-ui/src
+      - name: pip-audit + bandit
+        run: make audit-python

@@ -150,11 +150,6 @@ jobs:
       # reintroduced `--test <target>` filter, which is the exact regression
       # this ticket repairs, and a `--list` would answer about a different
       # invocation than the one that ran.
-      #
-      # The rule is "every #[ignore]d test in tests/*.rs must run here". A test
-      # that is deliberately not meant to run in this job — behind a cargo
-      # feature, say — would need this check amended rather than the test
-      # quietly excluded. That is the trade: no silent exclusions.
       - name: No orphaned #[ignore]d tests
         working-directory: services/collector-rust
         run: |
@@ -186,7 +181,7 @@ jobs:
           # Every integration target must have been attempted, not just the one
           # holding a live test today.
           targets="$(ls tests/*.rs | wc -l | tr -d ' ')"
-          attempted="$(grep -c '^     Running tests/' "$RUNNER_TEMP/ignored.log" || true)"
+          attempted="$(grep -cE '^ *Running tests/' "$RUNNER_TEMP/ignored.log" || true)"
           echo "integration targets: $targets declared, $attempted attempted"
           if [ "$attempted" -ne "$targets" ]; then
             echo "::error::$attempted of $targets integration targets attempted"
