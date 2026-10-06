@@ -469,7 +469,11 @@ name is unrun. Negative proof: add a new `#[ignore]`d test in an excluded target
 **Does** Closes the asymmetry: `cargo deny` gates licences, advisories and bans with
 `yanked = "deny"` and `--locked` throughout, while Python has no lockfile, no `pip-audit`, no
 `bandit`, `>=` floors only **[E]**.
-**Proof** The job runs and prints findings; `grep -c continue-on-error` in the job → 1. Promotion
+**Proof** The job runs and prints findings;
+`grep -cE '^[[:space:]]*continue-on-error:' .github/workflows/python-ci.yml` → **1**, one flag to
+find and one to flip. The pattern is anchored on purpose: bare `grep -c continue-on-error`, which
+this proof asked for until 2026-10-06, returns **2** — `:102` is the comment explaining the flag and
+`:107` is the flag — so it reported a false failure against its own stated expectation. Promotion
 to required is T21's business, after a week of real PRs.
 
 ### T11 — `make migrate` target
@@ -593,8 +597,14 @@ not this document and not a reviewer.
 `swim/infra/ch-posture` with T06/T13/T14/T17/T19 and is verified at T19 (§4).
 **Proof** (at T19) the collector authenticated as `sentinel_collector_u` and flow-ui as
 `sentinel_reader_u` with `make test-silver` exit 0;
-`docker compose logs collector-rust | grep -ci "password\|secret"` → 0 (NFR-10);
-`docker inspect sentinel-collector | grep -c ch_password` → the **path** only.
+`docker compose logs collector-rust | grep -c -F "$(cat infra/secrets/ch_password)"` → **0**
+(NFR-10) — the secret's *value*, not the word: `grep -ci "password\|secret"` → 0, which this proof
+asked for until 2026-10-06, passes a log that prints the credential without ever using either word,
+and fails a log that merely says "reading password_file";
+`docker inspect sentinel-collector` → the **path** and not the value, asserted as the two halves
+T44 uses: `grep -o '/[^"]*ch_password'` prints the path and
+`grep -c -F "$(cat infra/secrets/ch_password)"` → **0**. `grep -c ch_password` → 1 counts the
+filename and is unchanged by a leak of the value beside it.
 
 ### T19 — Delete the `::/0` routes and `otelgen` *(contract + integrate-and-verify)*
 **Leg** `leg/infra/ch-migrate-v1` + `swim/infra/ch-posture` · **Blocked by** T15, T18 · **REQ** H-01, H-02, B-14 · **Seam** S1
@@ -1029,9 +1039,17 @@ because it **is** the probe (REQ-H-14). `Snapshot` is per-process and not shared
 **Proof** `terraform plan` (or equivalent) → no drift from a clean apply; a staging apply from an
 empty project reaching a healthy stack. Ordering: the deploy's logs show `migrate` exiting 0
 **before** the collector revision accepts traffic, and an injected failing migration leaves the
-revision **never promoted**. `curl -fsS http://<collector>:9090/metrics | grep -c
-sentinel_signals_ingested_total` → `1` from **outside** the container. Config-shape assert in CI:
-`grep -q '^grpc:' infra/deploy/config/*/collector.yaml && grep -q '^clickhouse:' …` → exit 0 for
+revision **never promoted**. `curl -fsS http://<collector>:9090/metrics` → exit 0 from **outside** the container, and after
+traffic `| grep -c '^sentinel_signals_ingested_total{'` → **3**, one series per signal label.
+Measured 2026-10-06 against the live collector, the `grep -c
+sentinel_signals_ingested_total` → `1` this proof asked for is **unreachable in either state**: 0
+before any traffic, because a labelled counter does not materialise until it is incremented, and 5
+after, because the exposition carries `# HELP` and `# TYPE` beside the three
+`{signal="logs"|"metrics"|"trace"}` series. Anchoring on `^sentinel_…{` counts series and skips the
+metadata. Config-shape assert in CI, **per file** rather than over a glob:
+`for f in infra/deploy/config/*/collector.yaml; do grep -q '^grpc:' "$f" && grep -q '^clickhouse:' "$f" || exit 1; done` —
+`grep -q PATTERN <glob>` succeeds on the *first* matching file, so the form this proof used until
+2026-10-06 passed with one environment's config missing `grpc:` entirely → exit 0 for
 every env file.
 **Judgement** REQ-A-08 is a **review gate**: a reviewer follows `infra/deploy/README.md` on a clean
 project and reports where they had to click. No test detects a step someone performed by hand and
