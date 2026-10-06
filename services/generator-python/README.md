@@ -454,13 +454,39 @@ The volume mount at `/app/contract` replaces the baked-in defaults entirely. Thi
 
 ### docker-compose (local E2E)
 
-A `docker-compose.yaml` wiring the generator together with an OTel Collector and ClickHouse for a full local end-to-end run is defined in the project design and will be present at the repo root. To start the full stack:
+The end-to-end stack lives in the **repository root** `docker-compose.yml`, and the
+one-command form is:
 
 ```bash
-docker compose up
+make e2e        # up (ClickHouse + collector) -> generate -> rows in bronze.*
 ```
 
-The collector listens on `4317` (gRPC) and `4318` (HTTP); ClickHouse on `8123`. The generator targets the OTLP HTTP path by default.
+This service had its own `docker-compose.yaml` until T15 deleted it. It is worth
+knowing why, because it changes what to reach for:
+
+* it pinned a **second ClickHouse** (`24.3`, where the repo now pins one version in
+  `infra/clickhouse/compose.clickhouse.yml`), so it tested a different engine from
+  the one the pipeline runs;
+* it published `4317`, `4318`, `8080`, `8123` and `9000`, colliding with the root
+  stack on four of them — the two could not run side by side;
+* it carried a plaintext ClickHouse password.
+
+The canonical path is OTLP gRPC: the generator sends to the Rust collector on
+**`:4317`**, which writes `bronze.*` over HTTP `:8123`. There is no `:4318` HTTP
+receiver in this pipeline — the previous version of this section claimed one.
+
+The two workflows that file documented are preserved above, as commands rather than
+a Compose service: [direct write to ClickHouse](#direct-write-to-clickhouse-dev-only--non-canonical)
+with [`--init-schema`](#print-create-table-ddl-from-the-schema-config-and-exit) to
+bootstrap the tables, and [sending to HyperDX / ClickStack over OTLP](#send-to-hyperdx--clickstack-via-otlp-authenticated)
+with an ingestion key. For the ClickStack UI, run its all-in-one image directly:
+
+```bash
+docker run --rm -p 8080:8080 -p 4318:4318 clickhouse/clickstack-all-in-one:latest
+```
+
+Keep it out of a committed Compose file: it bundles its own ClickHouse, which is a
+second pinned version the single-definition rule (REQ-I-01) exists to prevent.
 
 ---
 

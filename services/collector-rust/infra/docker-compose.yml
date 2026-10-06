@@ -21,33 +21,19 @@
 #   the wire format is ClickHouse's binary RowBinary, not JSON. The URL in
 #   your Rust config should be "http://localhost:8123". See infra/clickhouse/README.md.
 
-services:
-  clickhouse:
-    image: clickhouse/clickhouse-server:25.4
-    container_name: sentinel-clickhouse
-    ports:
-      - "8123:8123"   # HTTP interface — used by clickhouse 0.13 Rust crate
-      - "9000:9000"   # Native TCP interface — clickhouse-client, admin tools
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse          # persistent data volume
-      # Official POD 3 bronze schema (bronze.*), auto-applied on first boot.
-      - ../../../infra/clickhouse/init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/01-bronze-otel.sql:ro
-    environment:
-      # No authentication for local dev. Do not use these values in staging/prod.
-      CLICKHOUSE_DB: bronze
-      CLICKHOUSE_USER: default
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/?query=SELECT+1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    ulimits:
-      # ClickHouse opens many file descriptors during merges; raise the limit.
-      nofile:
-        soft: 262144
-        hard: 262144
+# ClickHouse comes from the one definition in the repository (REQ-I-03, REQ-I-08).
+# Two defects go with the inline service this replaces:
+#
+#   * it mounted bronze only, so CI has never once exercised the silver DDL the
+#     local stack runs (REQ-B-12, REQ-I-04). The shared definition mounts both.
+#   * it set `CLICKHOUSE_USER` and `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT`, which
+#     makes the entrypoint generate its own users file and opens a second `::/0`
+#     route independent of `zz-default-network.xml` (REQ-B-14). Both are gone.
+#
+# `rust-ci.yml` is deliberately NOT edited for this: REQ-I-03 calls it load-bearing,
+# and `up -d --wait` / `down -v` against this path keep working unchanged.
+include:
+  - ../../../infra/clickhouse/compose.clickhouse.yml
 
 volumes:
   clickhouse_data:

@@ -2,29 +2,18 @@
 #
 #   generator (otelgen) ──OTLP gRPC :4317──▶ collector-rust ──HTTP──▶ ClickHouse :8123
 
-services:
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.3
-    # The Rust collector uses the passwordless `default` user over HTTP :8123.
-    # The init script creates the bronze database without changing that dev-only auth.
-    ports:
-      - "8123:8123"   # HTTP interface (+ /play UI) — Rust exporter
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse
-      - ./infra/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-      - ./infra/clickhouse-users.d/zz-default-network.xml:/etc/clickhouse-server/users.d/zz-default-network.xml:ro
-      # POD 3 canonical bronze schema (bronze.* contrib-style) — auto-applied on first boot.
-      # The collector writes this split schema directly (ADR-0007); the tables must
-      # exist before it connects, so they are created here on boot.
-      - ./infra/clickhouse/init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/02-bronze-otel.sql:ro
-      # POD 3 typed Silver models and Watcher read models (ADR-0010).
-      - ./infra/clickhouse/init.d/02-silver-layer.sql:/docker-entrypoint-initdb.d/03-silver-layer.sql:ro
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/?query=SELECT+1"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
+# ClickHouse comes from the one definition in the repository (REQ-I-02, REQ-I-08);
+# `make up` is still a single step. Relative mounts inside the included file resolve
+# against its own directory, so the DDL paths do not need restating here.
+#
+# The `infra/clickhouse-init.sql` and `infra/clickhouse-users.d/` mounts went with
+# the inline service. **That reverts `default` to localhost-only**, so the
+# collector's export stays broken until T18 moves consumers onto roles; this ticket
+# is green as a Compose-config change and runtime green is T19's.
+include:
+  - infra/clickhouse/compose.clickhouse.yml
 
+services:
   collector-rust:
     build:
       context: ./services/collector-rust
@@ -85,5 +74,3 @@ services:
     # No long-running command — driven on demand by `make generate`
     # (docker compose run --rm generator run --scenario ... --otlp-endpoint http://collector:4317).
 
-volumes:
-  clickhouse_data: {}
