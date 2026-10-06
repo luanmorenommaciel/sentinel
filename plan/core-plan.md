@@ -606,7 +606,16 @@ value-per-line item in the plan: no deployment, no ADR, and a committed plaintex
 the XML, sees CI stay green, and believes REQ-H-02 is done.
 **Proof** The whole swimlane in one run: `make reset && make up && make migrate && make generate &&
 make test-silver && make test && bash scripts/ci/run-invariants.sh` → **every command exit 0**.
-Plus: `grep -rn "otelgen_secret" . --exclude-dir=.git` → **0 hits**;
+Plus `bash scripts/ci/invariants.d/04-no-plaintext-secrets.sh` → **exit 0** — which is the
+enforceable form of SPEC §14.2's whole-tree grep, and the only one that can pass. The literal
+`grep -rn "otelgen_secret" . --exclude-dir=.git` → 0 that this proof asked for until 2026-10-06
+**is unsatisfiable**: measured that day, after T19 deletes both operational files, six files still
+carry the string — `intent/core-intent.md`, `intent/design-spec.md`, `spec/core-spec.md`,
+`plan/core-plan.md`, `plan/decisions/DEC-I1.md` and
+`scripts/ci/invariants.d/04-no-plaintext-secrets.sh`. The first three are records NFR-08 forbids
+editing, the next two specify and justify this very proof, and the last must name the string it
+forbids. Assert 04 excludes `invariants.d` and scans the operational tree for exactly that reason.
+Which paths belong in scope is **issue #51** and is not settled here;
 `clickhouse-client -q "SELECT count() FROM system.users WHERE name='otelgen'"` → `0`; and from
 **another container on the Compose network**, `wget -qO- 'http://clickhouse:8123/?query=SELECT+1'`
 as `default` with no password → **denied** (route 1). Run the route-2 probe once in the PR against
@@ -1084,7 +1093,12 @@ owned by the container's non-root user) · ~`infra/deploy/config/<env>/*.secret.
 ~`scripts/ci/invariants.d/04-no-plaintext-secrets.sh`
 **Does** The config carries a **path, never a value**. Never an env var, never a build arg, never a
 `docker inspect`-visible field — the only shape compatible with the `std::env::var` ban.
-**Proof** `docker inspect <collector> | grep -c ch_password` → the **path** only.
+**Proof** `docker inspect <collector>` → contains the **path** and not the value:
+`grep -o '/[^"]*ch_password' ` prints the path, and `grep -c -F "$(cat /run/secrets/ch_password)"`
+→ **0**. Both halves are needed and the second is the one with teeth — `grep -c ch_password` → 1,
+which this proof asked for until 2026-10-06, counts an occurrence of the *filename* and says
+nothing about whether the secret's **value** is also in the output. A leak would not change that
+count.
 `<platform> logs <collector> | grep -ci "password\|secret"` → `0`.
 `crane export <digest> - | tar -t | grep -c secrets` → `0` (no secret in any image layer).
 `bash scripts/ci/invariants.d/04-no-plaintext-secrets.sh`, extended to fail on any file under
