@@ -57,14 +57,14 @@ async fn main() -> ExitCode {
     }
 
     // Server mode (gRPC section present) and file mode are mutually exclusive
-    // lifecycles: the server runs until Ctrl-C; file mode runs once and exits.
+    // lifecycles: the server runs until SIGINT/SIGTERM; file mode runs once and exits.
     match config.grpc {
         Some(_) => serve_grpc(&config).await,
         None => run(&config).await,
     }
 }
 
-/// Run the OTLP gRPC server until Ctrl-C.
+/// Run the OTLP gRPC server until SIGINT or SIGTERM.
 ///
 /// When `config.clickhouse` is present the server operates in **export mode**:
 /// each received OTLP request is transformed to [`sentinel_collector::Signal`]
@@ -133,7 +133,9 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
     };
 
     let metrics_shutdown = async {
-        let _ = tokio::signal::ctrl_c().await;
+        if let Err(err) = shutdown_signal().await {
+            error!(error = %err, "metrics shutdown signal handler failed");
+        }
     };
     let metrics_task = tokio::spawn(sentinel_collector::metrics_server::serve(
         metrics_addr,
@@ -142,8 +144,9 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
     ));
 
     let shutdown = async {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            info!("shutdown signal received");
+        match shutdown_signal().await {
+            Ok(()) => info!("shutdown signal received"),
+            Err(err) => error!(error = %err, "shutdown signal handler failed"),
         }
     };
 
@@ -176,6 +179,24 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
             error!(error = %err, "gRPC server terminated with error");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Normal container stops send SIGTERM; interactive stops send SIGINT.
+/// Both must enter the server's existing graceful buffer-drain path.
+async fn shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
     }
 }
 
