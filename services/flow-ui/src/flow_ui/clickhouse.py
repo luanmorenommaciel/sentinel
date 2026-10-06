@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 from typing import ClassVar
 
 import httpx
@@ -50,13 +51,50 @@ EMPTY_BY_CONTRACT = (
 )
 
 
+def _auth_headers(user: str, password_file: str) -> dict[str, str]:
+    """ClickHouse credentials as headers, never in the URL (T18).
+
+    `X-ClickHouse-User` / `X-ClickHouse-Key` rather than credentials embedded in the URL
+    itself: a connection string carrying them gets logged by every layer that logs a
+    URL, and that shape is one of the two `04-no-plaintext-secrets.sh` rejects. (Spelling
+    the shape out here would trip that assert, which is the point of it.)
+
+    `password_file` is a path. An unreadable one is not fatal here and must not be:
+    flow-ui is an observer, and nothing in the pipeline depends on it being up (NFR-05),
+    so a missing secret degrades its boards rather than taking the service down. The
+    collector makes the opposite choice for the same reason \u2014 it is in the data path, so
+    an unreadable file is a startup failure there.
+
+    Returns an empty mapping when no user is set, which is the passwordless local-dev
+    path and keeps a bare `make ui` working with no configuration.
+    """
+    if not user:
+        return {}
+    headers = {"X-ClickHouse-User": user}
+    if password_file:
+        try:
+            # One trailing newline is stripped, so a secret store that appends one and a
+            # store that does not yield the same credential.
+            headers["X-ClickHouse-Key"] = Path(password_file).read_text(encoding="utf-8").rstrip("\n")
+        except OSError as exc:
+            log.warning("clickhouse password file unreadable, continuing unauthenticated: %s", exc)
+    return headers
+
+
 class ClickHouse:
     """A thin async client over the HTTP interface."""
 
-    def __init__(self, url: str, database: str, timeout: float = 4.0) -> None:
+    def __init__(
+        self,
+        url: str,
+        database: str,
+        timeout: float = 4.0,
+        user: str = "",
+        password_file: str = "",
+    ) -> None:
         self._url = url.rstrip("/")
         self._db = database
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._client = httpx.AsyncClient(timeout=timeout, headers=_auth_headers(user, password_file))
 
     async def aclose(self) -> None:
         await self._client.aclose()

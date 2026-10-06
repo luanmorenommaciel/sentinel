@@ -7,12 +7,15 @@ clickhouse:
   database: bronze   # official POD3 bronze schema (bronze.*)
   # Credentials are a PATH, never a value (REQ-H-05, SPEC §14.2) — which is also
   # the only shape compatible with clippy.toml's std::env::var ban, and why there
-  # is deliberately no `password` key. Commented out here because the local stack
-  # still connects as the passwordless `default` user; migration 0002 creates the
-  # role and T18 switches this file over to it:
+  # is deliberately no `password` key.
   #
-  # user: sentinel_collector_u
-  # password_file: /etc/sentinel/secrets/ch_password
+  # T18 switched this off the passwordless `default` and onto the role migration
+  # 0002 creates. `sentinel_collector` holds INSERT on bronze.* and nothing else
+  # (DS-09): the collector issues no DDL and reads nothing back. If the clickhouse
+  # crate ever probes `system.*` for a table check, this is where it surfaces —
+  # REQ-H-06 makes the live jobs the oracle, not this file.
+  user: sentinel_collector_u
+  password_file: /etc/sentinel/secrets/ch_password
   #
   # Deployed, that path is a projected volume from a managed secret store, mounted
   # 0400 and owned by the container's non-root user. An unreadable file is a

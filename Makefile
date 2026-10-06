@@ -48,7 +48,18 @@ init:                ## No-op: the canonical bronze schema auto-applies on Click
 #
 # The service name is literally `clickhouse`, as at `:80` — REQ-I-07 depends on
 # that name surviving the Compose unification in T12–T15.
+# `MIGRATION_PW_FILE` is a PATH to the role password, not the value: migration
+# 0002 creates its users with `IDENTIFIED WITH sha256_password BY {pw:String}` and
+# the runner supplies the parameter on stdin. Copy
+# infra/secrets/ch_password.example to infra/secrets/ch_password (gitignored) once;
+# the root stack mounts the same file into the collector and flow-ui.
 migrate:             ## Apply ClickHouse DDL migrations, recording each in _meta.schema_migrations
+	@test -r infra/secrets/ch_password || { \
+		echo "migrate: infra/secrets/ch_password is missing."; \
+		echo "  cp infra/secrets/ch_password.example infra/secrets/ch_password"; \
+		echo "  then put a password in it (gitignored; SPEC §14.2)."; \
+		exit 1; }
+	MIGRATION_PW_FILE=infra/secrets/ch_password \
 	CH_CLIENT="docker compose exec -T clickhouse clickhouse-client" \
 		bash infra/clickhouse/migrate.sh
 

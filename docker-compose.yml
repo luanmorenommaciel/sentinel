@@ -26,6 +26,11 @@ services:
     volumes:
       - ./contracts:/contracts:ro
       - ./services/collector-rust/config.docker.yaml:/etc/sentinel/config.yaml:ro
+      # The role password (T18). Gitignored, created from
+      # infra/secrets/ch_password.example, and mounted read-only at the path
+      # config.docker.yaml names. The config carries the PATH; the value lives only
+      # here and in the container's memory.
+      - ./infra/secrets/ch_password:/etc/sentinel/secrets/ch_password:ro
     ports:
       - "4317:4317"
       - "9090:9090"   # Prometheus collector metrics
@@ -47,7 +52,13 @@ services:
       COLLECTOR_METRICS_URL: "http://collector:9090/metrics"
       CLICKHOUSE_URL: "http://clickhouse:8123"
       CLICKHOUSE_DATABASE: bronze
+      # Reader credentials (T18). `sentinel_reader` is SELECT-only, and its
+      # `system.tables`/`system.columns` grants are what the Flow board's Silver box
+      # is drawn from. The password is a PATH; the value is only in the mount below.
+      CLICKHOUSE_USER: sentinel_reader_u
+      CLICKHOUSE_PASSWORD_FILE: /etc/sentinel/secrets/ch_password
     volumes:
+      - ./infra/secrets/ch_password:/etc/sentinel/secrets/ch_password:ro
       # Pod 1's declared topology, read-only. The graph is drawn from the producer's
       # own config rather than redrawn here, so the picture cannot drift from it.
       - ./services/generator-python/config:/app/generator-config:ro

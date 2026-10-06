@@ -80,13 +80,23 @@ if [[ -n "$shaped" ]]; then
     rc=1
 fi
 
-if [[ -d "$ROOT/infra/secrets" ]]; then
-    leaked="$(find "$ROOT/infra/secrets" -type f ! -name '*.example' | sed "s#^$ROOT/##" || true)"
-    if [[ -n "$leaked" ]]; then
-        echo "infra/secrets/ may only hold *.example files; found:"
-        printf '%s\n' "$leaked" | sed 's/^/  /'
+# Judged on what git TRACKS, not what is on disk. Corrected 2026-10-06: the
+# filesystem form failed the moment a developer followed T18 and created the local
+# `infra/secrets/ch_password` the root stack mounts — a gitignored file that is
+# supposed to exist. The requirement is that a secret is never *committed*, and
+# T44's own negative proof says so: "with a committed non-example file as the
+# negative proof". `.gitignore` is what prevents the commit; this asserts that the
+# ignore is actually effective, which is the part that can regress.
+if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    tracked="$(git -C "$ROOT" ls-files 'infra/secrets' | grep -v '\.example$' || true)"
+    if [[ -n "$tracked" ]]; then
+        echo "infra/secrets/ may only COMMIT *.example files; git tracks:"
+        printf '%s\n' "$tracked" | sed 's/^/  /'
         rc=1
     fi
+else
+    echo "not a git repository: cannot tell a committed secret from a local one"
+    rc=1
 fi
 
 [[ "$rc" -eq 0 ]] && echo "no plaintext credential in the operational tree"

@@ -280,7 +280,12 @@ class Poller:
 
     def __init__(self, settings: Settings) -> None:
         self._s = settings
-        self._ch = ClickHouse(settings.clickhouse_url, settings.clickhouse_database)
+        self._ch = ClickHouse(
+            settings.clickhouse_url,
+            settings.clickhouse_database,
+            user=settings.clickhouse_user,
+            password_file=settings.clickhouse_password_file,
+        )
         self._http = httpx.AsyncClient(timeout=3.0)
         self.broadcaster = Broadcaster()
         self.latest = Snapshot()

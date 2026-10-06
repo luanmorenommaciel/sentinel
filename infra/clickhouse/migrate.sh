@@ -101,6 +101,40 @@ real_to_ms() {
     printf '%s' $(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} ))
 }
 
+# ── the role password, as a query parameter on stdin (T17, SPEC §14.1) ──────
+#
+# `0002_roles.sql` creates its users with `IDENTIFIED WITH sha256_password BY
+# {pw:String}`, so the value is never a literal in a migration file — migration
+# files are in git.
+#
+# It is supplied by prepending `SET param_pw` to the statement stream, NOT with
+# `--param_pw=…` on the client's command line. Same reason this script keeps the
+# connection password out of `CH_CLIENT`: an argv is visible to every user on the
+# box through `ps`, and stdin is not. Verified on 25.4.13.22 that `SET param_pw`
+# ahead of `CREATE USER … BY {pw:String}` yields auth_type `sha256_password`.
+#
+# `MIGRATION_PW_FILE` holds a path, never a value. Unset or absent is fine and is
+# the common case: only migrations that reference `{pw:…}` need it, and a
+# migration that needs it fails loudly on its own if it is missing.
+MIGRATION_PW_FILE="${MIGRATION_PW_FILE:-}"
+param_prelude=""
+if [[ -n "$MIGRATION_PW_FILE" ]]; then
+    if [[ ! -r "$MIGRATION_PW_FILE" ]]; then
+        err "migrate: MIGRATION_PW_FILE is set but not readable: $MIGRATION_PW_FILE"
+        exit 1
+    fi
+    # One trailing newline is stripped, matching how the collector reads its own
+    # password file, so a secret store that appends one and a store that does not
+    # produce the same credential.
+    pw="$(printf '%s' "$(cat "$MIGRATION_PW_FILE")")"
+    if [[ -z "$pw" ]]; then
+        err "migrate: $MIGRATION_PW_FILE is empty"
+        exit 1
+    fi
+    param_prelude="SET param_pw = '$(sql_quote "$pw")';"
+    unset pw
+fi
+
 if [[ ! -d "$MIGRATIONS_DIR" ]]; then
     err "migrate: no migrations directory at $MIGRATIONS_DIR"
     exit 1
@@ -182,7 +216,9 @@ for file in "$MIGRATIONS_DIR"/[0-9][0-9][0-9][0-9]_*.sql; do
     # The capture carries the client's output and, on its own last line, the
     # TIMEFORMAT report; the two are split apart before either is used, so the
     # failure path still prints only what the client said.
-    captured="$( { time ch < "$file"; } 2>&1 )"
+    # The prelude goes on stdin ahead of the file so `{pw:String}` resolves; it is
+    # empty for every migration that does not need it.
+    captured="$( { time { { [[ -n "$param_prelude" ]] && printf '%s\n' "$param_prelude"; cat "$file"; } | ch; }; } 2>&1 )"
     rc=$?
     out="${captured%$'\n'"$ELAPSED_TAG" *}"
     if (( rc != 0 )); then
