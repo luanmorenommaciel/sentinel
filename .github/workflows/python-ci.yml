@@ -86,3 +86,45 @@ jobs:
       - name: flow-ui unit tests
         if: matrix.python != '3.10'
         run: make test-flow-ui
+
+  # ── advisories + static security scan, warn-only ──────────────────────────
+  # Closes the asymmetry with Rust: `cargo deny` gates licences, advisories and
+  # bans with `yanked = "deny"` and `--locked` throughout, while Python has no
+  # lockfile, no pip-audit, no bandit and `>=` floors only.
+  #
+  # Warn-only on purpose. Without a lockfile, pip-audit resolves whatever is
+  # current at the moment the job runs, so a new advisory against a transitive
+  # dependency would turn every unrelated PR red overnight — a gate nobody can
+  # land through gets switched off, which is worse than a gate that reports.
+  # Promotion to required is T21's business, after a week of real PRs and
+  # alongside the lockfile that makes the result reproducible.
+  #
+  # `continue-on-error` is set once, at job level: one flag to find and one flag
+  # to flip when T21 promotes it.
+  supply-chain:
+    name: supply-chain (pip-audit · bandit)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the scanners
+        run: python -m pip install --quiet pip-audit bandit
+
+      # `pip-audit <dir>` resolves the project's dependency set in an ephemeral
+      # virtualenv — the only form available without a lockfile.
+      - name: pip-audit — generator
+        run: pip-audit --progress-spinner off --desc on services/generator-python
+
+      - name: pip-audit — flow-ui
+        run: pip-audit --progress-spinner off --desc on services/flow-ui
+
+      # Scoped to the shipped sources. tests/ and scripts/ trip B101 (assert)
+      # and B404/B603 (subprocess) by design, and a scan whose output is mostly
+      # expected findings is a scan nobody reads.
+      - name: bandit
+        run: bandit -r services/generator-python/src services/flow-ui/src
