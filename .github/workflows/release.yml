@@ -1,0 +1,108 @@
+# Publishes the three service images to Google Artifact Registry, signed, with a
+# provenance attestation and an SBOM.
+#
+# This workflow has no Make target, by design (SPEC §8.4): a laptop could only
+# authenticate to the registry with a long-lived credential, which is the exact
+# thing REQ-A-03 deletes. `release.yml` is the only caller. The PR-time build
+# check stays in rust-ci.yml's `docker-build` job with `push: false`, so a fork
+# PR can never publish.
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+# The SHA tag is immutable, so two runs for the same commit would push identical
+# bytes — but the channel tag is mutable, and a superseded run must not win the
+# race to move it.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: publish (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Mints the OIDC token twice over: once for Workload Identity Federation
+      # (REQ-A-03) and once as cosign's keyless signing identity (REQ-A-02).
+      id-token: write
+    strategy:
+      # One failed image must not leave the other two unpublished and unsigned.
+      fail-fast: false
+      matrix:
+        include:
+          - image: collector-rust
+            context: services/collector-rust
+          - image: generator
+            context: services/generator-python
+          - image: flow-ui
+            context: services/flow-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 is emulated on an amd64 runner; without QEMU the arm64 leg of the
+      # manifest fails to build.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # OIDC -> Workload Identity Federation -> the deploy service account. No
+      # JSON key exists in a GitHub secret (REQ-A-03); WIF_PROVIDER is a
+      # resource name, not a credential.
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.AR_LOCATION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      # The full git SHA is the immutable tag and the only thing a deployment
+      # ever names; `:main` and `:vX.Y.Z` are channel tags for humans.
+      # `latest=false` matters: metadata-action would otherwise add `:latest` on
+      # a semver tag, which REQ-A-01 forbids in any deployed environment.
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.AR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/sentinel/${{ matrix.image }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ github.sha }}
+            type=raw,value=main,enable={{is_default_branch}}
+            type=semver,pattern=v{{version}}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: sigstore/cosign-installer@v3
+
+      # Signed by digest, never by tag: a tag is mutable, so a tag signature
+      # says nothing about which bytes were signed.
+      - name: Sign the digest
+        run: |
+          cosign sign --yes \
+            "${{ vars.AR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/sentinel/${{ matrix.image }}@${{ steps.build.outputs.digest }}"
