@@ -78,7 +78,6 @@ Pod 2's Rust collector is verified end-to-end on `main`: generator → OTLP `:43
 
 | Drift | Where | Resolution owner |
 |---|---|---|
-| ADR-0004 still `Proposed`, still frames Rust-vs-Go as an open bake-off | `docs/adr/0004-collector-implementation-language.md` | Pod 2 — needs `Accepted` + a selection note |
 | ADR-0007 / ADR-0008 still `Proposed` | `docs/adr/` | cross-Pod ratification at sync |
 | Pod↔layer mapping unratified (README POD3 = storage/read-layer vs the removed `.claude/CLAUDE.md`'s B3 = watchers). The second source is gone as of `7689c16`, so README is now the only statement — ratify it rather than reconcile two | `README.md` | Captain / Commander |
 | ADR-0009 amends the WoW's "squash-merge to main" rule | `docs/adr/0009-agentic-gitflow.md` | Captain / Commander |

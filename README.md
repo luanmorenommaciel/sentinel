@@ -312,7 +312,7 @@ The `repo-invariants` job runs with `continue-on-error: true` until T15 flips it
 
 | # | Item | Type | Where |
 |---|---|---|---|
-| 1 | Record the Rust selection formally in ADR-0004 | Pending | [ADR-0004](docs/adr/0004-collector-implementation-language.md) |
+| 1 | Rust selection recorded in ADR-0004 (**Accepted** 2026-10-06). Open residue: the Go-vs-Rust bake-off it specified was never run, so there is no comparative baseline | Resolved, with a caveat | [ADR-0004 §Selection](docs/adr/0004-collector-implementation-language.md) |
 | 2 | Bronze = canonical Pod 2 → Pod 3 contract (`Proposed`; Pod 3 sign-off pending) | Pending | [ADR-0007](docs/adr/0007-bronze-canonical-contract.md) · [read contract](contracts/collector/v1/pod2-pod3-read-contract.md) |
 | 3 | Sentinel keys are `Map` probes under bronze (no typed columns) — materialize in silver? | Open | [ADR-0007 §Trade-offs](docs/adr/0007-bronze-canonical-contract.md) |
 | 4 | `otel_metrics_1m` rolling-stats moved to Pod 3 silver (Tier-1 input) | Handoff | [read contract §2.3](contracts/collector/v1/pod2-pod3-read-contract.md) |
