@@ -555,7 +555,7 @@ Before emitting any data the generator performs a connectivity check against the
 ## Development
 
 ```bash
-# Install with dev extras (pytest, ruff, testcontainers)
+# Install with dev extras (pytest, ruff, jsonschema)
 pip install -e ".[dev]"
 
 # Run unit tests

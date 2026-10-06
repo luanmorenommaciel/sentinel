@@ -13,6 +13,7 @@ RATE      ?= 200
 
 .PHONY: help up init generate generate-stream ui e2e down reset logs ps \
         build test test-generator test-collector-rust test-flow-ui \
+        test-generator-integration \
         test-silver sample-silver lint lint-generator lint-collector-rust lint-flow-ui
 
 # Docker runner for per-service build/test/lint — no host toolchains required.
@@ -80,6 +81,19 @@ test-silver:            ## Verify Bronze→Silver load and Silver read-model inv
 
 sample-silver:          ## Print representative rows from the Silver models
 	docker compose exec -T clickhouse clickhouse-client --multiquery --format PrettyCompact < infra/clickhouse/queries/02-silver-sample.sql
+
+test-generator-integration:  ## Generator integration suite against a LIVE ClickHouse (needs `make up`)
+	@cid=$$(docker compose ps -q clickhouse); \
+	if [ -z "$$cid" ]; then \
+		echo "test-generator-integration: no running 'clickhouse' service."; \
+		echo "  This suite targets the ClickHouse named by CLICKHOUSE_URL and starts none of its"; \
+		echo "  own (REQ-B-11, SPEC §9). Run 'make up' first."; \
+		exit 1; \
+	fi; \
+	docker run --rm --user $$(id -u):$$(id -g) -v "$(CURDIR)":/w \
+		-w /w/services/generator-python -e HOME=/tmp -e CONTRACTS_DIR=/w/contracts/generator/v1 \
+		--network "container:$$cid" -e CLICKHOUSE_URL=http://localhost:8123 \
+		$(PYTHON_IMAGE) bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest && /tmp/v/bin/python -m pytest tests/integration -q"
 
 test-generator:      ## Generator unit tests (pytest)
 	$(DK_RUN) -w /w/services/generator-python -e HOME=/tmp -e CONTRACTS_DIR=/w/contracts/generator/v1 \

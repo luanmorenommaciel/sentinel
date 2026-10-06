@@ -1,52 +1,36 @@
-from __future__ import annotations
+"""Integration test: run the engine and write signals to a ClickHouse that is
+already running, then query the rows back.
 
-"""Integration test: spin up ClickHouse via testcontainers, run the engine,
-write signals with ClickHouseExporter, and query the row back.
+**Targets the instance named by `CLICKHOUSE_URL`** and brings no ClickHouse of
+its own. The previous version span one up in a container of its own and skipped
+itself away when that machinery or the Docker daemon was missing, which meant it
+crossed no seam at all: in the live job it would have started a *second*,
+different ClickHouse beside the one the job booted — its own image tag (evading
+REQ-I-01's single-version assert), no `init.d` mounts, no silver, and a
+passwordless `default` (SPEC §9).
 
-Skipped automatically when:
-  - testcontainers[clickhouse] is not installed, OR
-  - Docker is not reachable on the current host.
+What that costs, named: there is no skip guard any more, so a missing ClickHouse
+is a **failure**, not a skip — a test that skips in CI is issue #34 in
+miniature — and the file is no longer runnable on a laptop without `make up`
+first. That is also why `make test-generator-integration` is deliberately not
+part of the `make test` aggregate (REQ-B-15): `make test` must keep working with
+no stack running.
 
-Run in the normal pytest suite; the docker integration test skips cleanly
-when infrastructure is unavailable.
+The tables are the generator's own dev-only direct→ClickHouse schema
+(`config/clickhouse_schema.yaml`), not Pod 3's bronze. They are created in a
+scratch database (`CLICKHOUSE_TEST_DATABASE`, default `otelgen_it`) and dropped
+afterwards, so this test can neither see nor disturb `bronze.*` / `silver.*`.
 """
 
-import pytest
+from __future__ import annotations
 
-# ---------------------------------------------------------------------------
-# Skip guard: require both testcontainers and Docker
-# ---------------------------------------------------------------------------
-
-testcontainers = pytest.importorskip(
-    "testcontainers",
-    reason="testcontainers package not installed; skipping CH integration test",
-)
-
-try:
-    from testcontainers.clickhouse import ClickHouseContainer  # type: ignore[import]
-except ImportError:
-    pytest.skip(
-        "testcontainers[clickhouse] not installed; skipping CH integration test",
-        allow_module_level=True,
-    )
-
-try:
-    import docker  # type: ignore[import]
-
-    _docker_client = docker.from_env()
-    _docker_client.ping()
-except Exception:
-    pytest.skip(
-        "Docker daemon not reachable; skipping CH integration test",
-        allow_module_level=True,
-    )
-
-# ---------------------------------------------------------------------------
-# Actual integration test — only runs when Docker + testcontainers are present
-# ---------------------------------------------------------------------------
-
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlparse
+
+import clickhouse_connect
+import pytest
 
 from otelgen.config import ClickHouseConnConfig
 from otelgen.contract.loader import load_contract
@@ -56,29 +40,66 @@ from otelgen.seeding import make_rng
 from otelgen.signals.factory import SignalFactory
 from otelgen.topology import Topology
 
-CONTRACT_DIR = Path(__file__).parent.parent.parent / "contract"
+CONTRACT_DIR = Path(__file__).parent.parent.parent / "config"
+
+#: Scratch database. Separate from `default` so a run cannot collide with the
+#: bronze/silver layers living in the same instance.
+TEST_DATABASE = os.environ.get("CLICKHOUSE_TEST_DATABASE", "otelgen_it")
+
+RUN_ID = "integration-test-001"
+
+
+def _target() -> ClickHouseConnConfig:
+    """Resolve `CLICKHOUSE_URL` into a connection config, or fail loudly.
+
+    Failing on an unset or unparseable variable is the point: the caller is
+    `make test-generator-integration`, which is only ever run against a live
+    stack. A default would turn "the stack is not up" into a confusing
+    connection error at the first query instead of a statement of the
+    precondition here.
+    """
+    url = os.environ.get("CLICKHOUSE_URL", "").strip()
+    if not url:
+        pytest.fail(
+            "CLICKHOUSE_URL is unset. This suite targets a running ClickHouse and "
+            "starts none of its own — run `make up` first, then "
+            "`make test-generator-integration`."
+        )
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        pytest.fail(f"CLICKHOUSE_URL is not a usable URL: {url!r}")
+    return ClickHouseConnConfig(
+        host=parsed.hostname,
+        port=parsed.port or (8443 if parsed.scheme == "https" else 8123),
+        user=parsed.username or os.environ.get("CLICKHOUSE_USER", "default"),
+        password=parsed.password or os.environ.get("CLICKHOUSE_PASSWORD", ""),
+        database=TEST_DATABASE,
+    )
 
 
 @pytest.fixture(scope="module")
-def ch_container():
-    with ClickHouseContainer("clickhouse/clickhouse-server:latest") as container:
-        yield container
+def conn() -> ClickHouseConnConfig:
+    return _target()
 
 
 @pytest.fixture(scope="module")
-def ch_client(ch_container):
-    import clickhouse_connect
+def ch_client(conn: ClickHouseConnConfig):
+    """A client bound to the scratch database, which this fixture owns."""
+    admin = clickhouse_connect.get_client(
+        host=conn.host, port=conn.port, username=conn.user, password=conn.password
+    )
+    admin.command(f"CREATE DATABASE IF NOT EXISTS {TEST_DATABASE}")
+    admin.close()
 
-    host = ch_container.get_container_host_ip()
-    port = int(ch_container.get_exposed_port(8123))
     client = clickhouse_connect.get_client(
-        host=host,
-        port=port,
-        username=ch_container.username,
-        password=ch_container.password,
-        database=ch_container.dbname,
+        host=conn.host,
+        port=conn.port,
+        username=conn.user,
+        password=conn.password,
+        database=TEST_DATABASE,
     )
     yield client
+    client.command(f"DROP DATABASE IF EXISTS {TEST_DATABASE}")
     client.close()
 
 
@@ -89,9 +110,7 @@ def bundle():
 
 @pytest.fixture(scope="module")
 def created_tables(ch_client, bundle):
-    """Create schema tables from DDL and return."""
-    ddl = render_create_table_ddl(bundle.schema)
-    for stmt in ddl.split(";"):
+    for stmt in render_create_table_ddl(bundle.schema).split(";"):
         stmt = stmt.strip()
         if stmt:
             ch_client.command(stmt)
@@ -99,25 +118,13 @@ def created_tables(ch_client, bundle):
 
 
 @pytest.fixture(scope="module")
-def exported_run(ch_container, bundle, created_tables):
-    """Run a small backfill and export to ClickHouse; return run_id."""
-    host = ch_container.get_container_host_ip()
-    port = int(ch_container.get_exposed_port(8123))
-
-    conn = ClickHouseConnConfig(
-        host=host,
-        port=port,
-        user=ch_container.username,
-        password=ch_container.password,
-        database=ch_container.dbname,
-    )
-
+def exported_run(conn, bundle, created_tables):
+    """Run a small backfill and export to ClickHouse; return the run id."""
     rng = make_rng(42)
-    run_id = "integration-test-001"
 
     factory = SignalFactory(
         provider_profile=bundle.provider_profile,
-        run_id=run_id,
+        run_id=RUN_ID,
         scenario_name=bundle.scenario.name,
         rng=rng,
     )
@@ -130,12 +137,11 @@ def exported_run(ch_container, bundle, created_tables):
     ticks = [window_start + i * 10_000_000_000 for i in range(3)]
 
     exporter = ClickHouseExporter(conn, bundle.schema)
-    signals = list(engine.run(ticks, window_start))
-    exporter.export(signals)
+    exporter.export(list(engine.run(ticks, window_start)))
     exporter.flush()
     exporter.close()
 
-    return run_id
+    return RUN_ID
 
 
 # ---------------------------------------------------------------------------
@@ -143,37 +149,18 @@ def exported_run(ch_container, bundle, created_tables):
 # ---------------------------------------------------------------------------
 
 
-def test_logs_row_count_greater_than_zero(ch_client, exported_run):
-    result = ch_client.query("SELECT count() FROM otel_logs")
+@pytest.mark.parametrize("table", ["otel_logs", "otel_traces", "otel_metrics"])
+def test_row_count_greater_than_zero(ch_client, exported_run, table):
+    result = ch_client.query(f"SELECT count() FROM {table}")
     assert result.result_rows[0][0] > 0
 
 
-def test_traces_row_count_greater_than_zero(ch_client, exported_run):
-    result = ch_client.query("SELECT count() FROM otel_traces")
-    assert result.result_rows[0][0] > 0
-
-
-def test_metrics_row_count_greater_than_zero(ch_client, exported_run):
-    result = ch_client.query("SELECT count() FROM otel_metrics")
-    assert result.result_rows[0][0] > 0
-
-
-def test_sentinel_synthetic_present_in_logs(ch_client, exported_run):
-    result = ch_client.query(
-        "SELECT ResourceAttributes['sentinel.synthetic'] FROM otel_logs LIMIT 1"
-    )
-    assert result.result_rows[0][0] == "true"
-
-
-def test_sentinel_synthetic_present_in_traces(ch_client, exported_run):
-    result = ch_client.query(
-        "SELECT ResourceAttributes['sentinel.synthetic'] FROM otel_traces LIMIT 1"
-    )
+@pytest.mark.parametrize("table", ["otel_logs", "otel_traces"])
+def test_sentinel_synthetic_present(ch_client, exported_run, table):
+    result = ch_client.query(f"SELECT ResourceAttributes['sentinel.synthetic'] FROM {table} LIMIT 1")
     assert result.result_rows[0][0] == "true"
 
 
 def test_sentinel_run_id_matches(ch_client, exported_run):
-    result = ch_client.query(
-        "SELECT ResourceAttributes['sentinel.run_id'] FROM otel_logs LIMIT 1"
-    )
+    result = ch_client.query("SELECT ResourceAttributes['sentinel.run_id'] FROM otel_logs LIMIT 1")
     assert result.result_rows[0][0] == exported_run
