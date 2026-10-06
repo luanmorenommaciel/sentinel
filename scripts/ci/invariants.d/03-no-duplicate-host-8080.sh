@@ -50,25 +50,41 @@ ports_of() {
 
 rc=0
 
-# (a) intra-file duplicates
-while IFS= read -r path; do
-    rel="${path#"$ROOT"/}"
-    if ! cfg="$(compose_config "$path")"; then
-        echo "docker compose config failed for $rel:"
+# (a) intra-stack duplicates.
+#
+# Declared stacks rather than every Compose-shaped file, for the same reason
+# assert 02 declares its list: `docker-compose.collector.yml` is an **overlay**
+# (its own header, and `spec/core-spec.md:770` which leaves it in place), so it
+# names a `clickhouse` it does not define and `config` on it alone is invalid by
+# design. Evaluating it standalone reported a failure about the file's nature
+# rather than about duplicate ports. It is checked merged with its base, which is
+# the only form anything runs, and where a duplicate port would actually bite.
+#
+# Added 2026-10-06, when hardening this assert to stop swallowing `config`
+# errors surfaced the overlay — the error had been there all along, hidden.
+STACKS=(
+    "root|-f $ROOT/docker-compose.yml"
+    "clickhouse-base|-f $ROOT/infra/clickhouse/compose.clickhouse.yml"
+    "collector-ci|-f $ROOT/services/collector-rust/infra/docker-compose.yml"
+    "collector-ci+overlay|-f $ROOT/services/collector-rust/infra/docker-compose.yml -f $ROOT/services/collector-rust/infra/docker-compose.collector.yml"
+)
+
+for entry in "${STACKS[@]}"; do
+    label="${entry%%|*}"
+    # shellcheck disable=SC2206  # intentional word splitting: the -f flag list
+    args=(${entry#*|})
+    if ! cfg="$(docker compose "${args[@]}" config 2>&1)"; then
+        echo "docker compose config failed for stack '$label':"
         printf '%s\n' "$cfg" | sed 's/^/    /'
         rc=1
         continue
     fi
     dupes="$(printf '%s\n' "$cfg" | ports_of | sort | uniq -d)"
     if [[ -n "$dupes" ]]; then
-        echo "$rel publishes the same host port more than once: $(tr '\n' ' ' <<<"$dupes")"
+        echo "stack '$label' publishes the same host port more than once: $(tr '\n' ' ' <<<"$dupes")"
         rc=1
     fi
-done < <(
-    find "$ROOT" \( -name '.git' -o -name 'node_modules' -o -name '.worktrees' \) -prune -o \
-        -type f \( -name 'docker-compose*.yml' -o -name 'docker-compose*.yaml' \
-        -o -name 'compose*.yml' -o -name 'compose*.yaml' \) -print | sort
-)
+done
 
 # (b) the generator Compose file vs the root stack
 GEN="$ROOT/services/generator-python/docker-compose.yaml"
