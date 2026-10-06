@@ -1,6 +1,7 @@
 # Rust component task runner — invoked directly from services/collector-rust/
 # or via the root justfile (`just rust-ci`, `just rust-test`, etc.).
-# See ../../.claude/docs/RUST_PROJECT_STANDARDS.md for the full design.
+# The Rust project standards that described this design were removed in 7689c16;
+# the workspace lint policy in Cargo.toml is now the enforceable statement.
 
 # Default: list available recipes
 default:

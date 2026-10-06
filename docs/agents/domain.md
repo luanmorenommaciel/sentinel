@@ -36,7 +36,7 @@ re-run `/setup-matt-pocock-skills`.
 Related context, not a substitute for the above:
 
 - [`CLAUDE.md`](../../CLAUDE.md) — pipeline, layout, conventions, gotchas, live status
-- [`.claude/docs/CREW_B_GLOSSARY.md`](../../.claude/docs/CREW_B_GLOSSARY.md) — team and
+- the Crew B glossary — removed in `7689c16`; terms now live only in the ADRs — team and
   process vocabulary, including the anti-glossary (OTel is never "Hotel")
 - [`contracts/`](../../contracts/) — the contract registry is the authority on boundary
   terms (`bronze.*`, the Pod 1 → Pod 2 input contract)
@@ -59,8 +59,9 @@ overriding:
 > _Contradicts ADR-0007 (bronze = canonical contract), but worth reopening because…_
 
 **ADRs are history, not live state.** Per
-[`.claude/rules/pre-pr-discipline.md`](../../.claude/rules/pre-pr-discipline.md), `docs/adr/0*`,
-`.claude/sdd/**` and `docs/proposals/` record decisions as they were taken. ADR-0004 weighing
+the pre-PR discipline rule (removed in `7689c16`; its substance is the PR template's
+final two sections), `docs/adr/0*`,
+`intent/`, `spec/`, `plan/` and `docs/proposals/` record decisions as they were taken. ADR-0004 weighing
 Rust against Go is *correct* even though `collector-go` is gone — rewriting it destroys what
 makes the decision readable. Several ADRs also carry a stale `Proposed` status; see the
 *Known doc drift* table in [`CLAUDE.md`](../../CLAUDE.md) before treating a status as current.

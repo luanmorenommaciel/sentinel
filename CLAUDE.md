@@ -58,7 +58,7 @@ Variables: `SCENARIO` (default `baseline`), `SEED` (`42`), `WINDOW` (`5m`).
   and `silver.*` read-only, plus Pod 1's `topology/default.yaml` and the collector's
   `config.docker.yaml`, both mounted read-only — the picture is drawn from the files that define the thing, so it
   cannot drift from them. Nothing in the pipeline depends on it being up.
-- **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*. One `git worktree` per agent under `.worktrees/`, branches named `leg/<area>/<task>-v<n>`, and **every leg declares disjoint paths** before it opens. Commands and gotchas: [`.claude/docs/AGENTIC_GITFLOW.md`](.claude/docs/AGENTIC_GITFLOW.md). Export a shared `CARGO_TARGET_DIR` before running a fleet, or N worktrees means N cold Rust builds.
+- **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*. One `git worktree` per agent under `.worktrees/`, branches named `leg/<area>/<task>-v<n>`, and **every leg declares disjoint paths** before it opens. The ADR is the record; the `.claude/` companion that carried the commands was removed in `7689c16`. Export a shared `CARGO_TARGET_DIR` before running a fleet, or N worktrees means N cold Rust builds.
 - **No comments-as-noise**; match each service's existing style. Keep the repo clean for the agentic phase that follows this baseline.
 
 ## Gotchas
@@ -80,10 +80,10 @@ Pod 2's Rust collector is verified end-to-end on `main`: generator → OTLP `:43
 |---|---|---|
 | ADR-0004 still `Proposed`, still frames Rust-vs-Go as an open bake-off | `docs/adr/0004-collector-implementation-language.md` | Pod 2 — needs `Accepted` + a selection note |
 | ADR-0007 / ADR-0008 still `Proposed` | `docs/adr/` | cross-Pod ratification at sync |
-| Pod↔layer mapping unratified (README POD3 = storage/read-layer vs `.claude/CLAUDE.md` B3 = watchers) | `.claude/CLAUDE.md` | Captain / Commander |
+| Pod↔layer mapping unratified (README POD3 = storage/read-layer vs the removed `.claude/CLAUDE.md`'s B3 = watchers). The second source is gone as of `7689c16`, so README is now the only statement — ratify it rather than reconcile two | `README.md` | Captain / Commander |
 | ADR-0009 amends the WoW's "squash-merge to main" rule | `docs/adr/0009-agentic-gitflow.md` | Captain / Commander |
 
-Historical records under `docs/research/`, `docs/proposals/`, `docs/clickhouse-schema-divergence*.md` and `.claude/sdd/` are point-in-time artifacts — they mention the Go collector by design. Don't "fix" them; they carry a superseded banner.
+Historical records under `docs/research/`, `docs/proposals/`, `docs/clickhouse-schema-divergence*.md`, and `intent/` / `spec/` / `plan/` are point-in-time artifacts — they mention the Go collector by design. Don't "fix" them; they carry a superseded banner.
 
 ## Agent skills
 

@@ -32,7 +32,7 @@ Closes #
 
          git ls-files '*.md' | xargs grep -ln "<what you touched>"
 
-     Fix the ones that no longer hold, here. Leave `docs/adr/`, `.claude/sdd/` and
+     Fix the ones that no longer hold, here. Leave `docs/adr/`, `intent/`, `spec/`, `plan/` and
      `docs/proposals/` alone — those are records, and rewriting history to match the present
      is what makes an ADR unreadable.
 
