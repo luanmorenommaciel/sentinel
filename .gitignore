@@ -44,3 +44,4 @@ infra/secrets/*
 
 # Agentic gitflow worktrees (ADR-0009)
 .worktrees/
+.superpowers/

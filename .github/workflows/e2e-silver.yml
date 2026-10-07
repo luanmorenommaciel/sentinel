@@ -59,39 +59,63 @@ jobs:
       # T29 depends on the refreshable-MV feature selected by DEC-I1. Migration
       # creates this view without an experimental setting; inspect the live
       # server metadata and pin assertion to the repo's 25.4 engine line.
-      - name: Refreshable materialized view availability (T29)
+      # Three checks, because `[V-3a]` flips by version and can regress silently.
+      # Refreshable MVs need no setting on 25.4.13.22 (the flag reports `Obsolete
+      # setting, does nothing`) and are gated on 24.3.18.7 with Code: 344. The
+      # original probe reached the wrong conclusion because it always set the
+      # experimental flag and never tested without it.
+      #
+      # The throwaway probe is issue #49's acceptance and is not redundant with the
+      # two checks around it: those inspect an object `0005` already created, so they
+      # confirm the capability only by inference from migrate having succeeded. This
+      # exercises the ungated path directly and reads `system.view_refreshes`, which
+      # proves the refresh scheduler registered the view rather than just that its
+      # DDL contains the words.
+      - name: Refreshable materialized view availability (T29, #49)
         run: |
-          set -euo pipefail
+          set -uo pipefail
           version="$(docker compose exec -T clickhouse clickhouse-client -q 'SELECT version()' | tr -d '[:space:]')"
+          echo "asserting against the shipped ClickHouse: $version"
           case "$version" in
             25.4.*) ;;
             *) echo "::error::expected ClickHouse 25.4.x for T29, got $version"; exit 1 ;;
           esac
+
+          if ! docker compose exec -T clickhouse clickhouse-client --multiquery <<'SQL'
+          CREATE DATABASE IF NOT EXISTS _v3a_probe;
+          CREATE TABLE _v3a_probe.src (x UInt64) ENGINE = MergeTree ORDER BY x;
+          CREATE TABLE _v3a_probe.dst (n UInt64) ENGINE = MergeTree ORDER BY n;
+          CREATE MATERIALIZED VIEW _v3a_probe.rmv REFRESH EVERY 1 HOUR TO _v3a_probe.dst
+          AS SELECT toUInt64(count()) AS n FROM _v3a_probe.src;
+          SQL
+          then
+            docker compose exec -T clickhouse clickhouse-client -q "DROP DATABASE IF EXISTS _v3a_probe" || true
+            echo "::error::refreshable MVs are gated on $version with no experimental setting supplied." >&2
+            echo "  silver.call_edges_1m_rmv cannot exist here. Either pin a version where they are" >&2
+            echo "  ungated (25.4+), or build the scheduled-INSERT fallback - which cannot reuse" >&2
+            echo "  backfill.sh, because REQ-E-12 forbids a range ending >= today() and" >&2
+            echo "  call_edges_1m is always live (issue #48)." >&2
+            exit 1
+          fi
+
+          refreshes="$(docker compose exec -T clickhouse clickhouse-client -q \
+            "SELECT count() FROM system.view_refreshes WHERE database='_v3a_probe'" | tr -d '[:space:]')"
+          docker compose exec -T clickhouse clickhouse-client -q "DROP DATABASE IF EXISTS _v3a_probe"
+          if [ "${refreshes:-0}" -lt 1 ]; then
+            echo "::error::created but never registered in system.view_refreshes on $version" >&2
+            exit 1
+          fi
+          echo "ungated and registered on $version ($refreshes refresh entry)"
+
           docker compose exec -T clickhouse clickhouse-client -q "
             SELECT throwIf(count() != 1,
                            'call_edges_1m_rmv is not registered as a refreshable MV')
-            FROM system.tables
-            WHERE database = 'silver'
-              AND name = 'call_edges_1m_rmv'
-              AND create_table_query ILIKE '%REFRESH EVERY%'
+            FROM system.view_refreshes
+            WHERE database = 'silver' AND view = 'call_edges_1m_rmv'
           "
 
       - name: Generate
         run: make generate
-
-      # Quiescence, not a sleep (REQ-B-05). `make generate` returning says the
-      # generator finished, not that the collector flushed: the channel holds 64
-      # envelopes (`buffer.rs:141`), so rows are still in flight.
-      #
-      # `sentinel_signals_ingested_total` is summed across its label series rather
-      # than read from one line — it carries one series per signal type
-      # (logs/metrics/trace) plus `# HELP`/`# TYPE`, so a single grep reads the
-      # wrong number or none at all.
-      #
-      # Ingest is driven by `make generate` and never by the golden fixture: the
-      # fixture is 2023-dated and its rows are purged on the first background merge
-      # under the tables' event-time TTL
-      # (services/collector-rust/infra/docker-compose.collector.yml:13-15).
       - name: Wait for quiescence
         run: |
           set -uo pipefail
