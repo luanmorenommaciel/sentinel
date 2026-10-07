@@ -7,7 +7,9 @@ ClickHouse DDL and checks for the `bronze` and `silver` databases. Pod 3 owns th
 | `init.d/01-bronze-otel.sql` | bronze DDL, auto-applied on first boot via `docker-entrypoint-initdb.d` |
 | `init.d/02-silver-layer.sql` | silver DDL, same mechanism |
 | `tests/02-silver-layer.test.sql` | silver assertions, run by `make test-silver` |
-| `queries/02-silver-sample.sql` | sample read queries |
+| `tests/03-watcher-models.test.sql` | Watcher read-model assertions, run by `make test-silver` |
+| `queries/02-silver-sample.sql` | base silver sample read queries |
+| `queries/03-watcher-sample.sql` | Watcher read-model sample queries, run by `make sample-silver` |
 
 Gotcha: `docker-entrypoint-initdb.d` only runs against an empty data volume. After a DDL change, `make reset` before `make up`.
 

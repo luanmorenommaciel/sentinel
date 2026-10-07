@@ -102,9 +102,16 @@ test: test-generator test-collector-rust test-flow-ui  ## Run all unit test suit
 
 test-silver:            ## Verify Bronze→Silver load and Silver read-model invariants
 	docker compose exec -T clickhouse clickhouse-client --multiquery < infra/clickhouse/tests/02-silver-layer.test.sql
+	@# call_edges_1m is fed by a REFRESH EVERY 1 MINUTE view, so a freshly migrated
+	@# database has an empty table until the first scheduled run. Refreshing here is
+	@# what makes T29's assertions non-vacuous — the test file asserts non-emptiness
+	@# first for exactly that reason.
+	docker compose exec -T clickhouse clickhouse-client -q "SYSTEM REFRESH VIEW silver.call_edges_1m_rmv"
+	docker compose exec -T clickhouse clickhouse-client -q "SYSTEM WAIT VIEW silver.call_edges_1m_rmv"
+	docker compose exec -T clickhouse clickhouse-client --multiquery < infra/clickhouse/tests/03-watcher-models.test.sql
 
 sample-silver:          ## Print representative rows from the Silver models
-	docker compose exec -T clickhouse clickhouse-client --multiquery --format PrettyCompact < infra/clickhouse/queries/02-silver-sample.sql
+	docker compose exec -T clickhouse clickhouse-client --multiquery --format PrettyCompact < infra/clickhouse/queries/03-watcher-sample.sql
 
 test-generator-integration:  ## Generator integration suite against a LIVE ClickHouse (needs `make up`)
 	@cid=$$(docker compose ps -q clickhouse); \

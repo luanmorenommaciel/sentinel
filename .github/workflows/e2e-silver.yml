@@ -56,6 +56,26 @@ jobs:
       - name: Migrate
         run: make migrate
 
+      # T29 depends on the refreshable-MV feature selected by DEC-I1. Migration
+      # creates this view without an experimental setting; inspect the live
+      # server metadata and pin assertion to the repo's 25.4 engine line.
+      - name: Refreshable materialized view availability (T29)
+        run: |
+          set -euo pipefail
+          version="$(docker compose exec -T clickhouse clickhouse-client -q 'SELECT version()' | tr -d '[:space:]')"
+          case "$version" in
+            25.4.*) ;;
+            *) echo "::error::expected ClickHouse 25.4.x for T29, got $version"; exit 1 ;;
+          esac
+          docker compose exec -T clickhouse clickhouse-client -q "
+            SELECT throwIf(count() != 1,
+                           'call_edges_1m_rmv is not registered as a refreshable MV')
+            FROM system.tables
+            WHERE database = 'silver'
+              AND name = 'call_edges_1m_rmv'
+              AND create_table_query ILIKE '%REFRESH EVERY%'
+          "
+
       - name: Generate
         run: make generate
 
@@ -111,7 +131,7 @@ jobs:
           echo "::error::quiescence timed out after 60s — ingested=$(ingested) persisted=$(persisted)"
           exit 1
 
-      - name: Silver assertions (18)
+      - name: Silver assertions (18 base + watcher models)
         run: make test-silver
 
       - name: Generator integration suite
@@ -128,7 +148,8 @@ jobs:
             echo
             echo "| Suite | Count |"
             echo "|---|---:|"
-            echo "| silver SQL assertions | $(grep -c 'throwIf' infra/clickhouse/tests/02-silver-layer.test.sql) |"
+            echo "| base silver SQL assertions | $(grep -c 'throwIf' infra/clickhouse/tests/02-silver-layer.test.sql) |"
+            echo "| watcher model SQL assertions | $(grep -c 'throwIf' infra/clickhouse/tests/03-watcher-models.test.sql) |"
             echo "| bronze rows persisted | $(docker compose exec -T clickhouse clickhouse-client -q "
                    SELECT (SELECT count() FROM bronze.otel_logs)
                         + (SELECT count() FROM bronze.otel_traces)

@@ -501,7 +501,7 @@ CREATE TABLE IF NOT EXISTS silver.resource_key_presence_1m
     `service_name` LowCardinality(String) CODEC(ZSTD(1)),
     `signal`       Enum8('log' = 1, 'trace' = 2, 'metric' = 3),
     `rows`         SimpleAggregateFunction(sum, UInt64),
-    `key_counts`   SimpleAggregateFunction(sumMap, Map(LowCardinality(String), UInt64))  -- [V-2]
+    `key_counts`   SimpleAggregateFunction(sumMap, Map(String, UInt64))  -- [V-2]
 )
 ENGINE = AggregatingMergeTree
 PARTITION BY toDate(window_start)
@@ -519,7 +519,7 @@ AS SELECT
         CAST(
             (mapKeys(resource_attributes),
              arrayResize(CAST([1], 'Array(UInt64)'), length(mapKeys(resource_attributes)), toUInt64(1))),
-            'Map(LowCardinality(String), UInt64)'
+            'Map(String, UInt64)'
         )
     ) AS key_counts
 FROM silver.log_events
@@ -532,7 +532,10 @@ preserved — and the unindexed `Map` probe across four live bronze tables (meas
 ~6 M rows, with the `ARRAY JOIN` form at 6.4 s, `clickhouse.py:191-196`) **[E]** becomes a
 scan of a rollup two orders of magnitude smaller.
 
-**[V-2]** `SimpleAggregateFunction(sumMap, Map(K, V))` support is version-dependent. Fallbacks
+`sumMap` returns `Map(String, UInt64)` on the pinned engine. Although the input key array is
+`LowCardinality(String)`, declaring the aggregate column with LowCardinality keys fails the
+engine's return-type compatibility check (`sumMap` returns `Map(String, UInt64)`). **[V-2]**
+`SimpleAggregateFunction(sumMap, Map(K, V))` support is version-dependent. Fallbacks
 in preference order: (i) `AggregateFunction(sumMap, Map(…))` with `sumMapMerge` at read; (ii)
 the older `Tuple(Array(K), Array(V))` pair with `sumMap(keys, values)`. Verify on the version
 REQ-I-01 picks, before writing the MVs.
@@ -1246,7 +1249,7 @@ of each wave — which is the conflict §12.3 escalates.
 | | Assumption | Gates | Fallback if false |
 |---|---|---|---|
 | **[V-1]** | A materialized view on table `T` fires on inserts into `T` produced by another MV writing `TO T` (chained MV firing) | **all of D** (§6.3, §6.4) | Every D rollup reads **bronze** directly, re-paying the 1.26 s unindexed `Map` probe and losing the typed dimensions. Material redesign of `0005`; REQ-E-11 and REQ-D-06 survive it, NFR-05 does not |
-| **[V-2]** | `SimpleAggregateFunction(sumMap, Map(LowCardinality(String), UInt64))` is supported on the pinned version | `resource_key_presence_1m` (§6.3c) | (i) `AggregateFunction(sumMap, …)` + `sumMapMerge` at read; (ii) `Tuple(Array(K), Array(V))` |
+| **[V-2]** | `SimpleAggregateFunction(sumMap, Map(String, UInt64))` is supported on the pinned version | `resource_key_presence_1m` (§6.3c) | (i) `AggregateFunction(sumMap, …)` + `sumMapMerge` at read; (ii) `Tuple(Array(K), Array(V))` |
 | **[V-3]** | Refreshable MVs are production-grade (not experimental) on the pinned version; and `REPLACE PARTITION` behaves identically if a managed provider substitutes `SharedMergeTree` for `MergeTree` | `call_edges_1m` (§6.3d); **the entire E primitive** on managed ClickHouse | `call_edges_1m` → scheduled `INSERT` + partition swap (a scheduler per environment, no new concept). For `REPLACE PARTITION` on `SharedMergeTree` there is **no second idea** that does not change the base tables' engine — if it differs, E must be redesigned and DEC-A2 should know that before it chooses |
 | **[V-4]** | Compose `include:` is available in the team's Compose version **and** resolves relative volume paths from the including file's directory | REQ-I-02, I-03, I-08 | **RESOLVED 2026-10-05, and the gate as written FAILS:** `include:` is available (Compose v5.1.4) but the base is the **included** file's directory, not the including file's. The risk the gate guarded against (the base shifting under the existing `../../../` mount) is gone, so `include:` is used as planned. `extends:` rebases identically and is not a better fallback |
 
@@ -1263,7 +1266,7 @@ Measured directly, **after** the body of this spec was written, in throwaway `--
 | | Probe | Result | Consequence |
 |---|---|---|---|
 | **[V-1]** | `t1 → mv1 → t2 → mv2 → t3`; one `INSERT` into `t1` | **PASS** — `t3` received 2 rows summing to 8 (= 1+2+5). The second-level MV fired on the insert performed by the first-level MV. **No setting required.** | **D is unblocked.** The bronze-rebuild fallback in the row above is **not needed**; §6.3 and §6.4 stand as written. NFR-05 survives |
-| **[V-2]** | `SimpleAggregateFunction(sumMap, Map(String, UInt64))`, two inserts, `OPTIMIZE FINAL` | **PASS** — merged to `{'a':6,'b':2}` | `resource_key_presence_1m` keeps the Map-typed shape at §6.3c:500. Neither fallback is needed |
+| **[V-2]** | `SimpleAggregateFunction(sumMap, Map(String, UInt64))`, two inserts, `OPTIMIZE FINAL` | **PASS** — merged to `{'a':6,'b':2}` | `resource_key_presence_1m` uses the Map-typed shape at §6.3c:500. Neither fallback is needed. `Map(LowCardinality(String), UInt64)` is rejected because it does not match `sumMap`'s return type. |
 | **[V-3a]** | `CREATE MATERIALIZED VIEW … REFRESH EVERY 1 HOUR` | **PASS on 25.4.13.22 with no settings; GATED on 24.3.18.7** | **CORRECTED 2026-10-05 (re-probe).** The earlier entry claimed an experimental gate on *both* versions; that was an artifact of probing only with `allow_experimental_refreshable_materialized_view=1` set and never without it. On 25.4.13.22 the `CREATE` succeeds with no settings and the flag reports `Obsolete setting, does nothing` (`system.settings`), confirmed independently twice. The gate is real only on 24.3.18.7. **This makes `[V-3a]` a consequence of DEC-I1, not an independent risk**: on 25.4+ `call_edges_1m_rmv` rests on a stable feature and the scheduled-`INSERT` fallback is unnecessary. `design-spec.md:604-612` was right and this table was wrong. T29 MUST re-assert this in CI against the version DEC-I1 selects |
 | **[V-3b]** | `ALTER TABLE p_dst REPLACE PARTITION '202601' FROM p_src` | **PASS** — the destination's pre-existing row was gone; 2 rows summing to 3 | `REPLACE PARTITION` semantics are as §6.5 assumes **on `MergeTree`** |
 

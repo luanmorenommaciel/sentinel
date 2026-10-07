@@ -219,8 +219,9 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
 - **The `main` branch policy** is feature branches `feat/<area>-<short>`, Conventional Commits, signed
   commits, attribution trailers and 2 approvals (peer + Captain). **It is convention, not
   enforcement:** `main` carries no GitHub branch-protection rule today (verified 2026-10-06 —
-  the API reports `protected: false`), so nothing rejects a push that skips it. Turning the
-  policy into a required-check set is T21, behind DEC-I1, and is tracked separately in issue #35.
+  the API reports `protected: false`), so nothing rejects a push that skips it. The candidates for the
+  required-check set are documented in [`docs/ci-gates.md`](docs/ci-gates.md) (T21), and configuring the
+  rules on GitHub is tracked separately in issue #35.
 - **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*: one git worktree per agent, legs declaring **disjoint paths**, squash into the swimlane and a merge commit into `main` so per-leg attribution survives. The ADR is the record; the `.claude/` agent layer that carried the mechanics was removed from the repo in `7689c16`.
 - **CI is five workflows** in [`.github/workflows/`](.github/workflows/): [`rust-ci.yml`](.github/workflows/rust-ci.yml) (gates · integration · cargo-deny · docker-build), [`python-ci.yml`](.github/workflows/python-ci.yml) (ruff · pytest · supply-chain), [`repo-invariants.yml`](.github/workflows/repo-invariants.yml), [`release.yml`](.github/workflows/release.yml) and [`pr-linked-issue.yml`](.github/workflows/pr-linked-issue.yml). Component gates are path-filtered; several jobs are deliberately non-blocking today — see §8 for which, and why.
 - **Contracts are jointly owned** by the Pods on both sides of a boundary (input = Pod 1 + Pod 2; the bronze read schema = Pod 2 + Pod 3). **Components are singly owned.**
@@ -244,7 +245,7 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
 | Graceful shutdown with final buffer flush | ✅ |
 | Distroless Docker image + root compose orchestrator | ✅ |
 | CI: gates (fmt · clippy · test · build) · integration (live ClickHouse, every `#[ignore]`d test) · cargo-deny · docker-build | ✅ |
-| Pod 3 silver (rolling-stats rollup, read models) | 🔶 in progress — silver v1 DDL exists; read models (T25–T29) not started |
+| Pod 3 silver (rolling-stats rollup, read models) | 🔶 in progress — silver v1 DDL exists; read models (T25–T29) working / in progress |
 
 **Latest local E2E snapshot** — Docker/Linux arm64, scenario `baseline`, seed `42`, window `5m` (2026-08-04):
 
@@ -265,35 +266,110 @@ This workload met the collector health gates: no signal loss, no contract reject
 
 This cycle hardened how the pipeline is built, checked and published rather than what it computes. The ticket registry is [`plan/core-plan.md`](plan/core-plan.md).
 
-**15 of 48 tickets are done. 33 remain, and none of them is startable.** Every remaining ticket sits behind a Wave 0 decision — this is the plan's own frontier order (`plan/core-plan.md` §3), not an estimate. T35 was the last ticket whose blockers were all clear, which is why the queue stops where it does.
+**25 of 48 tickets are done, 5 are working (in progress), and 18 are pending.** 
 
-| Remaining | Tickets | Count | Waiting on |
-|---|---|---:|---|
-| Compose unification, roles/auth, CI gates | T12–T21 | 10 | **DEC-I1** |
-| Pod 3 silver read models | T25–T29 | 5 | T16 + T20 → DEC-I1 |
-| Backfill runner | T30–T34 | 5 | T19 + **DEC-A2** |
-| flow-ui dual-source boards | T36–T39 | 4 | T27 / T28 / T29 → DEC-I1 |
-| Deploy, TLS, edge auth, secrets | T40–T44 | 5 | **DEC-A1**, **DEC-A2**, **DEC-A4** |
-| Docs legs | T45–T48 | 4 | **DEC-I2** (+ their waves) |
+### Task Status Summary
 
-So the remaining work is **six decisions, not thirty-three tickets**. [DEC-I1](plan/decisions/DEC-I1.md) alone gates 26 of them, and as of 2026-10-06 it has no open residual — its last one dissolved when ClickHouse Cloud turned out to expose no engine-version pin at all, which separates the repo pin (ours, decidable now) from the deployed engine version (a moving fact, DEC-A2's problem). Of the eight `DEC-*` items, DEC-V3a is folded into DEC-I1 and DEC-D1 is deliberately left open until T28, leaving six that need a human: **I1, A1, A2, A3, A4, I2**. The plan's advice is to run them as one sync agenda item rather than eight documents.
+| Status | Count | Percentage | Tickets |
+|---|---:|---:|---|
+| **Done** | 25 | 52.1% | T01–T24, T35 |
+| **Working** | 5 | 10.4% | T25–T29 |
+| **Pending** | 18 | 37.5% | T30–T34, T36–T39, T40–T44, T45–T48 |
+| **Total** | **48** | **100%** | Full implementation plan |
 
-Landed, with its limits stated:
+---
+
+### Complete Task Registry (T01–T48)
+
+Every ticket defined in [`plan/core-plan.md`](plan/core-plan.md) with its current status:
+
+| ID | Title / Summary | Wave / Area | Blocked by | Status |
+|---|---|---|---|---|
+| **T01** | Invariant-assert harness with drop-in directory (`scripts/ci/run-invariants.sh`) | Wave 1 · CI | — | **Done** |
+| **T02** | flow-ui `conftest.py` two-coverage response builder | Wave 1 · flow-ui | — | **Done** |
+| **T03** | Compose `include:` path-resolution probe (`[V-4]`) | Wave 1 · Infra | — | **Done** |
+| **T04** | arm64 + x86_64 musl/TLS spike, toolchain target, CI `platforms:` | Wave 1 · CI | — | **Done** |
+| **T05** | `migrate.sh` + `_meta` schema ledger (`0003_meta.sql`) | Wave 1 · Infra | — | **Done** |
+| **T06** | Collector `user` / `password_file` credential config | Wave 1 · Collector | — | **Done** |
+| **T07** | `python-ci.yml`: ruff + pytest + `PYTHON_IMAGE` matrix + `-D warnings` | Wave 1 · CI | — | **Done** |
+| **T08** | Generator integration suite targeting live `CLICKHOUSE_URL` | Wave 1 · Test | — | **Done** |
+| **T09** | `rust-ci.yml` runs every `#[ignore]`d integration test | Wave 1 · CI | — | **Done** |
+| **T10** | Python supply-chain audit job (`pip-audit` + `bandit`, warn-only) | Wave 1 · CI | — | **Done** |
+| **T11** | `make migrate` target | Wave 1 · Build | T05, T07 | **Done** |
+| **T12** | `compose.clickhouse.yml` — single ClickHouse service definition (pinned 25.4) | Wave 1 · Infra | DEC-I1, T03 | **Done** |
+| **T13** | Root `docker-compose.yml` → `include:` unified ClickHouse service | Wave 1 · Infra | T12 | **Done** |
+| **T14** | CI Compose → `include:` + silver mount + drop env route | Wave 1 · Infra | T12, T09 | **Done** |
+| **T15** | Delete generator Compose file & update documentation | Wave 1 · Contract | T13, T14 | **Done** |
+| **T16** | Extract DDL into `migrations/0001`/`0004`, symlink `init.d/`, divergence assert | Wave 1 · Infra | T05, T01, T13 | **Done** |
+| **T17** | Least-privilege roles + users created (`0002_roles.sql`) | Wave 1 · Infra | T16 | **Done** |
+| **T18** | Collector & flow-ui connect as dedicated role users via secret file | Wave 1 · Infra | T06, T13, T14, T17 | **Done** |
+| **T19** | Delete open `::/0` default network route and drop `otelgen` user | Wave 1 · Infra | T15, T18 | **Done** |
+| **T20** | `e2e-silver.yml` — live-ClickHouse full pipeline test workflow | Wave 1 · CI | T07, T08, T09, T11, T19 | **Done** |
+| **T21** | `docs/ci-gates.md` status table + flip `repo-invariants` to blocking gate | Wave 1 · CI | T20 | **Done** |
+| **T22** | `release.yml` — Artifact Registry, OIDC, SLSA provenance, SBOM, Cosign signing | Wave 1 · Release | — | **Done** |
+| **T23** | Digest promotion `main` → `:staging`, `v*` → `:prod` with signature verification | Wave 1 · Release | T22 | **Done** |
+| **T24** | Image vulnerability scan gates the push (Trivy) | Wave 1 · Release | T22 | **Done** |
+| **T25** | `0005a` `silver.metric_stats_1m` + MV + test suite (`03-watcher-models.test.sql`) | Wave 2 · Silver | T16, T20 | **Working** |
+| **T26** | Real-telemetry tripwire (`countIf(NOT is_synthetic)`) | Wave 2 · Silver | T25 | **Working** |
+| **T27** | `0005b` `silver.volume_1m` + 3 MVs (log, trace, metric) | Wave 2 · Silver | T25 | **Working** |
+| **T28** | `0005c` `silver.resource_key_presence_1m` + 3 MVs | Wave 2 · Silver | T27 | **Working** |
+| **T29** | `0005d` `silver.call_edges_1m` + determinism / no-verdict asserts | Wave 2 · Silver | T28, T01 | **Working** |
+| **T30** | Backfill runner skeleton + live-partition refusal + README (`backfill.sh`) | Wave 3 · Backfill | T05, T19, DEC-A2 | **Pending** |
+| **T31** | Backfill phase 1 — bronze → silver base, partition swap | Wave 3 · Backfill | T30 | **Pending** |
+| **T32** | REQ-E-11 in-runner content checksum | Wave 3 · Backfill | T31 | **Pending** |
+| **T33** | Backfill phase 2 — silver base → rollups, phase gate | Wave 3 · Backfill | T32, T29 | **Pending** |
+| **T34** | `0006` re-point `metric_rollup_1m` to storage-backed table, ledger-gated | Wave 3 · Backfill | T25, T33 | **Pending** |
+| **T35** | flow-ui `silver_coverage` probe on 30 s lane + `source` field | Wave 3 · flow-ui | T02 | **Done** |
+| **T36** | Dual-source `volume_band` on flow-ui + rename stale `_volume_state` | Wave 3 · flow-ui | T35, T27 | **Pending** |
+| **T37** | Dual-source `call_edges` on flow-ui | Wave 3 · flow-ui | T35, T29 | **Pending** |
+| **T38** | Dual-source `contract_violations` on flow-ui | Wave 3 · flow-ui | T35, T28 | **Pending** |
+| **T39** | Fallback removal criterion as automated test | Wave 3 · flow-ui | T36, T37, T38 | **Pending** |
+| **T40** | A-compute: IaC, per-env config, migrate-before-ingest, readiness probes | Wave 4 · Deploy | DEC-A1, DEC-A2, T05, T22 | **Pending** |
+| **T41** | flow-ui deployable and undeployable independently | Wave 4 · Deploy | T40 | **Pending** |
+| **T42** | TLS hop 2 + Dockerfile purity verification | Wave 4 · Deploy | DEC-A4, T04, T40 | **Pending** |
+| **T43** | Edge auth for `:4317` gRPC ingest, metrics internal-only | Wave 4 · Deploy | DEC-A1, T40 | **Pending** |
+| **T44** | Secrets from managed store, delivered as files | Wave 4 · Deploy | T06, T40 | **Pending** |
+| **T45** | Wave 1 documentation leg | Docs | T24, DEC-I2 | **Pending** |
+| **T46** | Wave 2 documentation leg | Docs | T29 | **Pending** |
+| **T47** | Wave 3 documentation leg | Docs | T39, T34 | **Pending** |
+| **T48** | Wave 4 documentation leg | Docs | T44 | **Pending** |
+
+---
+
+### Wave 0 — Architecture Decisions
+
+| ID | Topic / Question | Owner | Status | Details |
+|---|---|---|---|---|
+| **DEC-A1** | Compute platform form for the three services | Captain / Commander | **Pending** | Blocks T40, T43 |
+| **DEC-A2** | ClickHouse hosting and operational owner | Commander | **Pending** | Blocks T30, T40 |
+| **DEC-A3** | What applies DDL in deployed environments | Pod 3 / Pod 2 | **Done** | Adopted bespoke `migrate.sh` with `_meta` ledger (T05/T11) |
+| **DEC-A4** | TLS termination: collector vs platform edge vs sidecar | Pod 2 | **Pending** | Blocks T42 |
+| **DEC-I1** | ClickHouse version pin & generator Compose deletion | Pod 1 / Pod 3 | **Working** | Implemented in practice in commit `75d656d` (25.4 pin, generator compose deleted); awaiting formal owner sign-off |
+| **DEC-I2** | Pre-PR doc discipline vs disjoint paths | Captain / Commander | **Pending** | Blocks T45–T48 |
+| **DEC-D1** | Materialize typed Sentinel keys in silver | Pod 3 / Pod 2 | **Pending** | Open; deferred to T28 |
+| **DEC-V3a** | Refreshable MV vs scheduled INSERT for `call_edges_1m` | Pod 3 | **Done** | Folded into DEC-I1; refreshable MVs ungated on 25.4 |
+
+---
+
+### Landed Capabilities and Limits
 
 | Area | Landed | Limit |
 |---|---|---|
-| **Python CI** (T07, T08) | [`python-ci.yml`](.github/workflows/python-ci.yml): ruff + pytest on a `PYTHON_IMAGE` matrix; the generator integration suite targets `CLICKHOUSE_URL` instead of starting its own ClickHouse | Closes the former "no Python gate" gap |
-| **Rust CI** (T09) | `rust-ci.yml` now runs every `#[ignore]`d integration test (one of them had never run) | |
-| **Python supply chain** (T10) | `pip-audit` + `bandit` job | **Warn-only** (`continue-on-error`); there is no lockfile yet, so `pip-audit` resolves whatever is current |
-| **Repository invariants** (T01) | [`scripts/ci/run-invariants.sh`](scripts/ci/run-invariants.sh) + drop-in [`invariants.d/`](scripts/ci/invariants.d/), run by `repo-invariants.yml` | See *Invariants* below; the CI job is non-blocking |
-| **Migrations** (T05, T11) | [`infra/clickhouse/migrate.sh`](infra/clickhouse/migrate.sh) records each applied migration in a `_meta` ledger (migration `0003`); `make migrate` runs it | |
-| **Collector credentials** (T06) | `user` / `password_file` collector config | |
-| **Cross-arch** (T04) | arm64 + musl/TLS compile spike, toolchain target, CI `platforms:` | |
-| **Test scaffolding** (T02, T03) | flow-ui two-coverage fixtures; a Compose `include:` path-resolution probe | |
-| **flow-ui** (T35) | `silver_coverage` probe on the 30 s lane | |
-| **Release** (T22) | [`release.yml`](.github/workflows/release.yml): Artifact Registry, GitHub OIDC → Workload Identity Federation (no long-lived key), SLSA provenance, SBOM, keyless cosign signing of the digest | **Unverified.** See below |
-| **Promotion** (T23) | digest promotion `main` → `:staging`, `v*` → `:prod`; `cosign verify` runs before any tag moves | **Unverified.** See below |
-| **Image scan** (T24) | trivy scan by digest | **Warn-only, and does not gate the push.** See below |
+| **Compose unification** (T12–T15) | Single `infra/clickhouse/compose.clickhouse.yml` pinned to 25.4, included by root and CI stacks; deleted redundant generator compose | Implemented in commit `75d656d`; formal sign-off for DEC-I1 pending |
+| **Least-privilege roles** (T16–T19) | Migration symlinks (`init.d` → `migrations/`), `0002_roles.sql` with three dedicated roles/users, collector/flow-ui use role credentials, dropped `otelgen` and closed `::/0` route | Landed in commit `7434bb2` |
+| **Live CI Oracle & Gates** (T20, T21) | [`e2e-silver.yml`](.github/workflows/e2e-silver.yml) live ClickHouse pipeline test; [`docs/ci-gates.md`](docs/ci-gates.md) full gate catalog; `repo-invariants` flipped to blocking | Landed in commit `7d17fef`; branch protection on GitHub is tracked in issue #35 |
+| **Python CI** (T07, T08) | [`python-ci.yml`](.github/workflows/python-ci.yml): ruff + pytest on a `PYTHON_IMAGE` matrix; generator integration suite targets `CLICKHOUSE_URL` | Closes former "no Python gate" gap |
+| **Rust CI** (T09) | `rust-ci.yml` runs every `#[ignore]`d integration test | Landed |
+| **Python supply chain** (T10) | `pip-audit` + `bandit` job | **Warn-only** (`continue-on-error`) pending lockfile |
+| **Repository invariants** (T01) | [`scripts/ci/run-invariants.sh`](scripts/ci/run-invariants.sh) + drop-in [`invariants.d/`](scripts/ci/invariants.d/), gating in `repo-invariants.yml` | All asserts PASS; blocking gate |
+| **Migrations** (T05, T11) | [`infra/clickhouse/migrate.sh`](infra/clickhouse/migrate.sh) records each migration in `_meta.schema_migrations` ledger (`0003_meta.sql`); `make migrate` runs it | Landed |
+| **Collector credentials** (T06) | `user` / `password_file` collector config | Landed |
+| **Cross-arch** (T04) | arm64 + musl/TLS compile spike, toolchain target, CI `platforms:` | Landed |
+| **Test scaffolding** (T02, T03) | flow-ui two-coverage fixtures; Compose `include:` path-resolution probe | Landed |
+| **flow-ui coverage probe** (T35) | `silver_coverage` probe on the 30 s lane | Landed |
+| **Release** (T22) | [`release.yml`](.github/workflows/release.yml): Artifact Registry, GitHub OIDC → Workload Identity Federation, SLSA provenance, SBOM, keyless Cosign signing | **Unverified against real registry** (see below) |
+| **Promotion** (T23) | Digest promotion `main` → `:staging`, `v*` → `:prod`; `cosign verify` runs before any tag moves | **Unverified against real registry** (see below) |
+| **Image scan** (T24) | Trivy scan by digest | **Warn-only** (runs post-push) |
 
 Also this cycle, commit `7689c16` removed the `.claude/` agent layer and the `meetings/` archive (89 files).
 
@@ -301,25 +377,29 @@ Also this cycle, commit `7689c16` removed the `.claude/` agent layer and the `me
 
 **The vulnerability scan does not gate the push.** It runs after `push: true`, so REQ-H-12's wording ("SHOULD gate the registry push") is not met: a multi-arch manifest cannot be loaded into the runner's daemon to be scanned beforehand. It is warn-only (`exit-code: "0"`, a single flag). Making it blocking, and the severity threshold, are policy and belong to T21.
 
-**Invariants: 4 of 5 currently fail, by design.** The asserts are written to the end state and stay red until T12–T19 land; this is not a regression. `bash scripts/ci/run-invariants.sh` (2026-10-06) reports:
+### Repository Invariants Status
 
-| Assert | Result | Why |
+All repository invariant checks pass (`bash scripts/ci/run-invariants.sh` reports 0 failed), and the check actively gates PRs in [`repo-invariants.yml`](.github/workflows/repo-invariants.yml):
+
+| Assert | Result | Property Verified |
 |---|---|---|
-| `01-single-clickhouse-image` | FAIL | three image pins: `24.3` (root compose), `25.4` (`services/collector-rust/infra/docker-compose.yml`), `24.3` (`services/generator-python/docker-compose.yaml`) |
-| `02-service-named-clickhouse` | FAIL | `infra/clickhouse/compose.clickhouse.yml` does not exist |
-| `03-no-duplicate-host-8080` | FAIL | the generator Compose file collides with the root stack on host ports 4317, 8080 and 8123 |
-| `04-no-plaintext-secrets` | FAIL | the vestigial `otelgen` user's password sits in plaintext in `infra/clickhouse-init.sql` and the generator Compose file; migration `0002` drops the user (T17/T19) |
-| `05-flow-ui-is-read-only` | PASS | flow-ui issues no write statement |
+| `01-single-clickhouse-image` | **PASS** | Exactly one ClickHouse image pinned (`25.4` in `infra/clickhouse/compose.clickhouse.yml`) |
+| `02-service-named-clickhouse` | **PASS** | All 3 stacks expose a service literally named `clickhouse` |
+| `03-no-duplicate-host-8080` | **PASS** | No host ports published twice |
+| `04-no-plaintext-secrets` | **PASS** | No plaintext credentials in operational tree; `otelgen` dropped; gitignored secrets allowed |
+| `05-flow-ui-is-read-only` | **PASS** | flow-ui issues no write statement |
+| `06-initd-matches-migrations` | **PASS** | `init.d/` contains symlinks into `migrations/`; one DDL source, two apply paths |
+| `07-silver-mv-determinism` *(working)* | **PASS** | Silver MV bodies are deterministic (except `call_edges_1m_rmv` as REQ-D-12 names) |
+| `08-no-verdict-in-silver` *(working)* | **PASS** | No verdict or threshold literals in silver read models |
 
-The `repo-invariants` job runs with `continue-on-error: true` until T15 flips it, so it is not a required check.
+---
 
-**Not done.**
+### Work Ahead and Blockers
 
-- **T12–T21 are blocked on [DEC-I1](plan/decisions/DEC-I1.md)** (one ClickHouse image pin, and whether `services/generator-python/docker-compose.yaml` is deleted). DEC-I1 gates T12 directly and 26 tickets transitively (T12–T21, T25–T34, T36–T39, T46, T47). [DEC-A2](plan/decisions/DEC-A2.md) (ClickHouse hosting and operational owner) additionally gates T30 and T40.
-- **T20** (`e2e-silver.yml`, the live-ClickHouse silver job) and **T21** (`docs/ci-gates.md` and the required-check set) sit behind T19, and so behind DEC-I1. Until T21, no new check is required and branch protection is not configured.
-- **Pod 3 silver read models (T25–T29)** are not started.
-
-**Remaining:** DEC-I1 (the dominant blocker: it gates 26 tickets) and DEC-A2; then ADR-0007 acceptance (Pod 3 sign-off), Pod 3 silver read models, histogram/summary metrics, branch protection and the agentic layer.
+- **Working (Wave 2):** Completing silver watcher models (T25–T29: `0005_silver_watcher_models.sql`, determinism asserts, and integration tests).
+- **Pending (Wave 3):** Backfill runner (T30–T34) waiting on **DEC-A2** (ClickHouse hosting & operational owner); flow-ui dual-source boards (T36–T39) waiting on completion of T27–T29.
+- **Pending (Wave 4):** Production deployment, TLS, edge auth, and secrets (T40–T44) waiting on **DEC-A1**, **DEC-A2**, and **DEC-A4**.
+- **Pending (Docs):** Documentation legs (T45–T48) waiting on **DEC-I2** and their respective waves.
 
 ---
 
@@ -332,8 +412,8 @@ The `repo-invariants` job runs with `continue-on-error: true` until T15 flips it
 | 3 | Sentinel keys are `Map` probes under bronze (no typed columns) — materialize in silver? | Open | [ADR-0007 §Trade-offs](docs/adr/0007-bronze-canonical-contract.md) |
 | 4 | `otel_metrics_1m` rolling-stats moved to Pod 3 silver (Tier-1 input) | Handoff | [read contract §2.3](contracts/collector/v1/pod2-pod3-read-contract.md) |
 | 5 | Histogram / Summary metrics not emitted (no v1.0.0 type) | Known gap | `services/collector-rust/src/otlp.rs` |
-| 6 | **DEC-I1** — one ClickHouse image pin; is `services/generator-python/docker-compose.yaml` deleted? Gates 26 tickets | **Blocking** | [`plan/decisions/DEC-I1.md`](plan/decisions/DEC-I1.md) |
-| 7 | **DEC-A2** — ClickHouse hosting / operational owner. Additionally gates T30 and T40 | **Blocking** | [`plan/decisions/DEC-A2.md`](plan/decisions/DEC-A2.md) |
+| 6 | **DEC-I1** — One ClickHouse image pin (25.4) and deleted generator Compose stack (implemented in `75d656d`; formal sign-off pending) | Working / In practice | [`plan/decisions/DEC-I1.md`](plan/decisions/DEC-I1.md) |
+| 7 | **DEC-A2** — ClickHouse hosting / operational owner. Gates T30 and T40 | **Blocking** | [`plan/decisions/DEC-A2.md`](plan/decisions/DEC-A2.md) |
 | 8 | Release lane (signing, attestation verification, `crane tag` on a multi-arch index) never run against a real registry | Unverified | [`infra/deploy/README.md`](infra/deploy/README.md) |
 | 9 | Image scan runs after push (REQ-H-12 not met) and is warn-only; blocking threshold is policy | Open | T21 · [`infra/deploy/README.md`](infra/deploy/README.md) |
 | 10 | Agentic gitflow amends the WoW's squash-to-main rule (needs ratification) | Pending | [ADR-0009](docs/adr/0009-agentic-gitflow.md) |
