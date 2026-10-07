@@ -34,13 +34,21 @@ services:
     ports:
       # Local host access only. Generator and flow-ui use the private Compose network.
       - "127.0.0.1:${COLLECTOR_OTLP_HOST_PORT:-4317}:4317"
-      - "127.0.0.1:9090:9090"   # Prometheus collector metrics
+      - "127.0.0.1:${COLLECTOR_METRICS_HOST_PORT:-9090}:9090"   # Prometheus collector metrics
     networks:
       default:
         aliases: ["collector"]
     depends_on:
       clickhouse:
         condition: service_healthy
+    # No `healthcheck:` here, and that is a constraint rather than an omission.
+    # The runtime stage is gcr.io/distroless/static-debian12 — no shell, no wget,
+    # no curl — so there is no in-container command for Docker to run. Readiness is
+    # therefore asserted from the host: `make up` polls
+    # http://127.0.0.1:$COLLECTOR_METRICS_HOST_PORT/metrics and fails with the
+    # collector's logs if it never answers. Consequence: nothing can depend on this
+    # service with `condition: service_healthy`, which is fine — flow-ui and HyperDX
+    # must not (invariant 09), and the generator is driven after `make up` returns.
 
   flow-ui:
     build:
@@ -68,7 +76,19 @@ services:
       # it — and the contract board's headline is that policy.
       - ./services/collector-rust/config.docker.yaml:/app/collector-config.yaml:ro
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${FLOW_UI_HOST_PORT:-8080}:8080"
+    # python:3.12-slim ships no curl and no wget, so the probe is the interpreter
+    # that is already here. /healthz always answers 200 and reports `collector` and
+    # `clickhouse` as fields (NFR-05: it degrades rather than crashing), so this is
+    # a liveness check for the UI process — not an assertion that its upstreams are
+    # up. That distinction is deliberate: a red ClickHouse box is something to look
+    # at in the UI, not a reason for Compose to call the UI unhealthy.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 5s
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -98,7 +118,7 @@ services:
     environment:
       MONGO_URI: "mongodb://hyperdx-mongo:27017/hyperdx"
       # Must equal the URL typed into the browser, or login redirects break.
-      FRONTEND_URL: "http://127.0.0.1:${HYPERDX_HOST_PORT:-8081}"
+      FRONTEND_URL: "http://127.0.0.1:${HYPERDX_HOST_PORT:-8082}"
       HYPERDX_LOG_LEVEL: info
       USAGE_STATS_ENABLED: "false"
       # Reader credentials. `sentinel_hyperdx_u` is SELECT-only (migration 0007).
@@ -113,8 +133,11 @@ services:
       - ./infra/hyperdx/sources.json:/etc/hyperdx/sources.json:ro
       - ./infra/hyperdx/entrypoint.sh:/etc/hyperdx/entrypoint.sh:ro
     ports:
-      # Local host access only. 8080 belongs to flow-ui, so HyperDX takes 8081.
-      - "127.0.0.1:${HYPERDX_HOST_PORT:-8081}:8080"
+      # Local host access only. 8080 is flow-ui's default; HyperDX takes 8082 and
+      # leaves 8081 free, because 8081 is the port a crowded machine reaches for
+      # first when 8080 is gone — including to move flow-ui itself
+      # (FLOW_UI_HOST_PORT=8081). Both are overridable; invariant 03 forbids a clash.
+      - "127.0.0.1:${HYPERDX_HOST_PORT:-8082}:8080"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/"]
       interval: 5s
@@ -135,8 +158,12 @@ services:
       CONTRACTS_DIR: /contracts/generator/v1
     volumes:
       - ./contracts:/contracts:ro
-    # No long-running command — driven on demand by `make generate`
-    # (docker compose run --rm generator run --scenario ... --otlp-endpoint http://collector:4317).
+    # No long-running command — driven on demand by `make generate` /
+    # `make generate-stream` (docker compose run --rm generator --scenario ...
+    # --otlp-endpoint http://collector:4317), which is why `make up` BUILDS this
+    # image but does not `up` it: a one-shot CLI brought up as a service would run
+    # `otelgen --help` and exit, and show in `docker compose ps` as Exited — a
+    # healthy stack that reads as a broken one.
 
 volumes:
   hyperdx_mongo_data: {}

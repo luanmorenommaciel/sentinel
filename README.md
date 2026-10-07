@@ -58,7 +58,7 @@ flowchart TB
 
     subgraph OBS["🔭 OBSERVABILITY · reads the path, is not in it"]
         FLOW["flow-ui :8080<br/>four boards · read-only"]
-        HDX["HyperDX :8081<br/>search · traces · dashboards<br/>sentinel_hyperdx_u · SELECT only"]
+        HDX["HyperDX :8082<br/>search · traces · dashboards<br/>sentinel_hyperdx_u · SELECT only"]
     end
     POD2 -. "/metrics :9090" .-> FLOW
     STORE -. "bronze.* + silver.* read-only" .-> FLOW
@@ -205,23 +205,63 @@ make e2e                  # ClickHouse → migrations → Rust collector → gen
 Step by step, plus inspect:
 
 ```sh
-make up                        # ClickHouse → migrations → collector → flow-ui :8080 + HyperDX :8081, each waited on
+make up                        # the WHOLE stack: ClickHouse → migrations → collector → flow-ui + HyperDX
+make status                    # the container table + URL list again, without starting anything
 make generate SCENARIO=black_friday SEED=42   # generate → OTLP :4317
 make logs                      # tail collector logs
-# inspect at http://127.0.0.1:8123/play → SELECT count() FROM bronze.otel_traces
-# scrape collector metrics at http://127.0.0.1:9090/metrics
-make down                      # stop everything make up started (volumes kept)
+make down                      # stop every container make up started (volumes kept)
 make reset                     # stop everything + drop the ClickHouse and HyperDX Mongo volumes
 ```
 
-If another local program already uses host port `4317`, leave it untouched and
-choose another loopback port for the collector without changing service-to-service
-traffic:
+`make up` is the one command: it starts every long-running service in order, waits for
+each one at its **host-published** port, and ends by printing `docker compose ps` plus
+where everything is. If any service never answers, it exits non-zero with that service's
+last 60 log lines and the `lsof` line to find whoever holds the port — it does not leave
+you to discover a half-started stack. A finished run looks like this:
+
+```
+── readiness (host-published ports) ─────────────────────────────────
+  ClickHouse      ready   http://127.0.0.1:8123/ping
+  collector       ready   http://127.0.0.1:9090/metrics
+  flow-ui         ready   http://127.0.0.1:8080/healthz
+  HyperDX         ready   http://127.0.0.1:8082/
+```
+
+The generator is the one service `make up` does not *start*, on purpose: it is a one-shot
+CLI (`otelgen`), not a daemon. `make up` builds its image so `make generate` is instant,
+and a service that ran `otelgen --help` and exited would sit in `docker compose ps` as
+`Exited` — a healthy stack that reads as a broken one.
+
+### Host ports
+
+All five bind to `127.0.0.1` only, and each is overridable when something local already
+owns it. Service-to-service traffic always uses the container ports over the private
+Compose network, so moving one changes the URL you type and nothing about the pipeline.
+
+| Variable | Default | What it reaches |
+|---|---|---|
+| `CLICKHOUSE_HOST_PORT` | `8123` | ClickHouse HTTP + the `/play` query UI |
+| `COLLECTOR_OTLP_HOST_PORT` | `4317` | the collector's OTLP gRPC receiver, for telemetry sent from the host |
+| `COLLECTOR_METRICS_HOST_PORT` | `9090` | the collector's Prometheus `/metrics` |
+| `FLOW_UI_HOST_PORT` | `8080` | flow-ui's four boards |
+| `HYPERDX_HOST_PORT` | `8082` | HyperDX search, traces and dashboards |
+
+HyperDX takes `8082` rather than `8081` so that `8081` stays free as the obvious second
+choice when `8080` is gone — including for moving flow-ui itself.
+
+Set them on the make line, or copy `.env.example` to `.env` (gitignored; Compose reads it
+automatically, so `make up` then needs no flags):
 
 ```sh
+make up FLOW_UI_HOST_PORT=8081 HYPERDX_HOST_PORT=8083
 COLLECTOR_OTLP_HOST_PORT=14317 make up
 # host clients use http://127.0.0.1:14317; Compose services still use collector:4317
 ```
+
+Every readiness probe in the Makefile derives its URL from the same variable Compose
+reads, so the committed Makefile works on both the defaults and an override. Invariant 09
+fails the build on a hard-coded `127.0.0.1:<port>` anywhere in it, and invariant 03 on two
+services publishing the same host port.
 
 Flow-ui and HyperDX are part of `make up`; these start or stop either one on its own, without the collector:
 
@@ -234,7 +274,7 @@ make generate-stream DURATION=10m  # real-time telemetry, paced by the wall cloc
 Search the same rows in HyperDX (ADR-0011), connected straight to ClickHouse:
 
 ```sh
-make hyperdx                       # ClickHouse + migrations + HyperDX → http://127.0.0.1:8081
+make hyperdx                       # ClickHouse + migrations + HyperDX → http://127.0.0.1:8082
 make down-hyperdx                  # stop HyperDX and its Mongo; accounts and saved views are kept
 make reset-hyperdx                 # drop its Mongo volume so infra/hyperdx/sources.json is re-read
 ```
@@ -244,8 +284,8 @@ dashboards and alerts in its own Mongo; none of it is telemetry). The Logs, Trac
 Metrics sources are already mapped onto `bronze.*`. HyperDX reads `sources.json` only into
 an empty Mongo, so after editing it run `make reset-hyperdx`. It connects as
 `sentinel_hyperdx_u` (`SELECT` on `bronze.*` and `silver.*`, no writes, no DDL) and ships
-no collector of its own: ingestion stays with collector-rust. If `8081` is taken,
-`HYPERDX_HOST_PORT=8082 make hyperdx`.
+no collector of its own: ingestion stays with collector-rust. If `8082` is taken,
+`HYPERDX_HOST_PORT=8083 make hyperdx`.
 
 All host-published ports bind to `127.0.0.1`; generator, collector, flow-ui, HyperDX (and its Mongo), and
 ClickHouse communicate over the private Compose network. This is a local development
@@ -253,6 +293,25 @@ boundary, not remote edge authentication or a production security configuration.
 `make up` applies the migration ledger and waits for `/metrics` readiness before the
 collector is considered ready. `make ui` can run without the collector; its status
 board reports the collector as unavailable while remaining readable.
+
+ClickHouse, flow-ui, HyperDX and its Mongo each carry a Compose healthcheck, so `make up`
+brings them up with `--wait` and a container that never goes healthy fails the command.
+**collector-rust carries none, and that is a constraint rather than an oversight:** its
+runtime stage is `gcr.io/distroless/static-debian12`, which has no shell, no `wget` and no
+`curl`, so there is no in-container command for Docker to run. Its readiness is asserted
+from the host instead, by polling `/metrics`. The consequence is that nothing can depend on
+the collector with `condition: service_healthy` — which is fine, because nothing should:
+flow-ui and HyperDX must start without it (invariant 09) and the generator runs after
+`make up` returns.
+
+One more thing `make up` survives: the collector's `--build` re-resolves its distroless base
+image from `gcr.io` on **every** run, even when nothing needs rebuilding, and that registry is
+measurably flaky (2 of 3 probes from one machine on 2026-10-07 died with `SSL_ERROR_SYSCALL`
+after ~10s). Three retries with a widening pause come first; if they all fail and
+`sentinel-collector-rust:dev` is already in the local image store, `make up` starts the stack
+from it and says loudly that the image may predate your working tree and how to rebuild it.
+A network hiccup no longer takes the whole stack down. With no local image there is nothing
+to start, and it fails.
 
 Silver read models are created by migrations and maintained from Bronze: `metric_stats_1m`,
 `volume_1m`, `resource_key_presence_1m`, and refresh-driven `call_edges_1m`. Historical

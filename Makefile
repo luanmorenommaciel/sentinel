@@ -10,16 +10,38 @@ WINDOW    ?= 5m
 DURATION  ?= 60s
 STEP      ?= 1s
 RATE      ?= 200
-# Host-only override for OTLP when another local process owns 4317. The
-# collector and Compose-network clients always use the canonical container port.
-COLLECTOR_OTLP_HOST_PORT ?= 4317
-export COLLECTOR_OTLP_HOST_PORT
-# HyperDX's host port. 8080 is flow-ui's, so it defaults to 8081; FRONTEND_URL in the
-# Compose file follows this value, so it is changed here and nowhere else.
-HYPERDX_HOST_PORT ?= 8081
-export HYPERDX_HOST_PORT
+# ── host ports ───────────────────────────────────────────────────────────────
+# Every host-published port of the stack, in one place, each loopback-bound by the
+# Compose files and each overridable when something local already owns it:
+#
+#   make up FLOW_UI_HOST_PORT=8081 HYPERDX_HOST_PORT=8083
+#
+# These are HOST-side only. Service-to-service traffic always uses the canonical
+# container ports over the private Compose network (clickhouse:8123,
+# collector:4317, collector:9090), so moving one changes the URL you type and
+# nothing about the pipeline. They are exported because the Compose files read
+# them as `${VAR:-default}` AND because every readiness probe below derives its URL
+# from the same variable — the committed Makefile has to work on an overridden port,
+# which hard-coded `:9090` and `:8080` literals did not.
+#
+# Defaults: 8123 ClickHouse · 4317 collector OTLP · 9090 collector metrics ·
+# 8080 flow-ui · 8082 HyperDX. HyperDX sits on 8082, not 8081, so that 8081 stays
+# free as the obvious second choice when 8080 is taken (`FLOW_UI_HOST_PORT=8081`).
+# Keep them distinct: invariant 03 fails the build on a duplicate host port.
+CLICKHOUSE_HOST_PORT       ?= 8123
+COLLECTOR_OTLP_HOST_PORT   ?= 4317
+COLLECTOR_METRICS_HOST_PORT?= 9090
+FLOW_UI_HOST_PORT          ?= 8080
+HYPERDX_HOST_PORT          ?= 8082
+export CLICKHOUSE_HOST_PORT COLLECTOR_OTLP_HOST_PORT COLLECTOR_METRICS_HOST_PORT
+export FLOW_UI_HOST_PORT HYPERDX_HOST_PORT
 
-.PHONY: help up init migrate generate generate-stream ui down-ui hyperdx down-hyperdx reset-hyperdx \
+CH_URL      := http://127.0.0.1:$(CLICKHOUSE_HOST_PORT)
+METRICS_URL := http://127.0.0.1:$(COLLECTOR_METRICS_HOST_PORT)/metrics
+FLOW_UI_URL := http://127.0.0.1:$(FLOW_UI_HOST_PORT)
+HYPERDX_URL := http://127.0.0.1:$(HYPERDX_HOST_PORT)
+
+.PHONY: help up status init migrate generate generate-stream ui down-ui hyperdx down-hyperdx reset-hyperdx \
         e2e down reset logs ps \
         build test test-generator test-collector-rust test-flow-ui test-hyperdx \
         test-generator-integration test-backfill audit-python \
@@ -37,6 +59,17 @@ export HYPERDX_HOST_PORT
 # the registry answers. Three attempts with a widening pause, and the final failure
 # says what to suspect instead of leaving a TLS error to be read as a code defect.
 DOCKER_BUILD_RETRIES ?= 3
+
+# Named once because `up` both builds it and, when the registry will not answer,
+# falls back to whatever copy of it is already on the machine. Measured here
+# 2026-10-07: two of three probes to gcr.io died with SSL_ERROR_SYSCALL after
+# ~10s, and all three build retries failed — with a perfectly good image sitting
+# in the local store. `--build` resolves the base-image manifest on EVERY run,
+# even when nothing needs rebuilding, so before this fallback a 30-second network
+# hiccup took the whole stack down and `make up` could not deliver what it
+# promises. The fallback is loud, names the staleness risk and says how to
+# rebuild; silently starting an old image would be the worse failure.
+COLLECTOR_IMAGE ?= sentinel-collector-rust:dev
 
 # Two things the retry in `up` has to get right, both learned by testing it:
 #   * It classifies before retrying. A port already in use is not transient, so it
@@ -57,7 +90,7 @@ define build_with_retry
 			echo "build of '$(1)' failed $(DOCKER_BUILD_RETRIES) times." >&2; \
 			echo "  If the error mentions a TLS handshake timeout or SSL_ERROR_SYSCALL" >&2; \
 			echo "  against gcr.io, it is the base-image pull and not this repository." >&2; \
-			echo "  Check with:  curl -sS -o /dev/null -w '%{http_code}\\n' \\" >&2; \
+			echo "  Check with:  curl -sS -o /dev/null -w '%{http_code}' \\" >&2; \
 			echo "    https://gcr.io/v2/distroless/static-debian12/manifests/nonroot" >&2; \
 			exit 1; \
 		fi; \
@@ -65,6 +98,35 @@ define build_with_retry
 		sleep $$((attempt * 5)); \
 		attempt=$$((attempt + 1)); \
 	done
+endef
+
+# ── readiness ────────────────────────────────────────────────────────────────
+# One probe used by every target, so "ready" means the same thing everywhere: the
+# HOST-published port answers. That is stricter than a container healthcheck and
+# catches the failure a healthcheck cannot see — a published port that never bound,
+# or bound somewhere the operator is not looking. Arguments:
+#   $(1) label  $(2) URL  $(3) attempts (x2s)  $(4) compose service for the logs
+#
+# `curl -o /dev/null` without -f on purpose for the UIs: HyperDX answers `/` with a
+# redirect to the login page and flow-ui's /healthz with 200, so the assertion is
+# "it spoke HTTP", and the per-service checks below add the semantic part.
+define wait_http
+	@printf '  %-16s' '$(1)'; attempt=0; \
+	while [ "$$attempt" -lt $(3) ]; do \
+		if curl -fsS -o /dev/null --max-time 5 '$(2)' 2>/dev/null; then \
+			echo 'ready   $(2)'; exit 0; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	echo 'FAILED  $(2)'; \
+	echo "" >&2; \
+	echo "$(1) did not become ready at $(2) after $$(($(3) * 2))s." >&2; \
+	echo "  Last 60 log lines from '$(4)' follow. If the port is the problem," >&2; \
+	echo "  find the holder:  lsof -nP -iTCP:$(5) -sTCP:LISTEN" >&2; \
+	echo "  or move it:       make up $(6)=<other port>" >&2; \
+	echo "" >&2; \
+	docker compose logs --tail 60 $(4) >&2; \
+	exit 1
 endef
 
 # Docker runner for per-service build/test/lint — no host toolchains required.
@@ -79,20 +141,25 @@ PYTHON_IMAGE ?= python:3.12-slim
 
 help:                ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
-		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  SCENARIO=$(SCENARIO)  SEED=$(SEED)  WINDOW=$(WINDOW)  PYTHON_IMAGE=$(PYTHON_IMAGE)"
-	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)  COLLECTOR_OTLP_HOST_PORT=$(COLLECTOR_OTLP_HOST_PORT)  HYPERDX_HOST_PORT=$(HYPERDX_HOST_PORT)"
+	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)"
+	@echo ""
+	@echo "  host ports (all loopback-only; override any of them on the make line):"
+	@echo "    CLICKHOUSE_HOST_PORT=$(CLICKHOUSE_HOST_PORT)  COLLECTOR_OTLP_HOST_PORT=$(COLLECTOR_OTLP_HOST_PORT)  COLLECTOR_METRICS_HOST_PORT=$(COLLECTOR_METRICS_HOST_PORT)"
+	@echo "    FLOW_UI_HOST_PORT=$(FLOW_UI_HOST_PORT)  HYPERDX_HOST_PORT=$(HYPERDX_HOST_PORT)"
 
-up:                  ## Start everything: ClickHouse, migrate, collector, then flow-ui + HyperDX
-	docker compose up -d clickhouse
+up:                  ## Start the WHOLE stack: ClickHouse → migrations → collector → flow-ui + HyperDX
+	@echo "── starting the Sentinel stack ──────────────────────────────────────"
+	docker compose up -d --wait clickhouse
 	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
 		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
 			echo "ClickHouse ready"; break; \
 		fi; \
 		attempt=$$((attempt + 1)); sleep 2; \
 	done; \
-	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; exit 1; }
+	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; docker compose logs --tail 60 clickhouse >&2; exit 1; }
 	$(MAKE) migrate
 	@log="$$(mktemp)"; attempt=1; \
 	while :; do \
@@ -102,7 +169,9 @@ up:                  ## Start everything: ClickHouse, migrate, collector, then f
 			echo "" >&2; \
 			echo "a host port the collector needs is already taken - not a transient failure, so not retried." >&2; \
 			echo "  Find the holder:  lsof -nP -iTCP:$(COLLECTOR_OTLP_HOST_PORT) -sTCP:LISTEN" >&2; \
+			echo "                    lsof -nP -iTCP:$(COLLECTOR_METRICS_HOST_PORT) -sTCP:LISTEN" >&2; \
 			echo "  Or move the port:  make up COLLECTOR_OTLP_HOST_PORT=4318" >&2; \
+			echo "                     make up COLLECTOR_METRICS_HOST_PORT=9091" >&2; \
 			rm -f "$$log"; exit 1; \
 		fi; \
 		if ! grep -qiE 'tls handshake|SSL_ERROR_SYSCALL|failed to resolve source metadata|i/o timeout|failed to do request' "$$log"; then \
@@ -113,39 +182,56 @@ up:                  ## Start everything: ClickHouse, migrate, collector, then f
 		fi; \
 		if [ "$$attempt" -ge $(DOCKER_BUILD_RETRIES) ]; then \
 			echo "" >&2; \
-			echo "the distroless base-image pull failed $(DOCKER_BUILD_RETRIES) times - this is gcr.io, not the repo." >&2; \
-			echo "  Confirm:  curl -sS -o /dev/null -w '%{http_code}\\n' \\" >&2; \
+			echo "the distroless base-image pull failed on all $(DOCKER_BUILD_RETRIES) attempt(s) - this is gcr.io, not the repo." >&2; \
+			echo "  Confirm:  curl -sS -o /dev/null -w '%{http_code}' \\" >&2; \
 			echo "              https://gcr.io/v2/distroless/static-debian12/manifests/nonroot" >&2; \
+			if docker image inspect $(COLLECTOR_IMAGE) >/dev/null 2>&1; then \
+				echo "" >&2; \
+				echo "  $(COLLECTOR_IMAGE) IS already built locally, so the stack is started from it" >&2; \
+				echo "  rather than left down for a registry outage. The image may predate your" >&2; \
+				echo "  working tree - rebuild it deliberately once the registry answers:" >&2; \
+				echo "    make build          # or: docker compose build collector-rust" >&2; \
+				echo "" >&2; \
+				rm -f "$$log"; \
+				docker compose up -d --no-build collector-rust || exit 1; \
+				break; \
+			fi; \
+			echo "  No $(COLLECTOR_IMAGE) exists locally either, so there is nothing to start." >&2; \
 			rm -f "$$log"; exit 1; \
 		fi; \
 		echo "registry pull failed (attempt $$attempt/$(DOCKER_BUILD_RETRIES)); retrying in $$((attempt * 5))s" >&2; \
 		sleep $$((attempt * 5)); \
 		attempt=$$((attempt + 1)); \
 	done
-	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
-		if curl -fsS http://127.0.0.1:9090/metrics >/dev/null 2>&1; then \
-			echo "collector ready at 127.0.0.1:$(COLLECTOR_OTLP_HOST_PORT) (metrics on 127.0.0.1:9090)"; exit 0; \
-		fi; \
-		attempt=$$((attempt + 1)); sleep 2; \
-	done; \
-	echo "collector did not become ready at http://127.0.0.1:9090/metrics" >&2; \
-	docker compose logs collector-rust; exit 1
-	docker compose up -d --build flow-ui hyperdx
-	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
-		if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then \
-			echo "flow-ui ready at http://127.0.0.1:8080"; break; \
-		fi; \
-		attempt=$$((attempt + 1)); sleep 2; \
-	done; \
-	[ "$$attempt" -lt 30 ] || { echo "flow-ui did not become ready at http://127.0.0.1:8080/healthz" >&2; docker compose logs flow-ui; exit 1; }
-	@attempt=0; while [ "$$attempt" -lt 45 ]; do \
-		if curl -fsS -o /dev/null http://127.0.0.1:$(HYPERDX_HOST_PORT)/ 2>/dev/null; then \
-			echo "HyperDX ready at http://127.0.0.1:$(HYPERDX_HOST_PORT) (create the first account on first visit)"; exit 0; \
-		fi; \
-		attempt=$$((attempt + 1)); sleep 2; \
-	done; \
-	echo "HyperDX did not become ready at http://127.0.0.1:$(HYPERDX_HOST_PORT)/" >&2; \
-	docker compose logs hyperdx; exit 1
+	docker compose up -d --build --wait --wait-timeout 300 flow-ui hyperdx
+	@# The generator is a one-shot CLI, not a service (see docker-compose.yml): it is
+	@# BUILT here so `make generate` and `make e2e` start instantly, and never `up`ed,
+	@# because a service that runs `otelgen --help` and exits would sit in
+	@# `docker compose ps` as Exited and read as a broken stack.
+	docker compose build generator
+	@echo ""
+	@echo "── readiness (host-published ports) ─────────────────────────────────"
+	$(call wait_http,ClickHouse,$(CH_URL)/ping,30,clickhouse,$(CLICKHOUSE_HOST_PORT),CLICKHOUSE_HOST_PORT)
+	$(call wait_http,collector,$(METRICS_URL),30,collector-rust,$(COLLECTOR_METRICS_HOST_PORT),COLLECTOR_METRICS_HOST_PORT)
+	$(call wait_http,flow-ui,$(FLOW_UI_URL)/healthz,30,flow-ui,$(FLOW_UI_HOST_PORT),FLOW_UI_HOST_PORT)
+	$(call wait_http,HyperDX,$(HYPERDX_URL)/,60,hyperdx,$(HYPERDX_HOST_PORT),HYPERDX_HOST_PORT)
+	@$(MAKE) --no-print-directory status
+
+# Printed at the end of `up` and callable on its own. `up` is only finished when
+# every service it started is in `docker compose ps`, so the proof and the summary
+# are the same thing.
+status:              ## Show every container plus the URL of each host-published port
+	@echo ""
+	@echo "── containers ───────────────────────────────────────────────────────"
+	@docker compose ps
+	@echo ""
+	@echo "── where it all is ──────────────────────────────────────────────────"
+	@printf '  %-16s%s\n' 'ClickHouse'   '$(CH_URL)/play'
+	@printf '  %-16s%s\n' 'collector'    'OTLP 127.0.0.1:$(COLLECTOR_OTLP_HOST_PORT) · metrics $(METRICS_URL)'
+	@printf '  %-16s%s\n' 'flow-ui'      '$(FLOW_UI_URL)'
+	@printf '  %-16s%s\n' 'HyperDX'      '$(HYPERDX_URL)   (first visit: create a local account)'
+	@printf '  %-16s%s\n' 'generator'    'one-shot: make generate / make generate-stream / make e2e'
+	@echo ""
 
 init:                ## No-op: the canonical bronze schema auto-applies on ClickHouse boot
 	@echo "Rust → canonical bronze schema (bronze.*) auto-applies on ClickHouse boot via infra/clickhouse/init.d/; nothing to apply"
@@ -199,8 +285,8 @@ generate-stream:     ## Generate in real time (paced by wall clock) — DURATION
 # a UI whose /healthz reports `"clickhouse": false` and whose ClickHouse-backed
 # boards are empty — it degrades rather than crashing (NFR-05), which makes the
 # cause easy to miss. The collector stays genuinely optional.
-ui:                  ## Start ClickHouse + flow-ui independently at http://127.0.0.1:8080
-	docker compose up -d clickhouse
+ui:                  ## Start ClickHouse + flow-ui alone (FLOW_UI_HOST_PORT, default 8080)
+	docker compose up -d --wait clickhouse
 	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
 		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
 			echo "ClickHouse ready"; break; \
@@ -209,15 +295,9 @@ ui:                  ## Start ClickHouse + flow-ui independently at http://127.0
 	done; \
 	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; exit 1; }
 	$(MAKE) migrate
-	docker compose up -d --build flow-ui
-	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
-		if curl -fsS http://127.0.0.1:8080/healthz 2>/dev/null; then \
-			echo "flow-ui ready at http://127.0.0.1:8080 (collector is optional)"; exit 0; \
-		fi; \
-		attempt=$$((attempt + 1)); sleep 2; \
-	done; \
-	echo "flow-ui did not become ready at http://127.0.0.1:8080/healthz" >&2; \
-	docker compose logs flow-ui; exit 1
+	docker compose up -d --build --wait --wait-timeout 300 flow-ui
+	$(call wait_http,flow-ui,$(FLOW_UI_URL)/healthz,30,flow-ui,$(FLOW_UI_HOST_PORT),FLOW_UI_HOST_PORT)
+	@echo "flow-ui ready at $(FLOW_UI_URL) (collector is optional)"
 
 down-ui:             ## Stop only flow-ui
 	docker compose stop flow-ui
@@ -225,8 +305,8 @@ down-ui:             ## Stop only flow-ui
 # Same ordering as `ui`, for the same reason: HyperDX authenticates as
 # `sentinel_hyperdx_u`, which migration 0007 creates, so it must not start against an
 # unmigrated volume. The collector stays optional; without it the tables are just empty.
-hyperdx:             ## Start ClickHouse + HyperDX independently at http://127.0.0.1:8081
-	docker compose up -d clickhouse
+hyperdx:             ## Start ClickHouse + HyperDX alone (HYPERDX_HOST_PORT, default 8082)
+	docker compose up -d --wait clickhouse
 	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
 		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
 			echo "ClickHouse ready"; break; \
@@ -235,15 +315,9 @@ hyperdx:             ## Start ClickHouse + HyperDX independently at http://127.0
 	done; \
 	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; exit 1; }
 	$(MAKE) migrate
-	docker compose up -d hyperdx
-	@attempt=0; while [ "$$attempt" -lt 45 ]; do \
-		if curl -fsS -o /dev/null http://127.0.0.1:$(HYPERDX_HOST_PORT)/ 2>/dev/null; then \
-			echo "HyperDX ready at http://127.0.0.1:$(HYPERDX_HOST_PORT) (create the first account on first visit; collector is optional)"; exit 0; \
-		fi; \
-		attempt=$$((attempt + 1)); sleep 2; \
-	done; \
-	echo "HyperDX did not become ready at http://127.0.0.1:$(HYPERDX_HOST_PORT)/" >&2; \
-	docker compose logs hyperdx; exit 1
+	docker compose up -d --wait --wait-timeout 300 hyperdx
+	$(call wait_http,HyperDX,$(HYPERDX_URL)/,60,hyperdx,$(HYPERDX_HOST_PORT),HYPERDX_HOST_PORT)
+	@echo "HyperDX ready at $(HYPERDX_URL) (create the first account on first visit; collector is optional)"
 
 down-hyperdx:        ## Stop only HyperDX and its Mongo (accounts and saved views are kept)
 	docker compose stop hyperdx hyperdx-mongo
@@ -256,8 +330,12 @@ reset-hyperdx:       ## Drop HyperDX's Mongo volume so infra/hyperdx/sources.jso
 	docker compose rm -sfv hyperdx hyperdx-mongo; \
 	if [ -n "$$vol" ]; then docker volume rm "$$vol"; fi
 
-e2e: up init generate ## Full configurable pipeline (up + init + generate)
-	@echo "E2E complete with the Rust collector. Inspect at http://localhost:8123/play"
+e2e: up init generate ## Whole stack (make up) + a generator run into bronze.*
+	@echo ""
+	@echo "E2E complete with the Rust collector."
+	@echo "  rows:    $(CH_URL)/play  →  SELECT count() FROM bronze.otel_traces"
+	@echo "  boards:  $(FLOW_UI_URL)"
+	@echo "  search:  $(HYPERDX_URL)"
 
 ps:                  ## Show running services
 	docker compose ps
@@ -265,11 +343,15 @@ ps:                  ## Show running services
 logs:                ## Tail the Rust collector's logs
 	docker compose logs -f collector-rust
 
-down:                ## Stop everything `make up` starts (data volumes are kept)
-	docker compose down
+# Symmetric with `up` by construction: `down` is service-agnostic, so it stops
+# whatever `up` started without a list to keep in sync. `--remove-orphans` sweeps a
+# container left behind by an earlier revision of the Compose file (the Mongo that
+# arrived with HyperDX is exactly that case for anyone upgrading in place).
+down:                ## Stop every container `make up` starts (data volumes are kept)
+	docker compose down --remove-orphans
 
-reset:               ## Stop all services and drop volumes (fresh ClickHouse and HyperDX Mongo)
-	docker compose down -v
+reset:               ## Stop everything and drop volumes (fresh ClickHouse and HyperDX Mongo)
+	docker compose down -v --remove-orphans
 
 # ── build / test / lint (all run in Docker; no host toolchains needed) ──
 

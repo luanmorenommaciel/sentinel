@@ -34,7 +34,11 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:25.4
     ports:
-      - "127.0.0.1:8123:8123"   # Local HTTP interface (+ /play UI)
+      # Local HTTP interface (+ /play UI). Host-side only: `make migrate`,
+      # `make test-silver` and every in-stack client reach the database through
+      # `docker compose exec` or the Compose network name, so moving this port
+      # changes nothing but the browser URL.
+      - "127.0.0.1:${CLICKHOUSE_HOST_PORT:-8123}:8123"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       # POD 3 canonical bronze schema (bronze.*, ADR-0007). The collector writes

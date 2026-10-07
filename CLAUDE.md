@@ -10,7 +10,7 @@ integrated monorepo: every Pod's component behind versioned contracts.
 generator (otelgen) ──OTLP gRPC :4317──▶ collector-rust ──HTTP :8123──▶ ClickHouse bronze.* ──▶ Play UI :8123/play
                        │                        │          (Pod-3-owned DDL, auto-applied on boot)
                        │                        └── /metrics :9090 ──▶ flow-ui :8080
-                                                 ClickHouse bronze.*/silver.* ──SELECT──▶ HyperDX :8081 (+ its Mongo)
+                                                 ClickHouse bronze.*/silver.* ──SELECT──▶ HyperDX :8082 (+ its Mongo)
                        └── validates against contracts/generator/v1 (single source of truth)
 ```
 
@@ -38,17 +38,28 @@ Makefile                   # one-command UX
 
 | Command | What it does |
 |---------|--------------|
-| `make e2e` | Full local pipeline: ClickHouse → migrations → collector readiness → generate rows in `bronze.*` |
+| `make up` | **The whole stack, one command.** ClickHouse → migrations → collector → flow-ui + HyperDX, each waited on at its host-published port, then `docker compose ps` and a URL list. Non-zero with that service's logs if any one never answers. The generator's image is built here; it is a one-shot CLI, not a service |
+| `make e2e` | `make up` + a generator run → rows in `bronze.*` |
+| `make status` | The same container table and URL list on its own, without starting anything |
 | `make ui` / `make down-ui` | Start or stop flow-ui independently on http://127.0.0.1:8080 |
-| `make hyperdx` / `make down-hyperdx` / `make reset-hyperdx` | Start or stop HyperDX (UI + Mongo, direct to ClickHouse as `sentinel_hyperdx_u`) on http://127.0.0.1:8081; `reset` drops its Mongo so `sources.json` is re-read (ADR-0011) |
+| `make hyperdx` / `make down-hyperdx` / `make reset-hyperdx` | Start or stop HyperDX (UI + Mongo, direct to ClickHouse as `sentinel_hyperdx_u`) on http://127.0.0.1:8082; `reset` drops its Mongo so `sources.json` is re-read (ADR-0011) |
 | `make generate-stream DURATION=10m` | Real-time telemetry paced by the wall clock, rather than a backfilled window |
 | `make up / init / migrate / generate / logs / ps / down / reset` | Local pipeline steps; `make up` starts every container in order (ClickHouse → migrate → collector → flow-ui + HyperDX), `make down` stops them all, `make reset` also drops the ClickHouse and HyperDX Mongo volumes |
 | `make build` | Build all service images |
 | `make test` | All unit suites (`test-generator` + `test-flow-ui` + `test-hyperdx` pytest, `test-collector-rust` cargo) |
 | `make lint` | `lint-generator` + `lint-flow-ui` (ruff) + `lint-collector-rust` (cargo fmt --check + clippy) |
-| `make help` | List targets + active `SCENARIO/SEED/WINDOW` |
+| `make help` | List targets + active `SCENARIO/SEED/WINDOW` + every host port |
 
 Variables: `SCENARIO` (default `baseline`), `SEED` (`42`), `WINDOW` (`5m`).
+
+**Host ports** are all declared in the Makefile, exported to Compose, loopback-only, and each
+overridable when something local already owns one — `CLICKHOUSE_HOST_PORT` (8123),
+`COLLECTOR_OTLP_HOST_PORT` (4317), `COLLECTOR_METRICS_HOST_PORT` (9090), `FLOW_UI_HOST_PORT`
+(8080), `HYPERDX_HOST_PORT` (8082). Set them on the make line (`make up FLOW_UI_HOST_PORT=8081`)
+or copy `.env.example` to `.env`. HyperDX sits on 8082, not 8081, so 8081 stays free as the
+obvious second choice when 8080 is taken. Every readiness probe in the Makefile derives its URL
+from the same variable Compose reads, so the committed Makefile works on an overridden port;
+invariant 09 fails the build on a hard-coded `127.0.0.1:<port>` anywhere in it.
 
 ## Conventions
 
