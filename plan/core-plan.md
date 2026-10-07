@@ -1222,3 +1222,11 @@ Two count claims in this plan were wrong.
 - **DEC-I1 blocks 26 tickets transitively; DEC-A3 blocks none** (T05 has no blockers; DEC-A3 shapes only T05's form). This contradicts "Four are W1 blockers in practice: DEC-A1, DEC-A2, DEC-A3, DEC-I1" in §1. In practice DEC-I1 is the W1 blocker; DEC-A2 (12) and DEC-A1 gate W3/W4, and DEC-V3a is folded into DEC-I1.
 
 Other edits made the same day: T22's DEC-A1 blocker was removed (DEC-A1 now blocks 6 tickets, not 10); T40 is Wave 4 in both §4 and §8; DEC-V3a is a consequence of DEC-I1.
+
+---
+
+## Post-cycle additions (outside T01–T48)
+
+| Item | Status | Where |
+|---|---|---|
+| HyperDX as a second read-layer UI, direct to ClickHouse as a SELECT-only user (no ticket number; counts above are unchanged) | Done (local) — hand-verified against a live ClickHouse 25.4; `make test-hyperdx` is not yet in a workflow | [ADR-0011](../docs/adr/0011-hyperdx-read-layer-ui.md), migration `0007`, `infra/hyperdx/`, invariant `10` |

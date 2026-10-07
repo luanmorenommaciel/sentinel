@@ -10,6 +10,7 @@ integrated monorepo: every Pod's component behind versioned contracts.
 generator (otelgen) ──OTLP gRPC :4317──▶ collector-rust ──HTTP :8123──▶ ClickHouse bronze.* ──▶ Play UI :8123/play
                        │                        │          (Pod-3-owned DDL, auto-applied on boot)
                        │                        └── /metrics :9090 ──▶ flow-ui :8080
+                                                 ClickHouse bronze.*/silver.* ──SELECT──▶ HyperDX :8081 (+ its Mongo)
                        └── validates against contracts/generator/v1 (single source of truth)
 ```
 
@@ -25,6 +26,7 @@ services/
   flow-ui/                 # the pipeline watching itself — four boards over /metrics + bronze/silver
                            #   ARCHITECTURE.md = stack + cadences + module map (Mermaid)
 infra/                     # ClickHouse bootstrap (users/db init + users.d network override + bronze DDL in init.d/)
+  hyperdx/                 #   HyperDX bootstrap: sources.json (bronze mapping) + entrypoint.sh (password-by-file) + tests/
 docs/                      # shared docs (ADRs, research, proposals)
                            #   research/ holds the V2 product roadmap for flow-ui:
                            #   data-observability-competitive-landscape.md §6
@@ -38,10 +40,11 @@ Makefile                   # one-command UX
 |---------|--------------|
 | `make e2e` | Full local pipeline: ClickHouse → migrations → collector readiness → generate rows in `bronze.*` |
 | `make ui` / `make down-ui` | Start or stop flow-ui independently on http://127.0.0.1:8080 |
+| `make hyperdx` / `make down-hyperdx` / `make reset-hyperdx` | Start or stop HyperDX (UI + Mongo, direct to ClickHouse as `sentinel_hyperdx_u`) on http://127.0.0.1:8081; `reset` drops its Mongo so `sources.json` is re-read (ADR-0011) |
 | `make generate-stream DURATION=10m` | Real-time telemetry paced by the wall clock, rather than a backfilled window |
 | `make up / init / migrate / generate / logs / ps / down / reset` | Local pipeline steps; `make up` migrates before starting the collector |
 | `make build` | Build all service images |
-| `make test` | All unit suites (`test-generator` + `test-flow-ui` pytest, `test-collector-rust` cargo) |
+| `make test` | All unit suites (`test-generator` + `test-flow-ui` + `test-hyperdx` pytest, `test-collector-rust` cargo) |
 | `make lint` | `lint-generator` + `lint-flow-ui` (ruff) + `lint-collector-rust` (cargo fmt --check + clippy) |
 | `make help` | List targets + active `SCENARIO/SEED/WINDOW` |
 
@@ -76,7 +79,7 @@ Pod 2's Rust collector is verified end-to-end on `main`: generator → OTLP `:43
 and [`plan/core-plan.md`](plan/core-plan.md) for the tickets themselves. In short: one pinned
 ClickHouse (25.4) behind a single Compose definition, DDL in `migrations/` with `init.d/` as
 symlinks into it, least-privilege roles with the credential delivered as a file path, both `::/0`
-routes closed, the four Pod 3 Watcher read models, the backfill runner, five CI workflows and nine
+routes closed, the four Pod 3 Watcher read models, the backfill runner, five CI workflows and ten
 repository invariants.
 
 **Scope ruled on 2026-10-06** ([`plan/decisions/DEC-2026-10-06-local-scope.md`](plan/decisions/DEC-2026-10-06-local-scope.md)):
@@ -85,6 +88,8 @@ no remote platform or ClickHouse provider is selected (DEC-A1/A2), **TLS is defe
 T42 is not attempted), and documentation now lands in the same PR as the behaviour it describes
 (DEC-I2, so the T45–T48 docs wave is dissolved). Anything marked *Done (local)* means done within
 that scope and unverified against a deployed target.
+
+**HyperDX** (post-cycle, [ADR-0011](docs/adr/0011-hyperdx-read-layer-ui.md), `Proposed`): `hyperdx/hyperdx:2.40.0` UI/API + Mongo, direct to ClickHouse over :8123 as a SELECT-only user (migration `0007`). The bundled ClickStack images are deliberately not used — they carry their own ClickHouse and collector. Verified locally by hand; no workflow runs `make test-hyperdx` yet.
 
 **Open:** ADR-0007 acceptance (Pod 3 sign-off) · histogram/summary metrics (no v1.0.0 type) ·
 branch protection, which is a GitHub setting and not a file — [`docs/ci-gates.md`](docs/ci-gates.md)

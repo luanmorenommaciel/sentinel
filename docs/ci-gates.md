@@ -25,7 +25,7 @@ compared instead of assumed (`SPEC §12.4`, REQ-B-10).
 | `python-ci` | `lint (ruff)` | ruff over both Python packages | no | with the first required set |
 | `python-ci` | `test (python <version>)` | pytest across the `PYTHON_IMAGE` matrix — 178 generator + 83 flow-ui | no | with the first required set |
 | `python-ci` | `supply-chain (pip-audit · bandit)` | advisories + static security scan, `continue-on-error` | no | after a lockfile exists (REQ-B-07) |
-| `repo-invariants` | `invariants (scripts/ci/invariants.d)` | the six cross-cutting properties below | no | **ready now** — all six pass as of T19 |
+| `repo-invariants` | `invariants (scripts/ci/invariants.d)` | the ten cross-cutting properties below | no | **ready now** — all six pass as of T19 |
 | `e2e-silver` | `e2e-silver (live ClickHouse)` | the real pipeline, the 18 silver assertions, the generator integration suite, and the role grants | no | after a week of real PRs (`SPEC §16`) |
 | `pr-linked-issue` | `linked-issue` | the PR closes an issue, or carries `no-issue` | no | with the first required set |
 | `release` | `publish (<image>)` | build, push, provenance, SBOM, cosign signing | n/a | runs on `main`/tags, not on PRs |
@@ -33,10 +33,10 @@ compared instead of assumed (`SPEC §12.4`, REQ-B-10).
 
 ## What `repo-invariants` gates on
 
-Nine asserts, each a property of the repository as a whole, so any PR can break one.
-All nine pass. Four of the first five were authored to the end state and failed by
+Ten asserts, each a property of the repository as a whole, so any PR can break one.
+All ten pass. Four of the first five were authored to the end state and failed by
 design until T19, which is why the job carried `continue-on-error` and why it does not
-any more; 06 arrived with T16, 07 and 08 with T29, and 09 with the local-runtime scope
+any more; 06 arrived with T16, 07 and 08 with T29, 10 with HyperDX (ADR-0011), and 09 with the local-runtime scope
 DEC-A1/A2 settled.
 
 | Assert | Property |
@@ -50,6 +50,7 @@ DEC-A1/A2 settled.
 | `07-silver-mv-determinism` | every silver MV body is deterministic, with `call_edges_1m_rmv` the one exception REQ-D-12 names |
 | `08-no-verdict-in-silver` | no threshold, severity, escalation or verdict literal in the silver read models (REQ-D-07) |
 | `09-local-compose-boundary` | host ports bind loopback-only, and `make` supplies the collector's OTLP port default (DEC-A1/A2 local scope) |
+| `10-hyperdx-is-read-only` | HyperDX connects as `sentinel_hyperdx_u`, takes its password as a file path, publishes loopback only, keeps Mongo unpublished, pins both images, and no bundled ClickStack image adds a second ClickHouse or collector (ADR-0011) |
 
 ## Two things this table is deliberately honest about
 

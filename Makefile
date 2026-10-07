@@ -14,9 +14,14 @@ RATE      ?= 200
 # collector and Compose-network clients always use the canonical container port.
 COLLECTOR_OTLP_HOST_PORT ?= 4317
 export COLLECTOR_OTLP_HOST_PORT
+# HyperDX's host port. 8080 is flow-ui's, so it defaults to 8081; FRONTEND_URL in the
+# Compose file follows this value, so it is changed here and nowhere else.
+HYPERDX_HOST_PORT ?= 8081
+export HYPERDX_HOST_PORT
 
-.PHONY: help up init migrate generate generate-stream ui down-ui e2e down reset logs ps \
-        build test test-generator test-collector-rust test-flow-ui \
+.PHONY: help up init migrate generate generate-stream ui down-ui hyperdx down-hyperdx reset-hyperdx \
+        e2e down reset logs ps \
+        build test test-generator test-collector-rust test-flow-ui test-hyperdx \
         test-generator-integration test-backfill audit-python \
         test-silver sample-silver lint lint-generator lint-collector-rust lint-flow-ui
 
@@ -77,7 +82,7 @@ help:                ## Show this help
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  SCENARIO=$(SCENARIO)  SEED=$(SEED)  WINDOW=$(WINDOW)  PYTHON_IMAGE=$(PYTHON_IMAGE)"
-	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)  COLLECTOR_OTLP_HOST_PORT=$(COLLECTOR_OTLP_HOST_PORT)"
+	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)  COLLECTOR_OTLP_HOST_PORT=$(COLLECTOR_OTLP_HOST_PORT)  HYPERDX_HOST_PORT=$(HYPERDX_HOST_PORT)"
 
 up:                  ## Start ClickHouse, migrate, then start the Rust collector
 	docker compose up -d clickhouse
@@ -201,6 +206,40 @@ ui:                  ## Start ClickHouse + flow-ui independently at http://127.0
 down-ui:             ## Stop only flow-ui
 	docker compose stop flow-ui
 
+# Same ordering as `ui`, for the same reason: HyperDX authenticates as
+# `sentinel_hyperdx_u`, which migration 0007 creates, so it must not start against an
+# unmigrated volume. The collector stays optional; without it the tables are just empty.
+hyperdx:             ## Start ClickHouse + HyperDX independently at http://127.0.0.1:8081
+	docker compose up -d clickhouse
+	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
+		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
+			echo "ClickHouse ready"; break; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; exit 1; }
+	$(MAKE) migrate
+	docker compose up -d hyperdx
+	@attempt=0; while [ "$$attempt" -lt 45 ]; do \
+		if curl -fsS -o /dev/null http://127.0.0.1:$(HYPERDX_HOST_PORT)/ 2>/dev/null; then \
+			echo "HyperDX ready at http://127.0.0.1:$(HYPERDX_HOST_PORT) (create the first account on first visit; collector is optional)"; exit 0; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	echo "HyperDX did not become ready at http://127.0.0.1:$(HYPERDX_HOST_PORT)/" >&2; \
+	docker compose logs hyperdx; exit 1
+
+down-hyperdx:        ## Stop only HyperDX and its Mongo (accounts and saved views are kept)
+	docker compose stop hyperdx hyperdx-mongo
+
+# HyperDX reads sources.json only into an EMPTY Mongo. After editing it, the old
+# sources survive a restart, so this drops the Mongo volume. Accounts, saved
+# searches, dashboards and alerts go with it; ClickHouse is untouched.
+reset-hyperdx:       ## Drop HyperDX's Mongo volume so infra/hyperdx/sources.json is re-read
+	@vol="$$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data/db"}}{{.Name}}{{end}}{{end}}' $$(docker compose ps -aq hyperdx-mongo) 2>/dev/null)"; \
+	docker compose rm -sfv hyperdx hyperdx-mongo; \
+	if [ -n "$$vol" ]; then docker volume rm "$$vol"; fi
+
 e2e: up init generate ## Full configurable pipeline (up + init + generate)
 	@echo "E2E complete with the Rust collector. Inspect at http://localhost:8123/play"
 
@@ -222,7 +261,7 @@ build:               ## Build all service images (generator + Rust collector)
 	$(call build_with_retry,collector-rust)
 	docker compose build
 
-test: test-generator test-collector-rust test-flow-ui  ## Run all unit test suites
+test: test-generator test-collector-rust test-flow-ui test-hyperdx  ## Run all unit test suites
 
 test-silver:            ## Verify Bronze→Silver load and Silver read-model invariants
 	docker compose exec -T clickhouse clickhouse-client --multiquery < infra/clickhouse/tests/02-silver-layer.test.sql
@@ -263,6 +302,10 @@ lint: lint-generator lint-collector-rust lint-flow-ui  ## Lint all services
 test-flow-ui:        ## flow-ui unit tests (pytest)
 	$(DK_RUN) -w /w/services/flow-ui -e HOME=/tmp \
 		$(PYTHON_IMAGE) bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest && /tmp/v/bin/python -m pytest tests -q"
+
+test-hyperdx:        ## HyperDX source config vs the bronze DDL (stdlib pytest)
+	$(DK_RUN) -w /w/infra/hyperdx -e HOME=/tmp \
+		$(PYTHON_IMAGE) bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install pytest && /tmp/v/bin/python -m pytest tests -q"
 
 lint-flow-ui:        ## flow-ui lint (ruff)
 	$(DK_RUN) -w /w/services/flow-ui ghcr.io/astral-sh/ruff:latest check src tests scripts

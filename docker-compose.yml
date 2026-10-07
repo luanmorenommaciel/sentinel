@@ -73,6 +73,60 @@ services:
       clickhouse:
         condition: service_healthy
 
+  # HyperDX (ADR-0011): a second read-layer UI beside flow-ui, wired straight to
+  # ClickHouse. Only the UI+API image runs here. ClickStack's all-in-one and local
+  # images bundle their own ClickHouse and OTel collector; either would be a second
+  # database and a second ingestion path, so neither is used. Ingestion stays with
+  # collector-rust, and nothing else depends on this service being up.
+  hyperdx-mongo:
+    image: mongo:5.0.32-focal
+    # HyperDX keeps users, saved searches, dashboards and alerts here. It is its own
+    # metadata, never telemetry, and it has no host port: private network only.
+    volumes:
+      - hyperdx_mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongo", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  hyperdx:
+    image: hyperdx/hyperdx:2.40.0
+    # Our wrapper builds DEFAULT_CONNECTIONS from the password file, then hands off
+    # to the image's own entrypoint (/etc/local/entry.sh).
+    entrypoint: ["sh", "/etc/hyperdx/entrypoint.sh"]
+    environment:
+      MONGO_URI: "mongodb://hyperdx-mongo:27017/hyperdx"
+      # Must equal the URL typed into the browser, or login redirects break.
+      FRONTEND_URL: "http://127.0.0.1:${HYPERDX_HOST_PORT:-8081}"
+      HYPERDX_LOG_LEVEL: info
+      USAGE_STATS_ENABLED: "false"
+      # Reader credentials. `sentinel_hyperdx_u` is SELECT-only (migration 0007).
+      # The password is a PATH; the value is only in the mount below.
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_USER: sentinel_hyperdx_u
+      CLICKHOUSE_PASSWORD_FILE: /etc/sentinel/secrets/ch_password
+    volumes:
+      - ./infra/secrets/ch_password:/etc/sentinel/secrets/ch_password:ro
+      # The sources HyperDX opens with, mapped onto the bronze tables. Read once to
+      # bootstrap an EMPTY Mongo; after that HyperDX owns them (see ADR-0011).
+      - ./infra/hyperdx/sources.json:/etc/hyperdx/sources.json:ro
+      - ./infra/hyperdx/entrypoint.sh:/etc/hyperdx/entrypoint.sh:ro
+    ports:
+      # Local host access only. 8080 belongs to flow-ui, so HyperDX takes 8081.
+      - "127.0.0.1:${HYPERDX_HOST_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      hyperdx-mongo:
+        condition: service_healthy
+
   generator:
     build:
       context: ./services/generator-python
@@ -83,3 +137,6 @@ services:
       - ./contracts:/contracts:ro
     # No long-running command — driven on demand by `make generate`
     # (docker compose run --rm generator run --scenario ... --otlp-endpoint http://collector:4317).
+
+volumes:
+  hyperdx_mongo_data: {}

@@ -9,7 +9,7 @@ Sentinel is an open-source observability + remediation system for data pipelines
 
 ## 1. System architecture
 
-Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling (bronze → silver → read models). **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top. Alongside the path — not in it — **`flow-ui` observes the pipeline** from the collector's `/metrics` and read-only views of bronze and silver; nothing in the path depends on it being up. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
+Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling (bronze → silver → read models). **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top. Alongside the path — not in it — **`flow-ui` observes the pipeline** from the collector's `/metrics` and read-only views of bronze and silver, and **HyperDX** lets an operator search the same bronze rows; nothing in the path depends on either being up. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
 
 ```mermaid
 flowchart TB
@@ -58,9 +58,11 @@ flowchart TB
 
     subgraph OBS["🔭 OBSERVABILITY · reads the path, is not in it"]
         FLOW["flow-ui :8080<br/>four boards · read-only"]
+        HDX["HyperDX :8081<br/>search · traces · dashboards<br/>sentinel_hyperdx_u · SELECT only"]
     end
     POD2 -. "/metrics :9090" .-> FLOW
     STORE -. "bronze.* + silver.* read-only" .-> FLOW
+    STORE -. "bronze.* + silver.* · HTTP :8123 · SELECT" .-> HDX
 
     classDef contract fill:#fde68a,stroke:#b45309,stroke-width:4px,color:#3a2f00;
     classDef zone fill:#f1f5f9,stroke:#94a3b8,color:#0f172a;
@@ -151,6 +153,7 @@ sentinel/
 │   ├── clickhouse-init.sql                #   db/users init (dev-only auth)
 │   ├── clickhouse-users.d/                #   default-user network override (Rust HTTP path)
 │   ├── clickhouse/migrate.sh              #   applies migrations/, recording each in the _meta ledger
+│   ├── hyperdx/                           #   HyperDX bootstrap: sources.json (bronze mapping) · entrypoint.sh · tests/
 │   ├── deploy/                            #   what release.yml publishes + the GCP prerequisites
 │   └── clickhouse/init.d/            #   applied on ClickHouse boot, in order
 │       ├── 01-bronze-otel.sql         #     the BRONZE schema (bronze.*, Pod-3-owned)
@@ -227,7 +230,23 @@ make down-ui                       # stop only flow-ui
 make generate-stream DURATION=10m  # real-time telemetry, paced by the wall clock
 ```
 
-All host-published ports bind to `127.0.0.1`; generator, collector, flow-ui, and
+Search the same rows in HyperDX (ADR-0011), connected straight to ClickHouse:
+
+```sh
+make hyperdx                       # ClickHouse + migrations + HyperDX → http://127.0.0.1:8081
+make down-hyperdx                  # stop HyperDX and its Mongo; accounts and saved views are kept
+make reset-hyperdx                 # drop its Mongo volume so infra/hyperdx/sources.json is re-read
+```
+
+The first visit asks you to create a local account (HyperDX keeps users, saved searches,
+dashboards and alerts in its own Mongo; none of it is telemetry). The Logs, Traces and
+Metrics sources are already mapped onto `bronze.*`. HyperDX reads `sources.json` only into
+an empty Mongo, so after editing it run `make reset-hyperdx`. It connects as
+`sentinel_hyperdx_u` (`SELECT` on `bronze.*` and `silver.*`, no writes, no DDL) and ships
+no collector of its own: ingestion stays with collector-rust. If `8081` is taken,
+`HYPERDX_HOST_PORT=8082 make hyperdx`.
+
+All host-published ports bind to `127.0.0.1`; generator, collector, flow-ui, HyperDX (and its Mongo), and
 ClickHouse communicate over the private Compose network. This is a local development
 boundary, not remote edge authentication or a production security configuration.
 `make up` applies the migration ledger and waits for `/metrics` readiness before the
@@ -425,6 +444,7 @@ All repository invariant checks pass (`bash scripts/ci/run-invariants.sh` report
 | `07-silver-mv-determinism` | **PASS** | Silver MV bodies are deterministic (except `call_edges_1m_rmv` as REQ-D-12 names) |
 | `08-no-verdict-in-silver` | **PASS** | No verdict or threshold literals in silver read models |
 | `09-local-compose-boundary` | **PASS** | Loopback-only host ports, migration-before-collector startup, independently startable UI |
+| `10-hyperdx-is-read-only` | **PASS** | HyperDX connects as the SELECT-only user, password by file path, loopback-only port, Mongo unpublished, images pinned, no bundled ClickStack ClickHouse/collector (ADR-0011) |
 
 ---
 
@@ -433,6 +453,7 @@ All repository invariant checks pass (`bash scripts/ci/run-invariants.sh` report
 - **Wave 2 complete:** T25–T29 add metric, volume, resource-key-presence, and call-edge Silver read models with CI tripwires.
 - **Wave 3 complete for local MergeTree:** T30–T34 provide guarded two-phase backfills; T36–T39 implement coverage-aware Bronze/Silver flow-ui reads and fallback criteria. Managed-provider validation remains deferred.
 - **Local runtime:** T40 implements migration-before-ingest and readiness. If host `4317` is occupied, `COLLECTOR_OTLP_HOST_PORT=<free-port> make up` publishes the collector on another loopback port while Compose services retain `collector:4317`. T41/T43/T44 cover independent UI start/stop, loopback-only host ports, and local file secrets. T42 TLS is deferred by DEC-A4; no remote deployment is in scope.
+- **HyperDX (post-cycle, ADR-0011):** `make hyperdx` starts a second read-layer UI on `127.0.0.1:8081`, wired straight to ClickHouse as `sentinel_hyperdx_u` (migration `0007`). It is outside the T01–T48 registry, so the counts above do not move. Verified locally against a live ClickHouse 25.4 (see ADR-0011 *Verification*); not exercised in CI, which has not executed since 2026-10-05.
 - **Docs policy resolved:** DEC-I2 folds T45–T48 into implementation PRs; concurrent legs that share a documentation path are serialized. This README and the backfill/deploy docs describe current local behavior.
 
 ---
