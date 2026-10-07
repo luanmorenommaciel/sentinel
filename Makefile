@@ -20,6 +20,48 @@ export COLLECTOR_OTLP_HOST_PORT
         test-generator-integration test-backfill audit-python \
         test-silver sample-silver lint lint-generator lint-collector-rust lint-flow-ui
 
+# Image builds that pull a base from an external registry can fail on a transient
+# TLS handshake rather than on anything in the repo. Measured on this machine
+# 2026-10-06: 1 of 5 probes to `gcr.io/v2/distroless/static-debian12/manifests/
+# nonroot` died with `SSL_ERROR_SYSCALL` after ~10s, while the other four returned
+# 200 in under 1.4s. The collector's runtime stage is
+# `gcr.io/distroless/static-debian12:nonroot`, so that roughly 1-in-5 chance lands
+# on `make up`, `make e2e` and `make build` whenever the image is not cached.
+#
+# Retried rather than pinned by digest: a digest fixes *which* bytes, not whether
+# the registry answers. Three attempts with a widening pause, and the final failure
+# says what to suspect instead of leaving a TLS error to be read as a code defect.
+DOCKER_BUILD_RETRIES ?= 3
+
+# Two things the retry in `up` has to get right, both learned by testing it:
+#   * It classifies before retrying. A port already in use is not transient, so it
+#     is reported with the port to inspect rather than retried three times and then
+#     blamed on the registry.
+#   * It does not pipe. Make runs recipes under /bin/sh, which has no `pipefail`,
+#     so `docker compose ... | tee log` would report tee's status and every attempt
+#     would look like a success. Output goes to a log and is always printed.
+# A `#` comment cannot go inside that recipe: the whole thing is one backslash-
+# continued `sh -c` line, and a comment would swallow the continuation.
+
+define build_with_retry
+	@attempt=1; \
+	while :; do \
+		if docker compose build $(1); then break; fi; \
+		if [ "$$attempt" -ge $(DOCKER_BUILD_RETRIES) ]; then \
+			echo ""; \
+			echo "build of '$(1)' failed $(DOCKER_BUILD_RETRIES) times." >&2; \
+			echo "  If the error mentions a TLS handshake timeout or SSL_ERROR_SYSCALL" >&2; \
+			echo "  against gcr.io, it is the base-image pull and not this repository." >&2; \
+			echo "  Check with:  curl -sS -o /dev/null -w '%{http_code}\\n' \\" >&2; \
+			echo "    https://gcr.io/v2/distroless/static-debian12/manifests/nonroot" >&2; \
+			exit 1; \
+		fi; \
+		echo "build of '$(1)' failed (attempt $$attempt/$(DOCKER_BUILD_RETRIES)); retrying in $$((attempt * 5))s" >&2; \
+		sleep $$((attempt * 5)); \
+		attempt=$$((attempt + 1)); \
+	done
+endef
+
 # Docker runner for per-service build/test/lint — no host toolchains required.
 DK_RUN := docker run --rm --user $(shell id -u):$(shell id -g) -v "$(CURDIR)":/w
 
@@ -47,7 +89,34 @@ up:                  ## Start ClickHouse, migrate, then start the Rust collector
 	done; \
 	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; exit 1; }
 	$(MAKE) migrate
-	docker compose up -d --build collector-rust
+	@log="$$(mktemp)"; attempt=1; \
+	while :; do \
+		if docker compose up -d --build collector-rust >"$$log" 2>&1; then cat "$$log"; rm -f "$$log"; break; fi; \
+		cat "$$log" >&2; \
+		if grep -qiE 'ports are not available|address already in use' "$$log"; then \
+			echo "" >&2; \
+			echo "a host port the collector needs is already taken - not a transient failure, so not retried." >&2; \
+			echo "  Find the holder:  lsof -nP -iTCP:$(COLLECTOR_OTLP_HOST_PORT) -sTCP:LISTEN" >&2; \
+			echo "  Or move the port:  make up COLLECTOR_OTLP_HOST_PORT=4318" >&2; \
+			rm -f "$$log"; exit 1; \
+		fi; \
+		if ! grep -qiE 'tls handshake|SSL_ERROR_SYSCALL|failed to resolve source metadata|i/o timeout|failed to do request' "$$log"; then \
+			echo "" >&2; \
+			echo "collector-rust failed for a reason that is not a known transient one; not retried." >&2; \
+			echo "  The build output above is the error." >&2; \
+			rm -f "$$log"; exit 1; \
+		fi; \
+		if [ "$$attempt" -ge $(DOCKER_BUILD_RETRIES) ]; then \
+			echo "" >&2; \
+			echo "the distroless base-image pull failed $(DOCKER_BUILD_RETRIES) times - this is gcr.io, not the repo." >&2; \
+			echo "  Confirm:  curl -sS -o /dev/null -w '%{http_code}\\n' \\" >&2; \
+			echo "              https://gcr.io/v2/distroless/static-debian12/manifests/nonroot" >&2; \
+			rm -f "$$log"; exit 1; \
+		fi; \
+		echo "registry pull failed (attempt $$attempt/$(DOCKER_BUILD_RETRIES)); retrying in $$((attempt * 5))s" >&2; \
+		sleep $$((attempt * 5)); \
+		attempt=$$((attempt + 1)); \
+	done
 	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
 		if curl -fsS http://127.0.0.1:9090/metrics >/dev/null 2>&1; then \
 			echo "collector ready at 127.0.0.1:$(COLLECTOR_OTLP_HOST_PORT) (metrics on 127.0.0.1:9090)"; exit 0; \
@@ -103,7 +172,22 @@ generate-stream:     ## Generate in real time (paced by wall clock) — DURATION
 		--scenario $(SCENARIO) --seed $(SEED) \
 		--delivery otlp --otlp-endpoint http://collector:4317
 
+# ClickHouse first, then migrate, then flow-ui. The migrate step is not optional
+# here: since T17/T18 flow-ui authenticates as `sentinel_reader_u`, and that user is
+# created by migration 0002. Starting flow-ui against an unmigrated volume brings up
+# a UI whose /healthz reports `"clickhouse": false` and whose ClickHouse-backed
+# boards are empty — it degrades rather than crashing (NFR-05), which makes the
+# cause easy to miss. The collector stays genuinely optional.
 ui:                  ## Start ClickHouse + flow-ui independently at http://127.0.0.1:8080
+	docker compose up -d clickhouse
+	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
+		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
+			echo "ClickHouse ready"; break; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; exit 1; }
+	$(MAKE) migrate
 	docker compose up -d --build flow-ui
 	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
 		if curl -fsS http://127.0.0.1:8080/healthz 2>/dev/null; then \
@@ -135,6 +219,7 @@ reset:               ## Stop all services and drop volumes (fresh ClickHouse)
 # ── build / test / lint (all run in Docker; no host toolchains needed) ──
 
 build:               ## Build all service images (generator + Rust collector)
+	$(call build_with_retry,collector-rust)
 	docker compose build
 
 test: test-generator test-collector-rust test-flow-ui  ## Run all unit test suites
