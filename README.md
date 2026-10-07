@@ -266,15 +266,15 @@ This workload met the collector health gates: no signal loss, no contract reject
 
 This cycle hardened how the pipeline is built, checked and published rather than what it computes. The ticket registry is [`plan/core-plan.md`](plan/core-plan.md).
 
-**25 of 48 tickets are done, 5 are working (in progress), and 18 are pending.** 
+**25 of 48 tickets are done, 14 are working (in progress), and 9 are pending.** 
 
 ### Task Status Summary
 
 | Status | Count | Percentage | Tickets |
 |---|---:|---:|---|
 | **Done** | 25 | 52.1% | T01–T24, T35 |
-| **Working** | 5 | 10.4% | T25–T29 |
-| **Pending** | 18 | 37.5% | T30–T34, T36–T39, T40–T44, T45–T48 |
+| **Working** | 14 | 29.2% | T25–T34, T36–T39 |
+| **Pending** | 9 | 18.8% | T40–T44, T45–T48 |
 | **Total** | **48** | **100%** | Full implementation plan |
 
 ---
@@ -314,16 +314,16 @@ Every ticket defined in [`plan/core-plan.md`](plan/core-plan.md) with its curren
 | **T27** | `0005b` `silver.volume_1m` + 3 MVs (log, trace, metric) | Wave 2 · Silver | T25 | **Working** |
 | **T28** | `0005c` `silver.resource_key_presence_1m` + 3 MVs | Wave 2 · Silver | T27 | **Working** |
 | **T29** | `0005d` `silver.call_edges_1m` + determinism / no-verdict asserts | Wave 2 · Silver | T28, T01 | **Working** |
-| **T30** | Backfill runner skeleton + live-partition refusal + README (`backfill.sh`) | Wave 3 · Backfill | T05, T19, DEC-A2 | **Pending** |
-| **T31** | Backfill phase 1 — bronze → silver base, partition swap | Wave 3 · Backfill | T30 | **Pending** |
-| **T32** | REQ-E-11 in-runner content checksum | Wave 3 · Backfill | T31 | **Pending** |
-| **T33** | Backfill phase 2 — silver base → rollups, phase gate | Wave 3 · Backfill | T32, T29 | **Pending** |
-| **T34** | `0006` re-point `metric_rollup_1m` to storage-backed table, ledger-gated | Wave 3 · Backfill | T25, T33 | **Pending** |
+| **T30** | Backfill runner skeleton + live-partition refusal + README (`backfill.sh`) | Wave 3 · Backfill | T05, T19, DEC-A2 | **Working** |
+| **T31** | Backfill phase 1 — bronze → silver base, partition swap | Wave 3 · Backfill | T30 | **Working** |
+| **T32** | REQ-E-11 in-runner content checksum | Wave 3 · Backfill | T31 | **Working** |
+| **T33** | Backfill phase 2 — silver base → rollups, phase gate | Wave 3 · Backfill | T32, T29 | **Working** |
+| **T34** | `0006` re-point `metric_rollup_1m` to storage-backed table, ledger-gated | Wave 3 · Backfill | T25, T33 | **Working** |
 | **T35** | flow-ui `silver_coverage` probe on 30 s lane + `source` field | Wave 3 · flow-ui | T02 | **Done** |
-| **T36** | Dual-source `volume_band` on flow-ui + rename stale `_volume_state` | Wave 3 · flow-ui | T35, T27 | **Pending** |
-| **T37** | Dual-source `call_edges` on flow-ui | Wave 3 · flow-ui | T35, T29 | **Pending** |
-| **T38** | Dual-source `contract_violations` on flow-ui | Wave 3 · flow-ui | T35, T28 | **Pending** |
-| **T39** | Fallback removal criterion as automated test | Wave 3 · flow-ui | T36, T37, T38 | **Pending** |
+| **T36** | Dual-source `volume_band` on flow-ui + rename stale `_volume_state` | Wave 3 · flow-ui | T35, T27 | **Working** |
+| **T37** | Dual-source `call_edges` on flow-ui | Wave 3 · flow-ui | T35, T29 | **Working** |
+| **T38** | Dual-source `contract_violations` on flow-ui | Wave 3 · flow-ui | T35, T28 | **Working** |
+| **T39** | Fallback removal criterion as automated test | Wave 3 · flow-ui | T36, T37, T38 | **Working** |
 | **T40** | A-compute: IaC, per-env config, migrate-before-ingest, readiness probes | Wave 4 · Deploy | DEC-A1, DEC-A2, T05, T22 | **Pending** |
 | **T41** | flow-ui deployable and undeployable independently | Wave 4 · Deploy | T40 | **Pending** |
 | **T42** | TLS hop 2 + Dockerfile purity verification | Wave 4 · Deploy | DEC-A4, T04, T40 | **Pending** |
@@ -397,7 +397,7 @@ All repository invariant checks pass (`bash scripts/ci/run-invariants.sh` report
 ### Work Ahead and Blockers
 
 - **Working (Wave 2):** Completing silver watcher models (T25–T29: `0005_silver_watcher_models.sql`, determinism asserts, and integration tests).
-- **Pending (Wave 3):** Backfill runner (T30–T34) waiting on **DEC-A2** (ClickHouse hosting & operational owner); flow-ui dual-source boards (T36–T39) waiting on completion of T27–T29.
+- **Working (Wave 3):** flow-ui dual-source boards (T36–T39): `volume_band`, `call_edges`, and `contract_violations` now route to silver when coverage is sufficient; `fallback_removal_ready` test scaffolding started. Backfill runner (T30–T34) waiting on **DEC-A2** (ClickHouse hosting & operational owner).
 - **Pending (Wave 4):** Production deployment, TLS, edge auth, and secrets (T40–T44) waiting on **DEC-A1**, **DEC-A2**, and **DEC-A4**.
 - **Pending (Docs):** Documentation legs (T45–T48) waiting on **DEC-I2** and their respective waves.
 
