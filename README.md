@@ -205,12 +205,13 @@ make e2e                  # ClickHouse → migrations → Rust collector → gen
 Step by step, plus inspect:
 
 ```sh
-make up                        # start ClickHouse, apply migrations, wait for collector readiness
+make up                        # ClickHouse → migrations → collector → flow-ui :8080 + HyperDX :8081, each waited on
 make generate SCENARIO=black_friday SEED=42   # generate → OTLP :4317
 make logs                      # tail collector logs
 # inspect at http://127.0.0.1:8123/play → SELECT count() FROM bronze.otel_traces
 # scrape collector metrics at http://127.0.0.1:9090/metrics
-make reset                     # stop everything + drop the ClickHouse volume
+make down                      # stop everything make up started (volumes kept)
+make reset                     # stop everything + drop the ClickHouse and HyperDX Mongo volumes
 ```
 
 If another local program already uses host port `4317`, leave it untouched and
@@ -222,7 +223,7 @@ COLLECTOR_OTLP_HOST_PORT=14317 make up
 # host clients use http://127.0.0.1:14317; Compose services still use collector:4317
 ```
 
-Watch it happen instead of querying for it:
+Flow-ui and HyperDX are part of `make up`; these start or stop either one on its own, without the collector:
 
 ```sh
 make ui                            # start flow-ui independently → http://127.0.0.1:8080

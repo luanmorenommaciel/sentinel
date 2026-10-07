@@ -84,7 +84,7 @@ help:                ## Show this help
 	@echo "  SCENARIO=$(SCENARIO)  SEED=$(SEED)  WINDOW=$(WINDOW)  PYTHON_IMAGE=$(PYTHON_IMAGE)"
 	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)  COLLECTOR_OTLP_HOST_PORT=$(COLLECTOR_OTLP_HOST_PORT)  HYPERDX_HOST_PORT=$(HYPERDX_HOST_PORT)"
 
-up:                  ## Start ClickHouse, migrate, then start the Rust collector
+up:                  ## Start everything: ClickHouse, migrate, collector, then flow-ui + HyperDX
 	docker compose up -d clickhouse
 	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
 		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
@@ -130,6 +130,22 @@ up:                  ## Start ClickHouse, migrate, then start the Rust collector
 	done; \
 	echo "collector did not become ready at http://127.0.0.1:9090/metrics" >&2; \
 	docker compose logs collector-rust; exit 1
+	docker compose up -d --build flow-ui hyperdx
+	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
+		if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then \
+			echo "flow-ui ready at http://127.0.0.1:8080"; break; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	[ "$$attempt" -lt 30 ] || { echo "flow-ui did not become ready at http://127.0.0.1:8080/healthz" >&2; docker compose logs flow-ui; exit 1; }
+	@attempt=0; while [ "$$attempt" -lt 45 ]; do \
+		if curl -fsS -o /dev/null http://127.0.0.1:$(HYPERDX_HOST_PORT)/ 2>/dev/null; then \
+			echo "HyperDX ready at http://127.0.0.1:$(HYPERDX_HOST_PORT) (create the first account on first visit)"; exit 0; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	echo "HyperDX did not become ready at http://127.0.0.1:$(HYPERDX_HOST_PORT)/" >&2; \
+	docker compose logs hyperdx; exit 1
 
 init:                ## No-op: the canonical bronze schema auto-applies on ClickHouse boot
 	@echo "Rust → canonical bronze schema (bronze.*) auto-applies on ClickHouse boot via infra/clickhouse/init.d/; nothing to apply"
@@ -249,10 +265,10 @@ ps:                  ## Show running services
 logs:                ## Tail the Rust collector's logs
 	docker compose logs -f collector-rust
 
-down:                ## Stop all services
+down:                ## Stop everything `make up` starts (data volumes are kept)
 	docker compose down
 
-reset:               ## Stop all services and drop volumes (fresh ClickHouse)
+reset:               ## Stop all services and drop volumes (fresh ClickHouse and HyperDX Mongo)
 	docker compose down -v
 
 # ── build / test / lint (all run in Docker; no host toolchains needed) ──

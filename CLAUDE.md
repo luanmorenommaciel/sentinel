@@ -42,7 +42,7 @@ Makefile                   # one-command UX
 | `make ui` / `make down-ui` | Start or stop flow-ui independently on http://127.0.0.1:8080 |
 | `make hyperdx` / `make down-hyperdx` / `make reset-hyperdx` | Start or stop HyperDX (UI + Mongo, direct to ClickHouse as `sentinel_hyperdx_u`) on http://127.0.0.1:8081; `reset` drops its Mongo so `sources.json` is re-read (ADR-0011) |
 | `make generate-stream DURATION=10m` | Real-time telemetry paced by the wall clock, rather than a backfilled window |
-| `make up / init / migrate / generate / logs / ps / down / reset` | Local pipeline steps; `make up` migrates before starting the collector |
+| `make up / init / migrate / generate / logs / ps / down / reset` | Local pipeline steps; `make up` starts every container in order (ClickHouse → migrate → collector → flow-ui + HyperDX), `make down` stops them all, `make reset` also drops the ClickHouse and HyperDX Mongo volumes |
 | `make build` | Build all service images |
 | `make test` | All unit suites (`test-generator` + `test-flow-ui` + `test-hyperdx` pytest, `test-collector-rust` cargo) |
 | `make lint` | `lint-generator` + `lint-flow-ui` (ruff) + `lint-collector-rust` (cargo fmt --check + clippy) |
