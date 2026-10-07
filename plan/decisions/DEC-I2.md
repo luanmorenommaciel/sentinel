@@ -2,6 +2,11 @@
 
 **Owner** Captain / Commander · **Unblocks** T45 directly (the plan header says T45-T48); the other three docs legs are separately blocked by T29, T39/T34, T44
 
+**Ruling 2026-10-06:** documentation updates belong in each implementation PR. T45–T48
+are dissolved as separate legs; their documentation scope is absorbed by the corresponding
+implementation work. Serialize concurrent legs that touch the same documentation path to
+preserve ADR-0009 R1. See [the current-cycle ruling](DEC-2026-10-06-local-scope.md).
+
 Tags: **[M]** measured this session · **[D]** document assertion · **[R]** reasoned · **[M2]** re-measured 2026-10-06, after the cycle's own doc changes.
 
 ## 1. The question

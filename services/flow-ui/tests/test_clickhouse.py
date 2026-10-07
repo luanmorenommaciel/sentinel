@@ -10,7 +10,7 @@ import asyncio
 import httpx
 import pytest
 
-from flow_ui.clickhouse import ClickHouse
+from flow_ui.clickhouse import ClickHouse, fallback_removal_ready
 
 
 @pytest.fixture
@@ -230,3 +230,47 @@ def test_coverage_handles_an_empty_silver(coverage, silver_coverage):
 def test_coverage_handles_an_unreachable_clickhouse(coverage):
     """A probe failure degrades rather than raising, leaving silver_coverage empty."""
     assert coverage(httpx.ConnectError("refused")) == {}
+
+
+def test_dual_source_boards_choose_silver_only_when_coverage_reaches_the_window(ch_stub, silver_coverage):
+    """T36-T38: complete Silver history is used; partial or absent history stays Bronze."""
+    rows = '{"svc":"api","med":10,"mad":1,"sd":1,"seen":2,"estate":2,"latest":10,"latest_t":1,"series":[]}\n'
+    ch, stub = ch_stub({"volume_1m": rows})
+    covered = {"log_events": silver_coverage.now - 3660,
+               "operation_executions": silver_coverage.now - 3660,
+               "metric_observations": silver_coverage.now - 3660}
+    assert asyncio.run(ch.volume_band(60, coverage=covered, now=silver_coverage.now))
+    assert stub.count_matching("silver.volume_1m") == 1
+
+    ch, stub = ch_stub({"otel_logs": rows})
+    assert asyncio.run(ch.volume_band(60, coverage={}, now=silver_coverage.now))
+    assert stub.count_matching("otel_logs") == 1
+
+
+def test_call_edges_stay_on_bronze_beyond_the_rollups_24_hour_history(ch_stub, silver_coverage):
+    ch, stub = ch_stub({"otel_traces": "a\tb\t1\t0\n"})
+    covered = {"operation_executions": silver_coverage.now - 172_860}
+    assert asyncio.run(ch.call_edges(60 * 25, coverage=covered, now=silver_coverage.now))
+    assert stub.count_matching("otel_traces") == 1
+
+
+def test_contract_violations_uses_silver_missing_counts_but_bronze_bad_rows(ch_stub, silver_coverage):
+    covered = {table: silver_coverage.now - 1_860 for table in silver_coverage.tables}
+    silver = "api\t10\t1\t0\t0\t0\t0\n"
+    bronze = "api\t1\n"
+    ch, stub = ch_stub({"resource_key_presence_1m": silver, "mapContains": bronze})
+    rows = asyncio.run(ch.contract_violations(coverage=covered, now=silver_coverage.now))
+    assert rows == [{"service": "api", "rows": 10, "violating": 1,
+                     "missing": {"sentinel.synthetic": 1}, "total_missing": 1,
+                     "source": "silver"}]
+    assert stub.count_matching("resource_key_presence_1m") == 1
+    assert stub.count_matching("mapContains") == 1
+
+
+def test_bronze_fallback_removal_requires_thirty_days_of_coverage_for_seven_continuous_days():
+    now = 10_000_000.0
+    old = now - 30 * 24 * 60 * 60 - 1
+    young = now - 30 * 24 * 60 * 60 + 1
+    assert not fallback_removal_ready([young] * 7, now)
+    assert fallback_removal_ready([old] * 7, now)
+    assert not fallback_removal_ready([old, old, young, old, old, old, old], now)

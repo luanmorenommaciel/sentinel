@@ -188,27 +188,60 @@ sentinel/
 
 Requires Docker (no host toolchains):
 
+Create the ignored local secret file once before the first run:
+
 ```sh
-make e2e                  # ClickHouse (bronze auto-applied) + Rust collector + generator → bronze.*
+cp infra/secrets/ch_password.example infra/secrets/ch_password
+# Replace its single line with a local development password.
+```
+
+```sh
+make e2e                  # ClickHouse → migrations → Rust collector → generator → bronze.*
 ```
 
 Step by step, plus inspect:
 
 ```sh
-make up                        # start ClickHouse (bronze auto-applies on boot) + the collector
+make up                        # start ClickHouse, apply migrations, wait for collector readiness
 make generate SCENARIO=black_friday SEED=42   # generate → OTLP :4317
 make logs                      # tail collector logs
-# inspect at http://localhost:8123/play  →  SELECT count() FROM bronze.otel_traces
-# scrape collector metrics at http://localhost:9090/metrics
+# inspect at http://127.0.0.1:8123/play → SELECT count() FROM bronze.otel_traces
+# scrape collector metrics at http://127.0.0.1:9090/metrics
 make reset                     # stop everything + drop the ClickHouse volume
+```
+
+If another local program already uses host port `4317`, leave it untouched and
+choose another loopback port for the collector without changing service-to-service
+traffic:
+
+```sh
+COLLECTOR_OTLP_HOST_PORT=14317 make up
+# host clients use http://127.0.0.1:14317; Compose services still use collector:4317
 ```
 
 Watch it happen instead of querying for it:
 
 ```sh
-make ui                            # flow-ui → http://localhost:8080
+make ui                            # start flow-ui independently → http://127.0.0.1:8080
+make down-ui                       # stop only flow-ui
 make generate-stream DURATION=10m  # real-time telemetry, paced by the wall clock
 ```
+
+All host-published ports bind to `127.0.0.1`; generator, collector, flow-ui, and
+ClickHouse communicate over the private Compose network. This is a local development
+boundary, not remote edge authentication or a production security configuration.
+`make up` applies the migration ledger and waits for `/metrics` readiness before the
+collector is considered ready. `make ui` can run without the collector; its status
+board reports the collector as unavailable while remaining readable.
+
+Silver read models are created by migrations and maintained from Bronze: `metric_stats_1m`,
+`volume_1m`, `resource_key_presence_1m`, and refresh-driven `call_edges_1m`. Historical
+rebuilds use the guarded two-phase runner documented in
+[`infra/clickhouse/backfill/README.md`](infra/clickhouse/backfill/README.md); the current
+date partition is always refused. flow-ui uses Silver for volume and call-edge boards
+when coverage is sufficient, falls back to Bronze for gaps or data outside Silver's
+window, and combines Silver per-key missing counts with Bronze's authoritative `bad`
+count for contract violations. Each result reports its source.
 
 Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-component dev still works standalone (`cd services/collector-rust && cargo test`).
 
@@ -245,7 +278,7 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
 | Graceful shutdown with final buffer flush | ✅ |
 | Distroless Docker image + root compose orchestrator | ✅ |
 | CI: gates (fmt · clippy · test · build) · integration (live ClickHouse, every `#[ignore]`d test) · cargo-deny · docker-build | ✅ |
-| Pod 3 silver (rolling-stats rollup, read models) | 🔶 in progress — silver v1 DDL exists; read models (T25–T29) working / in progress |
+| Pod 3 silver (rolling-stats rollup, read models) | ✅ silver v1 DDL plus the four Watcher read models (T25–T29): `metric_stats_1m`, `volume_1m`, `resource_key_presence_1m`, `call_edges_1m` |
 
 **Latest local E2E snapshot** — Docker/Linux arm64, scenario `baseline`, seed `42`, window `5m` (2026-08-04):
 
@@ -266,15 +299,15 @@ This workload met the collector health gates: no signal loss, no contract reject
 
 This cycle hardened how the pipeline is built, checked and published rather than what it computes. The ticket registry is [`plan/core-plan.md`](plan/core-plan.md).
 
-**25 of 48 tickets are done, 14 are working (in progress), and 9 are pending.** 
+**43 of 48 implementation tickets are complete. T42 is deferred and T45–T48 were absorbed into same-PR documentation updates.**
 
 ### Task Status Summary
 
 | Status | Count | Percentage | Tickets |
 |---|---:|---:|---|
-| **Done** | 25 | 52.1% | T01–T24, T35 |
-| **Working** | 14 | 29.2% | T25–T34, T36–T39 |
-| **Pending** | 9 | 18.8% | T40–T44, T45–T48 |
+| **Done** | 43 | 89.6% | T01–T41, T43–T44 |
+| **Deferred** | 1 | 2.1% | T42 (TLS, by DEC-A4) |
+| **Absorbed** | 4 | 8.3% | T45–T48 (same-PR docs, by DEC-I2) |
 | **Total** | **48** | **100%** | Full implementation plan |
 
 ---
@@ -309,30 +342,30 @@ Every ticket defined in [`plan/core-plan.md`](plan/core-plan.md) with its curren
 | **T22** | `release.yml` — Artifact Registry, OIDC, SLSA provenance, SBOM, Cosign signing | Wave 1 · Release | — | **Done** |
 | **T23** | Digest promotion `main` → `:staging`, `v*` → `:prod` with signature verification | Wave 1 · Release | T22 | **Done** |
 | **T24** | Image vulnerability scan gates the push (Trivy) | Wave 1 · Release | T22 | **Done** |
-| **T25** | `0005a` `silver.metric_stats_1m` + MV + test suite (`03-watcher-models.test.sql`) | Wave 2 · Silver | T16, T20 | **Working** |
-| **T26** | Real-telemetry tripwire (`countIf(NOT is_synthetic)`) | Wave 2 · Silver | T25 | **Working** |
-| **T27** | `0005b` `silver.volume_1m` + 3 MVs (log, trace, metric) | Wave 2 · Silver | T25 | **Working** |
-| **T28** | `0005c` `silver.resource_key_presence_1m` + 3 MVs | Wave 2 · Silver | T27 | **Working** |
-| **T29** | `0005d` `silver.call_edges_1m` + determinism / no-verdict asserts | Wave 2 · Silver | T28, T01 | **Working** |
-| **T30** | Backfill runner skeleton + live-partition refusal + README (`backfill.sh`) | Wave 3 · Backfill | T05, T19, DEC-A2 | **Working** |
-| **T31** | Backfill phase 1 — bronze → silver base, partition swap | Wave 3 · Backfill | T30 | **Working** |
-| **T32** | REQ-E-11 in-runner content checksum | Wave 3 · Backfill | T31 | **Working** |
-| **T33** | Backfill phase 2 — silver base → rollups, phase gate | Wave 3 · Backfill | T32, T29 | **Working** |
-| **T34** | `0006` re-point `metric_rollup_1m` to storage-backed table, ledger-gated | Wave 3 · Backfill | T25, T33 | **Working** |
+| **T25** | `0005a` `silver.metric_stats_1m` + MV + test suite (`03-watcher-models.test.sql`) | Wave 2 · Silver | T16, T20 | **Done** |
+| **T26** | Real-telemetry tripwire (`countIf(NOT is_synthetic)`) | Wave 2 · Silver | T25 | **Done** |
+| **T27** | `0005b` `silver.volume_1m` + 3 MVs (log, trace, metric) | Wave 2 · Silver | T25 | **Done** |
+| **T28** | `0005c` `silver.resource_key_presence_1m` + 3 MVs | Wave 2 · Silver | T27 | **Done** |
+| **T29** | `0005d` `silver.call_edges_1m` + determinism / no-verdict asserts | Wave 2 · Silver | T28, T01 | **Done** |
+| **T30** | Backfill runner skeleton + live-partition refusal + README (`backfill.sh`) | Wave 3 · Backfill | T05, T19, DEC-A2 | **Done (local)** |
+| **T31** | Backfill phase 1 — bronze → silver base, partition swap | Wave 3 · Backfill | T30 | **Done (local)** |
+| **T32** | REQ-E-11 in-runner content checksum | Wave 3 · Backfill | T31 | **Done (local)** |
+| **T33** | Backfill phase 2 — silver base → rollups, phase gate | Wave 3 · Backfill | T32, T29 | **Done (local)** |
+| **T34** | `0006` re-point `metric_rollup_1m` to storage-backed table, ledger-gated | Wave 3 · Backfill | T25, T33 | **Done (local)** |
 | **T35** | flow-ui `silver_coverage` probe on 30 s lane + `source` field | Wave 3 · flow-ui | T02 | **Done** |
-| **T36** | Dual-source `volume_band` on flow-ui + rename stale `_volume_state` | Wave 3 · flow-ui | T35, T27 | **Working** |
-| **T37** | Dual-source `call_edges` on flow-ui | Wave 3 · flow-ui | T35, T29 | **Working** |
-| **T38** | Dual-source `contract_violations` on flow-ui | Wave 3 · flow-ui | T35, T28 | **Working** |
-| **T39** | Fallback removal criterion as automated test | Wave 3 · flow-ui | T36, T37, T38 | **Working** |
-| **T40** | A-compute: IaC, per-env config, migrate-before-ingest, readiness probes | Wave 4 · Deploy | DEC-A1, DEC-A2, T05, T22 | **Pending** |
-| **T41** | flow-ui deployable and undeployable independently | Wave 4 · Deploy | T40 | **Pending** |
-| **T42** | TLS hop 2 + Dockerfile purity verification | Wave 4 · Deploy | DEC-A4, T04, T40 | **Pending** |
-| **T43** | Edge auth for `:4317` gRPC ingest, metrics internal-only | Wave 4 · Deploy | DEC-A1, T40 | **Pending** |
-| **T44** | Secrets from managed store, delivered as files | Wave 4 · Deploy | T06, T40 | **Pending** |
-| **T45** | Wave 1 documentation leg | Docs | T24, DEC-I2 | **Pending** |
-| **T46** | Wave 2 documentation leg | Docs | T29 | **Pending** |
-| **T47** | Wave 3 documentation leg | Docs | T39, T34 | **Pending** |
-| **T48** | Wave 4 documentation leg | Docs | T44 | **Pending** |
+| **T36** | Dual-source `volume_band` on flow-ui + rename stale `_volume_state` | Wave 3 · flow-ui | T35, T27 | **Done** |
+| **T37** | Dual-source `call_edges` on flow-ui | Wave 3 · flow-ui | T35, T29 | **Done** |
+| **T38** | Dual-source `contract_violations` on flow-ui | Wave 3 · flow-ui | T35, T28 | **Done** |
+| **T39** | Fallback removal criterion as automated test | Wave 3 · flow-ui | T36, T37, T38 | **Done** |
+| **T40** | Local Docker/Make startup, migrations-before-ingest, readiness | Wave 4 · Local runtime | DEC-A1, DEC-A2, T05 | **Done (local; configurable loopback OTLP port)** |
+| **T41** | flow-ui starts/stops independently in Compose | Wave 4 · Local runtime | T40 | **Done (local)** |
+| **T42** | TLS hop 2 + Dockerfile purity verification | Wave 4 · Security | DEC-A4, T04, T40 | **Deferred (DEC-A4)** |
+| **T43** | Loopback-only host access; internal service traffic | Wave 4 · Local runtime | DEC-A1, T40 | **Done (local)** |
+| **T44** | Local file secrets mounted read-only | Wave 4 · Local runtime | T06, T40 | **Done (local)** |
+| **T45** | Wave 1 documentation leg | Docs | T24, DEC-I2 | **Absorbed (DEC-I2)** |
+| **T46** | Wave 2 documentation leg | Docs | T29 | **Absorbed (DEC-I2)** |
+| **T47** | Wave 3 documentation leg | Docs | T39, T34 | **Absorbed (DEC-I2)** |
+| **T48** | Wave 4 documentation leg | Docs | T44 | **Absorbed (DEC-I2)** |
 
 ---
 
@@ -340,12 +373,12 @@ Every ticket defined in [`plan/core-plan.md`](plan/core-plan.md) with its curren
 
 | ID | Topic / Question | Owner | Status | Details |
 |---|---|---|---|---|
-| **DEC-A1** | Compute platform form for the three services | Captain / Commander | **Pending** | Blocks T40, T43 |
-| **DEC-A2** | ClickHouse hosting and operational owner | Commander | **Pending** | Blocks T30, T40 |
+| **DEC-A1** | Compute platform form for the three services | Captain / Commander | **Resolved (local only)** | Docker Compose + Make; no remote platform |
+| **DEC-A2** | ClickHouse hosting and operational owner | Commander | **Resolved (local only)** | Local 25.4 MergeTree; provider validation deferred |
 | **DEC-A3** | What applies DDL in deployed environments | Pod 3 / Pod 2 | **Done** | Adopted bespoke `migrate.sh` with `_meta` ledger (T05/T11) |
-| **DEC-A4** | TLS termination: collector vs platform edge vs sidecar | Pod 2 | **Pending** | Blocks T42 |
+| **DEC-A4** | TLS termination: collector vs platform edge vs sidecar | Pod 2 | **Deferred** | T42 held for future TLS decision |
 | **DEC-I1** | ClickHouse version pin & generator Compose deletion | Pod 1 / Pod 3 | **Working** | Implemented in practice in commit `75d656d` (25.4 pin, generator compose deleted); awaiting formal owner sign-off |
-| **DEC-I2** | Pre-PR doc discipline vs disjoint paths | Captain / Commander | **Pending** | Blocks T45–T48 |
+| **DEC-I2** | Pre-PR doc discipline vs disjoint paths | Captain / Commander | **Resolved** | Docs update in each implementation PR; T45–T48 absorbed |
 | **DEC-D1** | Materialize typed Sentinel keys in silver | Pod 3 / Pod 2 | **Pending** | Open; deferred to T28 |
 | **DEC-V3a** | Refreshable MV vs scheduled INSERT for `call_edges_1m` | Pod 3 | **Done** | Folded into DEC-I1; refreshable MVs ungated on 25.4 |
 
@@ -389,17 +422,18 @@ All repository invariant checks pass (`bash scripts/ci/run-invariants.sh` report
 | `04-no-plaintext-secrets` | **PASS** | No plaintext credentials in operational tree; `otelgen` dropped; gitignored secrets allowed |
 | `05-flow-ui-is-read-only` | **PASS** | flow-ui issues no write statement |
 | `06-initd-matches-migrations` | **PASS** | `init.d/` contains symlinks into `migrations/`; one DDL source, two apply paths |
-| `07-silver-mv-determinism` *(working)* | **PASS** | Silver MV bodies are deterministic (except `call_edges_1m_rmv` as REQ-D-12 names) |
-| `08-no-verdict-in-silver` *(working)* | **PASS** | No verdict or threshold literals in silver read models |
+| `07-silver-mv-determinism` | **PASS** | Silver MV bodies are deterministic (except `call_edges_1m_rmv` as REQ-D-12 names) |
+| `08-no-verdict-in-silver` | **PASS** | No verdict or threshold literals in silver read models |
+| `09-local-compose-boundary` | **PASS** | Loopback-only host ports, migration-before-collector startup, independently startable UI |
 
 ---
 
 ### Work Ahead and Blockers
 
-- **Working (Wave 2):** Completing silver watcher models (T25–T29: `0005_silver_watcher_models.sql`, determinism asserts, and integration tests).
-- **Working (Wave 3):** flow-ui dual-source boards (T36–T39): `volume_band`, `call_edges`, and `contract_violations` now route to silver when coverage is sufficient; `fallback_removal_ready` test scaffolding started. Backfill runner (T30–T34) waiting on **DEC-A2** (ClickHouse hosting & operational owner).
-- **Pending (Wave 4):** Production deployment, TLS, edge auth, and secrets (T40–T44) waiting on **DEC-A1**, **DEC-A2**, and **DEC-A4**.
-- **Pending (Docs):** Documentation legs (T45–T48) waiting on **DEC-I2** and their respective waves.
+- **Wave 2 complete:** T25–T29 add metric, volume, resource-key-presence, and call-edge Silver read models with CI tripwires.
+- **Wave 3 complete for local MergeTree:** T30–T34 provide guarded two-phase backfills; T36–T39 implement coverage-aware Bronze/Silver flow-ui reads and fallback criteria. Managed-provider validation remains deferred.
+- **Local runtime:** T40 implements migration-before-ingest and readiness. If host `4317` is occupied, `COLLECTOR_OTLP_HOST_PORT=<free-port> make up` publishes the collector on another loopback port while Compose services retain `collector:4317`. T41/T43/T44 cover independent UI start/stop, loopback-only host ports, and local file secrets. T42 TLS is deferred by DEC-A4; no remote deployment is in scope.
+- **Docs policy resolved:** DEC-I2 folds T45–T48 into implementation PRs; concurrent legs that share a documentation path are serialized. This README and the backfill/deploy docs describe current local behavior.
 
 ---
 
@@ -413,7 +447,7 @@ All repository invariant checks pass (`bash scripts/ci/run-invariants.sh` report
 | 4 | `otel_metrics_1m` rolling-stats moved to Pod 3 silver (Tier-1 input) | Handoff | [read contract §2.3](contracts/collector/v1/pod2-pod3-read-contract.md) |
 | 5 | Histogram / Summary metrics not emitted (no v1.0.0 type) | Known gap | `services/collector-rust/src/otlp.rs` |
 | 6 | **DEC-I1** — One ClickHouse image pin (25.4) and deleted generator Compose stack (implemented in `75d656d`; formal sign-off pending) | Working / In practice | [`plan/decisions/DEC-I1.md`](plan/decisions/DEC-I1.md) |
-| 7 | **DEC-A2** — ClickHouse hosting / operational owner. Gates T30 and T40 | **Blocking** | [`plan/decisions/DEC-A2.md`](plan/decisions/DEC-A2.md) |
+| 7 | **DEC-A2** — local-only Docker ruling; deployed owner/provider remains open | **Resolved for local scope** | [`plan/decisions/DEC-A2.md`](plan/decisions/DEC-A2.md) |
 | 8 | Release lane (signing, attestation verification, `crane tag` on a multi-arch index) never run against a real registry | Unverified | [`infra/deploy/README.md`](infra/deploy/README.md) |
 | 9 | Image scan runs after push (REQ-H-12 not met) and is warn-only; blocking threshold is policy | Open | T21 · [`infra/deploy/README.md`](infra/deploy/README.md) |
 | 10 | Agentic gitflow amends the WoW's squash-to-main rule (needs ratification) | Pending | [ADR-0009](docs/adr/0009-agentic-gitflow.md) |

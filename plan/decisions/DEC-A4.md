@@ -2,6 +2,9 @@
 
 **Owner** Pod 2 · **Unblocks** T42 (and only T42)
 
+**Ruling 2026-10-06:** defer TLS. T42 is not implemented in this cycle; requirements for
+a future deployed environment remain. See [the current-cycle ruling](DEC-2026-10-06-local-scope.md).
+
 Tags: **[M]** measured this session · **[S]** per spec §11.1 · **[D]** document assertion · **[R]** reasoned · **[M2]** measured 2026-10-06, T04's spike run locally.
 
 ## 1. The question

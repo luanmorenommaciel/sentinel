@@ -2,6 +2,9 @@
 
 **Owner** Commander · **Unblocks** T30, T40 directly; 12 tickets transitively (T30–T34, T40–T44, T47, T48)
 
+**Ruling 2026-10-06:** local-only Docker/ClickHouse is authorized. No remote owner or
+provider is selected. See [the current-cycle ruling](DEC-2026-10-06-local-scope.md).
+
 Tags: **[M]** measured this session · **[S]** per spec §11.1, not re-run · **[D]** document assertion · **[R]** reasoned.
 
 ## 1. The question
@@ -44,3 +47,13 @@ T30 (backfill runner; its refusal logic is hosting-independent but the plan bloc
 - Cost, SLA and provider capabilities: none are in the repo; none are asserted here.
 - Backup/restore design under any option.
 - Plan wording: T30's own edge says "DEC-A2 must settle it before the deployed half". The *local* half of E (T30-T34 against MergeTree) is arguably not blocked by A2 at all; the plan blocks all of T30 on it. A ruling on splitting local from deployed E would un-stall five tickets.
+
+## 7. Local-only ruling (2026-10-06)
+
+The Commander authorized: **"Proceed with T30–T34 on local MergeTree; defer deployed-provider validation."**
+This unblocks the local runner, both backfill phases, checksum path, and ledger-gated
+`0006` migration on the repository's pinned ClickHouse 25.4 MergeTree engine. It does
+not select a hosting provider or operational owner. `SharedMergeTree` / managed-provider
+`REPLACE PARTITION` remains unverified, so no deployed compatibility claim follows from
+this implementation. Cost if the local result is generalized incorrectly: the first
+deployed backfill may fail at its partition-swap operation.

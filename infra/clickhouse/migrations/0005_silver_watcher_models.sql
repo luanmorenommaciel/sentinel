@@ -256,9 +256,9 @@ AS WITH parents AS (
 -- then need SELECT on only the source columns they consume.
 GRANT SELECT(event_time, scenario, service_name, component_name, metric_name, metric_kind, value)
     ON silver.metric_observations TO sentinel_collector;
-GRANT SELECT(event_time, service_name, `resource_attributes.keys`)
+GRANT SELECT(event_time, service_name, resource_attributes, `resource_attributes.keys`)
     ON silver.log_events TO sentinel_collector;
-GRANT SELECT(event_time, service_name, `resource_attributes.keys`)
+GRANT SELECT(event_time, service_name, resource_attributes, `resource_attributes.keys`)
     ON silver.operation_executions TO sentinel_collector;
-GRANT SELECT(event_time, service_name, `resource_attributes.keys`)
+GRANT SELECT(event_time, service_name, resource_attributes, `resource_attributes.keys`)
     ON silver.metric_observations TO sentinel_collector;

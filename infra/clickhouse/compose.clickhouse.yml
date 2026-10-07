@@ -34,7 +34,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:25.4
     ports:
-      - "8123:8123"   # HTTP interface (+ /play UI) — the Rust exporter's path
+      - "127.0.0.1:8123:8123"   # Local HTTP interface (+ /play UI)
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       # POD 3 canonical bronze schema (bronze.*, ADR-0007). The collector writes

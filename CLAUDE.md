@@ -36,10 +36,10 @@ Makefile                   # one-command UX
 
 | Command | What it does |
 |---------|--------------|
-| `make e2e` | Full pipeline: up (ClickHouse + collector) → init → generate → land rows in `bronze.*` |
-| `make ui` | Start flow-ui on http://localhost:8080 (see `services/flow-ui/README.md`) |
+| `make e2e` | Full local pipeline: ClickHouse → migrations → collector readiness → generate rows in `bronze.*` |
+| `make ui` / `make down-ui` | Start or stop flow-ui independently on http://127.0.0.1:8080 |
 | `make generate-stream DURATION=10m` | Real-time telemetry paced by the wall clock, rather than a backfilled window |
-| `make up / init / generate / logs / ps / down / reset` | Individual pipeline steps (`init` is a no-op: bronze auto-applies on ClickHouse boot) |
+| `make up / init / migrate / generate / logs / ps / down / reset` | Local pipeline steps; `make up` migrates before starting the collector |
 | `make build` | Build all service images |
 | `make test` | All unit suites (`test-generator` + `test-flow-ui` pytest, `test-collector-rust` cargo) |
 | `make lint` | `lint-generator` + `lint-flow-ui` (ruff) + `lint-collector-rust` (cargo fmt --check + clippy) |
@@ -64,7 +64,7 @@ Variables: `SCENARIO` (default `baseline`), `SEED` (`42`), `WINDOW` (`5m`).
 ## Gotchas
 
 - **Stale ClickHouse volume:** `CREATE TABLE IF NOT EXISTS` won't update a changed schema. After a DDL change, `make reset` before `make up`, or inserts fail with `NO_SUCH_COLUMN`.
-- **Dev-only ClickHouse auth:** `infra/clickhouse-users.d/` opens the `default` user to the Docker network (the Rust collector's HTTP path). `infra/clickhouse-init.sql` also creates an `otelgen` user — vestigial from the Go collector's DSN, unused today. Local only — do not expose beyond the compose network.
+- **Local boundary:** host ports bind to loopback; services use the private Compose network. This is for local development and does not provide remote edge authentication or TLS.
 - The Rust collector only enters OTLP **server** mode when its config (`services/collector-rust/config.docker.yaml`) has a `grpc` section. Without it, it runs FILE mode (read `input` once, exit).
 - **ClickHouse port:** the collector's `clickhouse` crate speaks RowBinary over **HTTP :8123**, not native :9000.
 
@@ -72,7 +72,26 @@ Variables: `SCENARIO` (default `baseline`), `SEED` (`42`), `WINDOW` (`5m`).
 
 Pod 2's Rust collector is verified end-to-end on `main`: generator → OTLP `:4317` → `bronze.*`, lossless. Latest local snapshot (2026-08-04): 233,100 signals in 4.5s, 0 rejected / 0 dropped / 0 export errors, avg export latency 32.3ms. Golden file-mode round-trip: 48 logs / 48 spans / 183 metrics. Full detail in [README §8](README.md).
 
-**Open:** ADR-0007 acceptance (Pod 3 sign-off) · Pod 3 silver (rolling-stats, read models) · histogram/summary metrics (no v1.0.0 type) · CI beyond `rust-ci.yml` (branch protection, pre-commit gates) · the agentic layer (agent fleet, KBs, routines).
+**The `sdlc-e2e-review` cycle is landed** — see [README §8](README.md) for the per-ticket registry
+and [`plan/core-plan.md`](plan/core-plan.md) for the tickets themselves. In short: one pinned
+ClickHouse (25.4) behind a single Compose definition, DDL in `migrations/` with `init.d/` as
+symlinks into it, least-privilege roles with the credential delivered as a file path, both `::/0`
+routes closed, the four Pod 3 Watcher read models, the backfill runner, five CI workflows and nine
+repository invariants.
+
+**Scope ruled on 2026-10-06** ([`plan/decisions/DEC-2026-10-06-local-scope.md`](plan/decisions/DEC-2026-10-06-local-scope.md)):
+everything runs **locally, Docker + Make only**. That is a deliberate boundary, not an omission —
+no remote platform or ClickHouse provider is selected (DEC-A1/A2), **TLS is deferred** (DEC-A4, so
+T42 is not attempted), and documentation now lands in the same PR as the behaviour it describes
+(DEC-I2, so the T45–T48 docs wave is dissolved). Anything marked *Done (local)* means done within
+that scope and unverified against a deployed target.
+
+**Open:** ADR-0007 acceptance (Pod 3 sign-off) · histogram/summary metrics (no v1.0.0 type) ·
+branch protection, which is a GitHub setting and not a file — [`docs/ci-gates.md`](docs/ci-gates.md)
+is the required-check set to configure from, and `main` carries no rule today (issue #35) · the
+agentic layer (agent fleet, KBs, routines) · **GitHub Actions has been failing account-wide since
+2026-10-05** — jobs end in 1–3 s with no runner assigned, across every workflow here and other
+repositories on the account, so none of the CI above has actually executed.
 
 **Known doc drift** — decisions taken by merge that the records don't yet reflect:
 

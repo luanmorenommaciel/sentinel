@@ -508,8 +508,9 @@ class Poller:
                 lineage = await self._ch.lineage()
                 scenario = await self._ch.scenario()
                 inventory = await self._ch.metric_inventory()
-                band = await self._ch.volume_band(self._s.volume_window_min)
-                edges = await self._ch.call_edges()
+                band = await self._ch.volume_band(
+                    self._s.volume_window_min, coverage=self.latest.silver_coverage)
+                edges = await self._ch.call_edges(coverage=self.latest.silver_coverage)
                 health = await self._ch.service_health()
                 silver = await self._ch.silver_state()
                 self.latest.lineage = lineage
@@ -528,7 +529,8 @@ class Poller:
         live table, so it must not share the lineage cadence."""
         while True:
             try:
-                self.latest.contract_violations = await self._ch.contract_violations()
+                self.latest.contract_violations = await self._ch.contract_violations(
+                    coverage=self.latest.silver_coverage)
             except Exception as exc:                      # noqa: BLE001 — never kill the loop
                 log.debug("contract refresh failed: %s", exc)
             # Its own handler, not the one above: the coverage probe shares this lane but

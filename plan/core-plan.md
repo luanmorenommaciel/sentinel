@@ -1,5 +1,17 @@
 # Core Plan — execution tickets for the `sdlc-e2e-review` cycle
 
+> **Current scope rulings (2026-10-06):** this plan's original deployment targets and
+> end-of-wave docs legs are superseded by [DEC-2026-10-06-local-scope.md](decisions/DEC-2026-10-06-local-scope.md).
+> T40/T41/T43/T44 are local Docker + Make work; T42 is deferred with TLS; T45–T48 are
+> absorbed into each implementation PR per DEC-I2. Concurrent legs that share a docs path
+> are serialized. Remote deployment is not authorized.
+>
+> **Execution status (2026-10-06):** T01–T41 and T43–T44 are complete within the scope
+> stated in their tickets; T30–T34 and T40–T44 are local-only where noted. T42 is deferred,
+> and T45–T48 are absorbed rather than open work. The per-ticket status ledger and current
+> verification notes live in [`README.md` §8](../README.md#8-current-status); the dependency
+> tables below describe the original plan and should not be read as current blockers.
+
 > **Fourth document in the chain.** [`intent/core-intent.md`](../intent/core-intent.md) is the
 > verified As-Is, [`intent/design-spec.md`](../intent/design-spec.md) (`DSP §n`) the design
 > rationale, [`spec/core-spec.md`](../spec/core-spec.md) (`SPEC §n`) the implementation-ready
@@ -65,7 +77,9 @@ throwaway container used for `[V-4]`, and if it does not, swap `0002` and `0004`
 | DEC-D1 | Does silver materialise typed Sentinel keys | Pod 3 + Pod 2 | — (must stay undecided; see T28) |
 | DEC-V3a | *Folded into DEC-I1 (2026-10-05):* refreshable MVs are ungated on 25.4.13.22 and gated only on 24.3.18.7, so on 25.4+ the scheduled-INSERT fallback is unnecessary. A consequence of DEC-I1, not an independent decision | Pod 3 (follows DEC-I1) | T29 (via DEC-I1) |
 
-Four are W1 blockers in practice: **DEC-A1, DEC-A2, DEC-A3, DEC-I1**.
+This is the original decision register. Current-cycle rulings and remaining open decisions
+are recorded above and in [§8 of the README](../README.md#8-current-status); resolved or
+deferred decisions no longer block their locally authorized scope.
 
 ### Waves 1–4 — implementation
 
@@ -208,7 +222,7 @@ serialisation if only one agent is available.
 | **F7** | T18 (T06+T13+T14+T17) | shared integration branch — see §4 |
 | **F8** | T19 (T15+T18) | the posture is green **here**, not per-ticket |
 | **F9** | T20 (T07+T08+T09+T11+T19) | |
-| **F10** | T21 (T20) · T25 (T16+T20) · T30 (T05+T19+DEC-A2) | W2 and W3's runner lane open together |
+| **F10** | T21 (T20) · T25 (T16+T20) · T30 (T05+T19; local MergeTree authorized by DEC-A2 §7) | W2 and W3's runner lane open together; deployed-provider validation remains deferred |
 | **F11** | T26 T27 (T25) · T31 (T30) | |
 | **F12** | T28 (T27) · T32 (T31) | |
 | **F13** | T29 (T28+T01) · T38 (T35+T28) | |
@@ -839,7 +853,8 @@ verdicts, D owns inputs.
 ## 7. Wave 3 — E, backfill and the flow-ui migration
 
 ### T30 — Backfill runner skeleton + live-partition refusal + README
-**Leg** `leg/silver/backfill-v1` · **Blocked by** T05, T19, DEC-A2 · **REQ** E-01, E-12, NFR-11 · **Seam** S1
+**Leg** `leg/silver/backfill-v1` · **Blocked by** T05, T19 · **REQ** E-01, E-12, NFR-11 · **Seam** S1
+**Scope ruling** 2026-10-06: Commander authorized local MergeTree implementation for T30–T34; deployed-provider validation remains deferred. See DEC-A2 §7.
 **Files** +`infra/clickhouse/backfill/backfill.sh` · +`infra/clickhouse/backfill/README.md` ·
 ~`Makefile` (+`backfill-silver FROM= TO= [PHASE=]`)
 **Does** Range control first, before a single `INSERT` exists. The partition list comes from

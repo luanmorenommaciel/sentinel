@@ -2,6 +2,9 @@
 
 **Owner** Captain / Commander · **Unblocks** T40, T43 directly; 6 tickets transitively (T40–T44, T48). T22 was removed from this list on 2026-10-05
 
+**Ruling 2026-10-06:** local Docker Compose operated through Make only. No remote
+deployment platform is selected. See [the current-cycle ruling](DEC-2026-10-06-local-scope.md).
+
 Evidence tags: **[M]** measured this session · **[S]** measured per `spec/core-spec.md` §11.1, not re-run · **[D]** asserted in a repo document, not independently verified · **[R]** reasoned.
 
 ## 1. The question

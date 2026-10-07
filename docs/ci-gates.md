@@ -33,9 +33,11 @@ compared instead of assumed (`SPEC §12.4`, REQ-B-10).
 
 ## What `repo-invariants` gates on
 
-Six asserts, each a property of the repository as a whole, so any PR can break one.
-All six pass as of T19 — until then four were authored to the end state and failed by
-design, which is why the job carried `continue-on-error` and why it does not any more.
+Nine asserts, each a property of the repository as a whole, so any PR can break one.
+All nine pass. Four of the first five were authored to the end state and failed by
+design until T19, which is why the job carried `continue-on-error` and why it does not
+any more; 06 arrived with T16, 07 and 08 with T29, and 09 with the local-runtime scope
+DEC-A1/A2 settled.
 
 | Assert | Property |
 |---|---|
@@ -45,6 +47,9 @@ design, which is why the job carried `continue-on-error` and why it does not any
 | `04-no-plaintext-secrets` | no inline credential in the operational tree; nothing but `*.example` committed under `infra/secrets/` |
 | `05-flow-ui-is-read-only` | flow-ui issues no write statement |
 | `06-initd-matches-migrations` | `init.d/` is symlinks into `migrations/` — one DDL source, two apply paths |
+| `07-silver-mv-determinism` | every silver MV body is deterministic, with `call_edges_1m_rmv` the one exception REQ-D-12 names |
+| `08-no-verdict-in-silver` | no threshold, severity, escalation or verdict literal in the silver read models (REQ-D-07) |
+| `09-local-compose-boundary` | host ports bind loopback-only, and `make` supplies the collector's OTLP port default (DEC-A1/A2 local scope) |
 
 ## Two things this table is deliberately honest about
 

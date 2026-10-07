@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import ClassVar
 
@@ -32,6 +33,12 @@ log = logging.getLogger("flow_ui.clickhouse")
 #: They are listed separately so the UI can say "empty by contract" rather than draw four
 #: live tables and two dead ones with no explanation.
 LIVE_TABLES = ("otel_logs", "otel_traces", "otel_metrics_gauge", "otel_metrics_sum")
+
+
+def fallback_removal_ready(coverage_history: list[float], now: float) -> bool:
+    """Whether a board's Bronze fallback may be removed (REQ-E-10)."""
+    horizon = now - 30 * 24 * 60 * 60
+    return len(coverage_history) >= 7 and all(value <= horizon for value in coverage_history[-7:])
 
 #: The five keys Pod 1 guarantees on every signal, mirrored from the collector's
 #: `REQUIRED_RESOURCE_KEYS` (`collector-rust/src/contract.rs`). Duplicated deliberately:
@@ -98,6 +105,15 @@ class ClickHouse:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    @staticmethod
+    def _silver_covers(coverage: dict[str, float] | None, tables: tuple[str, ...],
+                       minutes: int, now: float | None = None) -> bool:
+        """True only when every source table reaches back through the requested window."""
+        if not coverage:
+            return False
+        boundary = (time.time() if now is None else now) - minutes * 60
+        return all(coverage.get(table, float("inf")) <= boundary for table in tables)
 
     async def _query(self, sql: str) -> str:
         """POST the SQL as the raw request body.
@@ -215,7 +231,9 @@ class ClickHouse:
             log.warning("metric inventory unavailable: %s", exc)
         return out
 
-    async def contract_violations(self, limit: int = 10) -> list[dict]:
+    async def contract_violations(self, limit: int = 10,
+                                  coverage: dict[str, float] | None = None,
+                                  now: float | None = None) -> list[dict]:
         """Which producers wrote rows missing a required key, and which key.
 
         **This is the only per-producer view of contract health that exists.** The
@@ -238,6 +256,41 @@ class ClickHouse:
         Returns `[{service, rows, violating, missing: {key: n}, total_missing}]`, worst first.
         """
         keys = REQUIRED_RESOURCE_KEYS
+        if self._silver_covers(coverage, self.SILVER_MODELS, 30, now):
+            missing_cols = ", ".join(
+                f"sum(rows) - sum(key_counts['{key}']) AS m{i}"
+                for i, key in enumerate(keys)
+            )
+            has_all = " AND ".join(f"mapContains(ResourceAttributes, '{key}')" for key in keys)
+            bad_union = " UNION ALL ".join(
+                f"SELECT ServiceName, countIf(NOT ({has_all})) AS bad FROM {self._db}.{table} GROUP BY ServiceName"
+                for table in LIVE_TABLES
+            )
+            try:
+                silver_rows = await self._query(f"""
+                    SELECT service_name, sum(rows) AS rows, {missing_cols}
+                    FROM silver.resource_key_presence_1m
+                    GROUP BY service_name FORMAT TSV""")
+                bad_rows = await self._query(f"""
+                    SELECT ServiceName, sum(bad) AS bad FROM ({bad_union})
+                    GROUP BY ServiceName FORMAT TSV""")
+                bad_by_service = {p[0]: int(p[1]) for p in
+                                  (line.split("\t") for line in bad_rows.splitlines() if line.strip())}
+                out: list[dict] = []
+                for line in silver_rows.splitlines():
+                    parts = line.split("\t")
+                    if len(parts) != 2 + len(keys):
+                        continue
+                    missing = {key: int(value) for key, value in zip(keys, parts[2:]) if int(value) > 0}
+                    if not missing:
+                        continue
+                    out.append({"service": parts[0], "rows": int(parts[1]),
+                                "violating": bad_by_service.get(parts[0], 0),
+                                "missing": missing, "total_missing": sum(missing.values()),
+                                "source": "silver"})
+                return sorted(out, key=lambda row: row["total_missing"], reverse=True)[:int(limit)]
+            except (httpx.HTTPError, ValueError) as exc:
+                log.warning("silver contract violations unavailable: %s", exc)
         cols = ",\n".join(
             f"    countIf(NOT mapContains(ResourceAttributes, '{k}')) AS m{i}"
             for i, k in enumerate(keys)
@@ -282,11 +335,13 @@ class ClickHouse:
             log.warning("contract violations unavailable: %s", exc)
         return out
 
-    async def volume_band(self, minutes: int = 60, limit: int = 8) -> list[dict]:
+    async def volume_band(self, minutes: int = 60, limit: int = 8,
+                          coverage: dict[str, float] | None = None,
+                          now: float | None = None) -> list[dict]:
         """Per producer: the volume distribution over the window, and the latest bucket.
 
         Returns the raw statistics, not a verdict — the band and the threshold are computed
-        in one place (`pipeline._volume_state`) so the drawn band and the alerting rule are
+        in one place (`pipeline.volume_state`) so the drawn band and the alerting rule are
         literally the same numbers. Metaplane shipped a version where they differed and
         publicly called fixing it a "simplification"; there is no reason to repeat it.
 
@@ -306,13 +361,23 @@ class ClickHouse:
           back to stddev, and declares the series unmonitorable when both collapse.
         """
         win = int(minutes)
-        sql = f"""
-        WITH b AS (
+        silver = self._silver_covers(coverage, self.SILVER_MODELS, minutes, now)
+        buckets = f"""
+            SELECT service_name AS svc, window_start AS t, sum(rows) AS n
+            FROM silver.volume_1m
+            WHERE signal = 'log' AND window_start >= now() - INTERVAL {win} MINUTE
+              AND window_start < toStartOfMinute(now())
+            GROUP BY svc, t
+        """ if silver else f"""
             SELECT ServiceName AS svc, toStartOfMinute(Timestamp) AS t, count() AS n
             FROM {self._db}.otel_logs
             WHERE Timestamp >= now() - INTERVAL {win} MINUTE
               AND Timestamp < toStartOfMinute(now())
             GROUP BY svc, t
+        """
+        sql = f"""
+        WITH b AS (
+            {buckets}
         ),
         est AS (SELECT count(DISTINCT t) AS estate FROM b),
         m AS (SELECT svc, quantileExact(0.5)(n) AS med, stddevPop(n) AS sd FROM b GROUP BY svc)
@@ -341,12 +406,15 @@ class ClickHouse:
                     "latest": int(r["latest"]),
                     "latest_t": int(r["latest_t"]),
                     "series": [[int(t), int(n)] for t, n in r["series"]],
+                    "source": "silver" if silver else "bronze",
                 })
         except (httpx.HTTPError, ValueError, KeyError) as exc:
             log.warning("volume band unavailable: %s", exc)
         return out
 
-    async def call_edges(self, minutes: int = 15, limit: int = 24) -> list[dict]:
+    async def call_edges(self, minutes: int = 15, limit: int = 24,
+                         coverage: dict[str, float] | None = None,
+                         now: float | None = None) -> list[dict]:
         """The call graph as it was actually traced: `A -> B` with span counts and errors.
 
         This is the only per-edge measurement that exists anywhere in the pipeline. Neither
@@ -366,7 +434,13 @@ class ClickHouse:
         one-to-at-most-one, so a child is counted exactly once. Both sides are still bounded
         by the same window, and it stays on the slow lane because it remains a self-join.
         """
+        silver = minutes <= 24 * 60 and self._silver_covers(
+            coverage, ("operation_executions",), minutes, now)
         sql = f"""
+        {f'''SELECT src_service AS src, dst_service AS dst, sum(spans) AS spans, sum(errors) AS errors
+        FROM silver.call_edges_1m
+        WHERE window_start > now() - INTERVAL {int(minutes)} MINUTE
+        GROUP BY src, dst ORDER BY spans DESC LIMIT {int(limit)} FORMAT TSV''' if silver else f'''
         WITH parents AS (
             SELECT TraceId, SpanId, any(ServiceName) AS svc
             FROM {self._db}.otel_traces
@@ -381,6 +455,7 @@ class ClickHouse:
         WHERE c.Timestamp > now() - INTERVAL {int(minutes)} MINUTE AND c.ParentSpanId != ''
         GROUP BY src, dst HAVING src != dst
         ORDER BY spans DESC LIMIT {int(limit)} FORMAT TSV
+        '''}
         """
         out: list[dict] = []
         try:
@@ -389,7 +464,8 @@ class ClickHouse:
                     continue
                 src, dst, spans, errors = line.split("\t")
                 out.append({"src": src, "dst": dst,
-                            "spans": int(spans), "errors": int(errors)})
+                            "spans": int(spans), "errors": int(errors),
+                            "source": "silver" if silver else "bronze"})
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("call edges unavailable: %s", exc)
         return out

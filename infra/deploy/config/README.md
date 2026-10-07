@@ -1,5 +1,10 @@
 # Per-environment configuration
 
+This directory remains reserved for an eventual deployed environment. DEC-A1 and DEC-A2
+currently authorize local Docker Compose only, so no staging or production configuration
+is claimed or populated here. The supported local configuration lives in
+`services/collector-rust/config.docker.yaml` and `docker-compose.yml`.
+
 The **only** place a `staging`-vs-`prod` difference is allowed to live (REQ-A-07).
 
 Promotion moves an image digest and nothing else, so the image cannot carry an

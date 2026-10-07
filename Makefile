@@ -10,10 +10,14 @@ WINDOW    ?= 5m
 DURATION  ?= 60s
 STEP      ?= 1s
 RATE      ?= 200
+# Host-only override for OTLP when another local process owns 4317. The
+# collector and Compose-network clients always use the canonical container port.
+COLLECTOR_OTLP_HOST_PORT ?= 4317
+export COLLECTOR_OTLP_HOST_PORT
 
-.PHONY: help up init migrate generate generate-stream ui e2e down reset logs ps \
+.PHONY: help up init migrate generate generate-stream ui down-ui e2e down reset logs ps \
         build test test-generator test-collector-rust test-flow-ui \
-        test-generator-integration audit-python \
+        test-generator-integration test-backfill audit-python \
         test-silver sample-silver lint lint-generator lint-collector-rust lint-flow-ui
 
 # Docker runner for per-service build/test/lint — no host toolchains required.
@@ -31,10 +35,27 @@ help:                ## Show this help
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  SCENARIO=$(SCENARIO)  SEED=$(SEED)  WINDOW=$(WINDOW)  PYTHON_IMAGE=$(PYTHON_IMAGE)"
-	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)   (generate-stream)"
+	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)  COLLECTOR_OTLP_HOST_PORT=$(COLLECTOR_OTLP_HOST_PORT)"
 
-up:                  ## Start ClickHouse + the Rust collector
-	docker compose up -d --build clickhouse collector-rust
+up:                  ## Start ClickHouse, migrate, then start the Rust collector
+	docker compose up -d clickhouse
+	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
+		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
+			echo "ClickHouse ready"; break; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; exit 1; }
+	$(MAKE) migrate
+	docker compose up -d --build collector-rust
+	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
+		if curl -fsS http://127.0.0.1:9090/metrics >/dev/null 2>&1; then \
+			echo "collector ready at 127.0.0.1:$(COLLECTOR_OTLP_HOST_PORT) (metrics on 127.0.0.1:9090)"; exit 0; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	echo "collector did not become ready at http://127.0.0.1:9090/metrics" >&2; \
+	docker compose logs collector-rust; exit 1
 
 init:                ## No-op: the canonical bronze schema auto-applies on ClickHouse boot
 	@echo "Rust → canonical bronze schema (bronze.*) auto-applies on ClickHouse boot via infra/clickhouse/init.d/; nothing to apply"
@@ -63,6 +84,14 @@ migrate:             ## Apply ClickHouse DDL migrations, recording each in _meta
 	CH_CLIENT="docker compose exec -T clickhouse clickhouse-client" \
 		bash infra/clickhouse/migrate.sh
 
+backfill-silver:      ## Recompute historical Silver partitions (FROM / TO / PHASE)
+	CH_CLIENT="docker compose exec -T clickhouse clickhouse-client" \
+		bash infra/clickhouse/backfill/backfill.sh $(if $(FROM),FROM=$(FROM)) $(if $(TO),TO=$(TO)) PHASE=$(if $(PHASE),$(PHASE),all)
+
+test-backfill:        ## Verify the backfill runner refuses the live partition
+	bash infra/clickhouse/backfill/tests/runner-refusal.test.sh
+	bash infra/clickhouse/backfill/tests/canonical-sync.test.sh
+
 generate:            ## Run the generator → OTLP :4317 (SCENARIO / SEED / WINDOW configurable)
 	docker compose run --rm generator \
 		--scenario $(SCENARIO) --seed $(SEED) --window $(WINDOW) \
@@ -74,9 +103,19 @@ generate-stream:     ## Generate in real time (paced by wall clock) — DURATION
 		--scenario $(SCENARIO) --seed $(SEED) \
 		--delivery otlp --otlp-endpoint http://collector:4317
 
-ui:                  ## Start the flow visualizer on http://localhost:8080
+ui:                  ## Start ClickHouse + flow-ui independently at http://127.0.0.1:8080
 	docker compose up -d --build flow-ui
-	@echo "flow-ui → http://localhost:8080"
+	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
+		if curl -fsS http://127.0.0.1:8080/healthz 2>/dev/null; then \
+			echo "flow-ui ready at http://127.0.0.1:8080 (collector is optional)"; exit 0; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	echo "flow-ui did not become ready at http://127.0.0.1:8080/healthz" >&2; \
+	docker compose logs flow-ui; exit 1
+
+down-ui:             ## Stop only flow-ui
+	docker compose stop flow-ui
 
 e2e: up init generate ## Full configurable pipeline (up + init + generate)
 	@echo "E2E complete with the Rust collector. Inspect at http://localhost:8123/play"

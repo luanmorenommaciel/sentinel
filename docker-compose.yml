@@ -32,8 +32,9 @@ services:
       # here and in the container's memory.
       - ./infra/secrets/ch_password:/etc/sentinel/secrets/ch_password:ro
     ports:
-      - "4317:4317"
-      - "9090:9090"   # Prometheus collector metrics
+      # Local host access only. Generator and flow-ui use the private Compose network.
+      - "127.0.0.1:${COLLECTOR_OTLP_HOST_PORT:-4317}:4317"
+      - "127.0.0.1:9090:9090"   # Prometheus collector metrics
     networks:
       default:
         aliases: ["collector"]
@@ -67,12 +68,10 @@ services:
       # it — and the contract board's headline is that policy.
       - ./services/collector-rust/config.docker.yaml:/app/collector-config.yaml:ro
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       clickhouse:
         condition: service_healthy
-      collector-rust:
-        condition: service_started
 
   generator:
     build:
@@ -84,4 +83,3 @@ services:
       - ./contracts:/contracts:ro
     # No long-running command — driven on demand by `make generate`
     # (docker compose run --rm generator run --scenario ... --otlp-endpoint http://collector:4317).
-

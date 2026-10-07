@@ -1,6 +1,11 @@
 # Deployment artifacts
 
-What `release.yml` publishes, and what has to exist in Google Cloud before it can.
+> **Scope decision (2026-10-06):** this repository is authorized for local execution
+> with Docker Compose and Make only. No cloud or remote-host deployment is implemented
+> here. T40–T44 below remain a future deployment scope; the runnable local workflow is
+> documented in the root README and `docker-compose.yml`. TLS is deferred by DEC-A4.
+
+What `release.yml` publishes, and what a future Google Cloud deployment would require.
 
 This covers the part of the deployment story that is **invariant to the compute form**
 (`design-spec.md` §A.2): the registry, the tags, provenance, the SBOM, signing and the
