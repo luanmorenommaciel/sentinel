@@ -1,0 +1,107 @@
+{
+  "contract": "TaskHandoff/v3",
+  "task_id": "T-20261007-python-ci",
+  "format_version": 3,
+  "spec": "/Users/adilsoncesar/orca/workspaces/sentinel/sdlc-e2e-task-spec/tasks/T-20261007-python-ci.md",
+  "spec_digest": "sha256:9f15aebe5b540f60b6ec535e05c707670fec96c98451e8643f99bb366e09ce76",
+  "task_revision_digest": "sha256:2d9c07066e2500621a3ae983caa01ebaab8365cbea569ac29a32378e75f1e28a",
+  "signoff_tier": 1,
+  "backend": "claude",
+  "workspace": "/Users/adilsoncesar/orca/workspaces/sentinel/sdlc-e2e-task-spec",
+  "authorization": {
+    "scheme": "hmac-sha256-v3",
+    "ref": "hmac-sha256-v3:76f99aca:4193a4489e513875f400462b1bde736dddb0c8982cbddd8f68354f2202c11fe2",
+    "tier": 1,
+    "signed_by": "adilsoncesar",
+    "signed_at": "2026-10-08T02:27:00Z"
+  },
+  "attempt": {
+    "id": "447e47ae-b6d1-4266-a5c4-40b95676be93",
+    "issued_at": "2026-10-08T02:28:33Z"
+  },
+  "source": {
+    "workspace": "/Users/adilsoncesar/orca/workspaces/sentinel/sdlc-e2e-task-spec",
+    "base_commit": "3af2ee78728edab6ab695aec38616137caf994f0"
+  },
+  "dependency_closure": {
+    "contract": "DependencyClosure/v1",
+    "task_id": "T-20261007-python-ci",
+    "digest": "sha256:f96e137424fc2fd824c95137597220eac690f44c472a6ef5d7be2528be2033ed",
+    "members": [
+      {
+        "task_id": "T-20261007-python-ci",
+        "task_revision_digest": "sha256:2d9c07066e2500621a3ae983caa01ebaab8365cbea569ac29a32378e75f1e28a"
+      }
+    ]
+  },
+  "write_scope": {
+    "touches_paths": [
+      ".github/workflows/python-ci.yml"
+    ],
+    "creates_paths": [
+      ".github/workflows/python-ci.yml"
+    ],
+    "do_not_touch": [
+      ".github/workflows/rust-ci.yml",
+      ".github/workflows/pr-linked-issue.yml",
+      "Makefile",
+      "services/*/src/**",
+      "services/*/tests/**"
+    ]
+  },
+  "budgets": {
+    "iterations": 15,
+    "tokens": null,
+    "effort": "S"
+  },
+  "agent_contract": {
+    "version": 2,
+    "read": [
+      "intent",
+      "behavior",
+      "contract",
+      "guardrails",
+      "operations"
+    ],
+    "produce": [
+      "config"
+    ],
+    "required_tools": [
+      "git",
+      "bash"
+    ],
+    "timeout_minutes": 30,
+    "sandbox_type": "host",
+    "output_artifacts": [
+      ".github/workflows/python-ci.yml"
+    ],
+    "mcp_dependencies": [],
+    "emit": [
+      "pass",
+      "fail",
+      "retry_with_reason",
+      "parked_with_context"
+    ],
+    "backend_metadata": {}
+  },
+  "eval_command": [
+    "taskspec",
+    "run",
+    "--ci",
+    "/Users/adilsoncesar/orca/workspaces/sentinel/sdlc-e2e-task-spec/tasks/T-20261007-python-ci.md"
+  ],
+  "acceptance_command": [
+    "taskspec",
+    "accept",
+    "--stamp",
+    "--handoff",
+    "<handoff.json>",
+    "/Users/adilsoncesar/orca/workspaces/sentinel/sdlc-e2e-task-spec/tasks/T-20261007-python-ci.md"
+  ],
+  "evaluation_policy": {},
+  "environment_contract": {},
+  "identity_policy": {},
+  "receipt_requirements": [
+    "deterministic"
+  ]
+}
