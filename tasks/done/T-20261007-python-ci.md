@@ -1,7 +1,7 @@
 ---
 id: T-20261007-python-ci
 title: "Gate the two Python services in CI with ruff and pytest"
-status: ready
+status: done
 format_version: 3
 profile: standard
 effort: S
@@ -31,9 +31,9 @@ execution_backend: any
 signed_off: true
 signed_off_by: adilsoncesar
 signed_off_at: 2026-10-08T02:27:00Z
-accepted: false
-accepted_by: (none)
-accepted_at: (none)
+accepted: true
+accepted_by: adilsoncesar
+accepted_at: 2026-10-08T02:37:02Z
 evidence_refs:
   - "Makefile sha256 6dbc419236beb9c6 — defines test-generator, test-flow-ui, lint-generator, lint-flow-ui"
   - "rust-ci.yml sha256 626420616eb01988 — the path-scoping and gate-mapping model to mirror"
@@ -41,6 +41,10 @@ evidence_refs:
   - "flow-ui/pyproject.toml sha256 9fd64f405e4bf44a — hatch, dependency-groups, py>=3.11, no ruff config"
   - "repo HEAD 3af2ee7 — .github/workflows holds only rust-ci.yml and pr-linked-issue.yml"
 signed_off_sig: hmac-sha256-v3:76f99aca:4193a4489e513875f400462b1bde736dddb0c8982cbddd8f68354f2202c11fe2
+accepted_tier: 1
+accepted_attempt_id: 58278636-5473-4184-94fa-5b681153f937
+accepted_authorization_ref: hmac-sha256-v3:76f99aca:4193a4489e513875f400462b1bde736dddb0c8982cbddd8f68354f2202c11fe2
+acceptance_record_digest: sha256:a4653f06f0916b9b2bd71372388eb40d8fb79bb2b87acc735f7063857dda432d
 ---
 
 # "Gate the two Python services in CI with ruff and pytest"

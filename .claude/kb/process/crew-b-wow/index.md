@@ -210,17 +210,15 @@ otherwise it is a cross-reference and the check will (correctly) fail.
 |---|---|
 | `rust-ci.yml` | `cargo fmt --check` · `cargo clippy -D warnings` · `cargo test` · a round-trip against a live ClickHouse · `cargo-deny` · Docker build |
 | `pr-linked-issue.yml` | fails a PR that closes no issue, unless labelled `no-issue` |
+| `python-ci.yml` | `ruff check` · `pytest` for `generator-python` (178, `tests/unit`) and `flow-ui` (73) |
 
-**What does not run, and should.** These four suites are green locally and gate nothing —
-a PR can break any of them and merge clean. Tracked in
+**What does not run, and should.** One suite is still green locally and gates nothing —
+a PR can break it and merge clean. Tracked in
 [#34](https://github.com/luanmorenommaciel/sentinel/issues/34):
 
-| Suite | Command | Size |
-|---|---|---|
-| generator-python | `make test-generator` | 178 pytest |
-| flow-ui | `make test-flow-ui` | 57 pytest |
-| Silver read models | `make test-silver` | 60 SQL asserts |
-| Python lint | `make lint` | ruff over both services |
+| Suite | Command | Size | Why not yet |
+|---|---|---|---|
+| Silver read models | `make test-silver` | 60 SQL asserts | needs a ClickHouse service container, as `rust-ci.yml` already does for its round-trip |
 
 **The seven-gate target.** This section previously listed `ruff`, `mypy --strict`,
 `pytest >80%`, `bandit + safety`, `markdownlint`, `CodeRabbit` and `Docker build` as if they

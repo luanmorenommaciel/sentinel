@@ -1,0 +1,113 @@
+# Python CI for the generator (Pod 1) and flow-ui.
+#
+# Scoped to the Python subtrees per the polyglot-monorepo rule in
+# .claude/docs/RUST_PROJECT_STANDARDS.md: a Rust-only or docs-only PR does not
+# trigger these jobs, and vice versa.
+#
+# Maps to the Crew B 7-gate WoW:
+#   linter      → ruff check                      (jobs: generator, flow-ui)
+#   tests       → pytest                          (jobs: generator, flow-ui)
+# The remaining gates the WoW names — mypy --strict, >80% coverage, bandit +
+# safety, markdownlint, CodeRabbit, Docker build — are deliberately NOT here:
+# no configuration for any of them exists in the tree, so each is a config
+# change rather than a workflow change. See intent/intent.md §3 Candidate B.
+#
+# The four commands below mirror the Makefile targets test-generator,
+# test-flow-ui, lint-generator and lint-flow-ui so local and CI results cannot
+# diverge. They are run natively rather than through those targets because the
+# targets wrap every command in Docker (DK_RUN) to spare the host a toolchain,
+# which a GitHub runner does not need.
+#
+# Two jobs rather than a matrix: the services differ in build backend
+# (setuptools vs hatch), dependency declaration, test path, required env and
+# lint scope, so a matrix would branch on service name at every step.
+#
+# Python 3.12 satisfies both floors (generator requires >=3.10, flow-ui >=3.11)
+# and is the version both Makefile targets already use.
+
+name: python-ci
+
+on:
+  pull_request:
+    paths:
+      - "services/generator-python/**"
+      - "services/flow-ui/**"
+      - "contracts/generator/**"
+      - ".github/workflows/python-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/generator-python/**"
+      - "services/flow-ui/**"
+      - "contracts/generator/**"
+      - ".github/workflows/python-ci.yml"
+
+concurrency:
+  group: python-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Pod 1 generator: ruff over src, pytest over tests/unit ────────────────
+  generator:
+    name: generator-python (ruff + pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/generator-python
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # pytest + jsonschema explicitly, NOT .[dev]: the dev extra also pulls
+      # testcontainers, which only the Docker-backed integration tests need.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest jsonschema ruff
+
+      # src only. tests/ carries two pre-existing findings (E501, I001) and is
+      # outside this task's write scope, so widening the scope here would fail
+      # the gate on unrelated code. Raise separately to reach parity with flow-ui.
+      - name: ruff
+        run: ruff check src
+
+      # tests/unit only, matching the Makefile: tests/integration needs a live
+      # ClickHouse and testcontainers.
+      - name: pytest
+        env:
+          CONTRACTS_DIR: ${{ github.workspace }}/contracts/generator/v1
+        run: python -m pytest tests/unit -q
+
+  # ── flow-ui: ruff over src/tests/scripts, pytest over tests ───────────────
+  flow-ui:
+    name: flow-ui (ruff + pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/flow-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # pytest-asyncio mirrors [dependency-groups] dev and is required for the
+      # declared asyncio_mode = "auto"; without it pytest warns the option is
+      # unknown and the setting is silently inert.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . "pytest>=8.0" "pytest-asyncio>=0.24" ruff
+
+      - name: ruff
+        run: ruff check src tests scripts
+
+      - name: pytest
+        run: python -m pytest tests -q

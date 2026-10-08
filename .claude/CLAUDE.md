@@ -200,7 +200,7 @@ Per Sync 01 + `bem-vindos.md`:
 - **Conventional Commits.** `<type>(<scope>): <description>`
 - **Signed commits.** `git commit -S`.
 - **Mandatory attribution trailer** on every commit: `Co-Authored-By: <human>`, `Co-Authored-By: <LLM model>`, optional `Reviewed-by: <bot>`.
-- **CI gates.** ⚠️ Two workflows exist — `rust-ci.yml` and `pr-linked-issue.yml`. The seven the WoW names (ruff · mypy --strict · pytest >80% · bandit + safety · markdownlint · CodeRabbit · Docker build) are a **target, not a description**: none runs, and the four Python/Silver suites gate nothing ([#34](https://github.com/luanmorenommaciel/sentinel/issues/34)). ⚠️ This is the *agreement* from Sync 01, not the current state: only [`rust-ci.yml`](../.github/workflows/rust-ci.yml) is implemented today.
+- **CI gates.** Three workflows exist — `rust-ci.yml`, `pr-linked-issue.yml` and `python-ci.yml`. Of the seven the WoW names (ruff · mypy --strict · pytest >80% · bandit + safety · markdownlint · CodeRabbit · Docker build), **ruff and pytest now run** for both Python services via [`python-ci.yml`](../.github/workflows/python-ci.yml); the other five still do not, and no mypy/bandit/safety/coverage configuration exists in the tree. The **Silver suite still gates nothing** — it needs a ClickHouse service container ([#34](https://github.com/luanmorenommaciel/sentinel/issues/34)).
 - **2 approvals** required: first peer, second Captain. Squash-merge to main *(ADR-0009 proposes a merge commit for swimlane→main — pending ratification)*.
 - **Weekly sync** Tuesday Zoom ~60min.
 - **Tool freedom on input, rigor on output.** Pick any LLM coding tool (Claude Code, Cursor, Codex CLI, Aider, etc.); the contract is honest attribution + 7-gate CI.

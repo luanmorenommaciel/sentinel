@@ -166,7 +166,7 @@ sentinel/
 │
 ├── .github/
 │   ├── PULL_REQUEST_TEMPLATE.md   # what · why (the linked issue) · tests/evidence
-│   └── workflows/                 # rust-ci.yml · pr-linked-issue.yml
+│   └── workflows/                 # rust-ci.yml · python-ci.yml · pr-linked-issue.yml
 └── .claude/                       # Crew B knowledge env (agents · KBs · skills · standards)
 ```
 
@@ -208,7 +208,7 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
 
 - **`main` is protected.** Feature branches `feat/<area>-<short>`; Conventional Commits; signed commits; attribution trailers; 2 approvals (peer + Captain).
 - **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*: one git worktree per agent, legs declaring **disjoint paths**, squash into the swimlane and a merge commit into `main` so per-leg attribution survives. Mechanics: [`.claude/docs/AGENTIC_GITFLOW.md`](.claude/docs/AGENTIC_GITFLOW.md).
-- **Per-component CI** is path-filtered so each component's gates run independently. Today only [`rust-ci.yml`](.github/workflows/rust-ci.yml) exists — four jobs: gates (fmt · clippy · test · release build) · integration (live-ClickHouse round-trip) · supply-chain (cargo-deny) · docker-build. A Python gate for `services/generator-python/` is still open.
+- **Per-component CI** is path-filtered so each component's gates run independently. [`rust-ci.yml`](.github/workflows/rust-ci.yml) has four jobs: gates (fmt · clippy · test · release build) · integration (live-ClickHouse round-trip) · supply-chain (cargo-deny) · docker-build. [`python-ci.yml`](.github/workflows/python-ci.yml) has two: `ruff` + `pytest` for `generator-python` and for `flow-ui`. The Silver SQL asserts are still ungated — they need a ClickHouse service container.
 - **Contracts are jointly owned** by the Pods on both sides of a boundary (input = Pod 1 + Pod 2; the bronze read schema = Pod 2 + Pod 3). **Components are singly owned.**
 - The **bronze DDL is Pod-3-owned** (`create_schema:false`); collectors only `INSERT`.
 
@@ -260,7 +260,7 @@ This workload met the collector health gates: no signal loss, no contract reject
 | 3 | Sentinel keys are `Map` probes under bronze (no typed columns) — materialize in silver? | Open | [ADR-0007 §Trade-offs](docs/adr/0007-bronze-canonical-contract.md) |
 | 4 | `otel_metrics_1m` rolling-stats moved to Pod 3 silver (Tier-1 input) | Handoff | [read contract §2.3](contracts/collector/v1/pod2-pod3-read-contract.md) |
 | 5 | Histogram / Summary metrics not emitted (no v1.0.0 type) | Known gap | `services/collector-rust/src/otlp.rs` |
-| 6 | Python CI gate for `services/generator-python/` not yet added | Open | [`.github/workflows/`](.github/workflows/) |
+| 6 | Python CI gate (ruff + pytest, both services) added; Silver SQL asserts still ungated | Partial | [`.github/workflows/python-ci.yml`](.github/workflows/python-ci.yml) |
 | 7 | Agentic gitflow amends the WoW's squash-to-main rule (needs ratification) | Pending | [ADR-0009](docs/adr/0009-agentic-gitflow.md) |
 
 ---
