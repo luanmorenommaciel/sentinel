@@ -4,7 +4,7 @@ CI that actually runs, on a single pinned ClickHouse, with the delivery path's
 documentation consolidated into one page. The pipeline itself — generator → collector →
 `bronze.*` — is untouched.
 
-**58 commits, 126 files changed**, rebased onto `main` at `1aa8d92`,
+**59 commits, 126 files changed**, rebased onto `main` at `1aa8d92`,
 which carries PR #59.
 
 <details>
@@ -16,7 +16,7 @@ PR's own diff shows — commits since the merge-base with `main`, and files in
 
 ```
 $ git rev-list --count origin/main..HEAD                       #  commits in the PR
-58
+59
 $ git diff --name-only origin/main...HEAD | wc -l              #  files in the PR diff
 126
 $ git rev-list --count origin/origin/sdlc-e2e-review..HEAD      #  counted against the
@@ -45,7 +45,7 @@ $ git diff --name-only origin/main...93141c4 | grep -c '^\.claude/'
 ```
 
 The earlier "44 commits" was measured before the rebase, against the old merge-base
-`3af2ee7`; that count is now 47 for the same range, plus the 11 commits added by this work.
+`3af2ee7`; that count is now 47 for the same range, plus the 12 commits added by this work.
 
 </details>
 
@@ -81,7 +81,7 @@ trade-off in writing.
 
 This branch was **not** split into the five focused PRs that were considered (Process
 Docs · CI · Migrations · Silver/Backfill · Flow-UI). The split lines cut through
-individual commits rather than between them — measured, not assumed: **25 of 58 commits
+individual commits rather than between them — measured, not assumed: **25 of 59 commits
 touch more than one of those five areas**, and the two commits below are the worst cases.
 Splitting would mean rewriting commit *contents*, not reordering them.
 
@@ -218,10 +218,19 @@ so 235 tests and 60 SQL asserts existed, were green, and gated nothing. They are
 Refs #45 · Refs #56 · Refs #35
 
 **Deliberately `Refs`, not `Closes`, for those three.** They were reopened as part of this
-work. #45's `docker stop` criterion is now covered by a check that has never executed; #56
-tracks a cycle whose gates have never run; #35 is a GitHub repository setting, not a file,
-and no rule exists on `main` today. Marking any of them Done on merge would record a
-green that nobody has seen. They close when Actions runs and the checks pass.
+work, and the PR lane going green does not finish any of them:
+
+- **#45** — SIGTERM handling is proven by a PR-lane test, but the `docker stop` half is
+  covered by `docker-build`, which **skips on PRs** (verified: bucket `skipping`). Its
+  first real execution is a weekly run that has not happened yet.
+- **#56** — the PR-lane gates now run and pass, but four gates sit in the weekly lane and
+  have never executed, and the cycle's own blockers (DEC-A3, DEC-D1) are untouched here.
+- **#35** — a GitHub repository setting, not a file. No rule exists on `main` today, and
+  only the Commander can create one. Nothing in a PR can close it.
+
+Marking any of them Done on merge would record a green nobody has seen for the part that
+still has no evidence. They close when the weekly lane has run and, for #35, when the rule
+is configured.
 
 ## Merge Danger
 

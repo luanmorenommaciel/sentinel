@@ -12,12 +12,17 @@ repository's own gates. The skills carry the method; `.claude/` carries the Sent
 agents, slash commands, KB and rules the method runs against. Neither is optional and neither
 is a substitute for the other.
 
-> **The one thing to read before claiming anything is finished:** GitHub Actions has not
-> executed since 2026-10-05 — jobs end in 1–3 s with `runner_name: ""` and zero steps, across
-> every workflow here and other repositories on the same account. **No gate in column *Gate*
-> below has run in CI.** A green local run is evidence about a laptop, not about `main`. The
-> honest status for work in that state is ***Done (local)***, and `docs/ci-gates.md` says the
-> same thing from the checks' side.
+> **The one thing to read before claiming anything is finished.** Actions was dead from
+> 2026-10-05 to 2026-10-08 — jobs ending in 1–3 s with `runner_name: ""` and zero steps — so
+> for three days no gate below had ever run. It works again, and the **PR lane is green**. Two
+> things still make "finished" a claim about the future rather than the past: the **weekly lane
+> has never run at all** (the live round-trip, the silver assertions, the arm64 image and the
+> `docker stop` proof are all in it), so a green PR tells you nothing about them; and **no
+> branch-protection rule exists** (issue #35), so nothing below is actually *required*. A green
+> local run is still evidence about a laptop — and the outage proved that sharply: the invariant
+> harness passed 10/10 locally while failing 2/10 on the runner, purely on a Compose version
+> difference. ***Done (local)*** remains the honest status for laptop-only evidence, and
+> `docs/ci-gates.md` carries the per-check detail.
 
 ---
 
@@ -48,22 +53,35 @@ decisions marked `type:commander-attention` and change GitHub repository setting
 
 ## 2. Gate inventory, by what it can actually prove
 
-| Gate | Runs | Proves | State today |
+State as of **2026-10-08**, when Actions resumed after a three-day account-wide outage.
+"Executed" below means a real run with real durations, not a 1–3 s no-runner stub.
+
+| Gate | Lane | Proves | State |
 |---|---|---|---|
-| `make test` | locally, and `python-ci` / `rust-ci` | unit + golden + gRPC + doc tests | runs locally; never executed in CI |
-| `make lint` | locally, and `python-ci` / `rust-ci` | ruff · `cargo fmt --check` · clippy `-D warnings` | runs locally; never executed in CI |
-| `make build` | locally, and `rust-ci` | the images build | runs locally; never executed in CI |
-| `make test-silver` | locally, and `e2e-silver` | the silver read models' SQL assertions | runs locally; never executed in CI |
-| `scripts/ci/run-invariants.sh` | locally, and `repo-invariants` | the ten whole-tree properties (`docs/ci-gates.md`) | all ten pass locally; never executed in CI |
-| `pr-linked-issue` | on every PR | the PR closes an issue or carries `no-issue` | never executed |
-| `e2e-silver` | on every PR | the real pipeline end-to-end against live ClickHouse | never executed; the check most likely to flake — read a week of real runs before promoting it |
-| `release` | `main` / tags | build · push · provenance · SBOM · cosign signing | **gated off**: no container registry exists, and remote deploy is unauthorized (DEC-A1/A2) |
+| `make test` | **PR** — `rust-ci` `gates`, `python-ci` `test` | unit + golden + gRPC + doc tests | **executed, green** — 3 Python versions + the cargo suite |
+| `make lint` | **PR** — `python-ci` `lint`, `rust-ci` `gates` | ruff · `cargo fmt --check` · clippy `-D warnings` | **executed, green** |
+| `scripts/ci/run-invariants.sh` | **PR** — `repo-invariants` | the ten whole-tree properties (`docs/ci-gates.md`) | **executed, green** — after a Compose-portability fix the first run caught |
+| supply chain | **PR** — `cargo deny`, `pip-audit · bandit` | advisories · licences · bans · static security scan | **executed, green** — after one scoped advisory ignore and the bandit triage |
+| `pr-linked-issue` | **PR** | the PR closes an issue or carries `no-issue` | **executed, green** |
+| `make build` | **weekly** — `rust-ci` `release build` | `cargo build --release` | skipped on PRs by design; **not yet executed** |
+| `docker stop` (#45) | **weekly** — `rust-ci` `docker-build` | the image handles SIGTERM as PID 1 | skipped on PRs by design; **not yet executed** |
+| `make test-silver` / `e2e-silver` | **weekly** | the real pipeline + the silver SQL assertions | skipped on PRs by design; **not yet executed**; the check most likely to flake — read a week of real runs before promoting it |
+| `release` | **gated off** | build · push · provenance · SBOM · cosign signing | `workflow_dispatch` only: no registry exists, and remote deploy is unauthorized (DEC-A1/A2) |
 | branch protection | — | that any of the above is *required* | **does not exist** — issue #35 |
 
-**The asymmetry to keep in mind:** stages 0–8 can be satisfied by a human or an agent in this
-repository today. Stages 9–11 cannot — they depend on GitHub Actions executing and on a
-repository setting only the Commander can make. Any claim of "Done" that spans that line is a
-claim about the future.
+**The asymmetry to keep in mind, restated now that it has moved.** Stages 0–8 can be
+satisfied by a human or an agent in this repository today, and stage 9 finally can too:
+the PR lane executes and is green. What stands between that and stage 10–11 is no longer
+the platform but a repository setting only the Commander can make. Two caveats keep
+"Done" honest: four gates sit in the weekly lane and have **never run**, so a PR can be
+green and still have broken them; and ***Done (local)*** remains the right status for
+anything whose only evidence is a laptop.
+
+**One lesson worth carrying out of the outage.** A green local run is not evidence about
+CI when the toolchain differs. `run-invariants.sh` passed 10/10 locally under Compose
+v5.1.4 while failing 2/10 on the runner, because v5.1.4 tolerates a duplicate volume
+declaration that v2.27.0 and v2.39.4 reject. Match the version, or treat the local pass
+as a smoke test only.
 
 ---
 
