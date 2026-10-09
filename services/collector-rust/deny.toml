@@ -8,7 +8,29 @@
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
-ignore = []  # add RUSTSEC advisory IDs here only with an Issue link
+ignore = [
+    # RUSTSEC-2025-0134 — rustls-pemfile 2.2.0 is unmaintained (its functionality
+    # moved into rustls-pki-types). Unmaintained, NOT a vulnerability: there is no
+    # known exploit, and cargo-deny classes it under `unmaintained`, not
+    # `vulnerability`.
+    #
+    # It is not in the shipped collector. `cargo tree -i rustls-pemfile` matches
+    # nothing on the default feature set and resolves only under --all-features,
+    # via tonic 0.12's optional `tls` feature, which this crate enables solely
+    # through `tls-spike` — T04's compile-only TLS experiment, deliberately out of
+    # `default` and slated for deletion with T42 (TLS deferred by DEC-A4). CI hits
+    # it because `cargo deny check --all-features` turns that feature on.
+    #
+    # Not removable by a bump: 2.2.0 is the last release, so the advisory applies
+    # to every 2.x. Dropping it needs tonic 0.13+, which drags the whole
+    # opentelemetry 0.27 stack (-proto, -otlp, _sdk) forward — a contract-adjacent
+    # change that does not belong in this PR.
+    #
+    # Scoped to this one advisory ID; the `unmaintained` lint stays on for
+    # everything else. Added 2026-10-08. Remove with T42, or sooner if the
+    # OTel/tonic bump lands first — whichever deletes the `tls-spike` feature.
+    "RUSTSEC-2025-0134",
+]
 
 [licenses]
 allow = [
