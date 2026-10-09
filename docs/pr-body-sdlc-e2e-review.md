@@ -230,11 +230,45 @@ so neither is introduced here; and the Rust clippy/test runs quoted above were o
 cargo 1.99.0, not the 1.96.0 `rust-toolchain.toml` pins — though CI's own `gates` job has
 now passed on the pinned toolchain.
 
-## The heavy lane ran too, and it was red
+## The heavy lane is now green, and that took three fixes
+
+**Run `37923509295`** (`workflow_dispatch`, 2026-10-09) is the first all-success heavy-lane run
+in this repository's history:
+
+```
+gates (fmt · clippy · test)                   success   34s
+release build                                 success   43s
+supply-chain (cargo deny)                     success   59s
+integration (every #[ignore]d test)           success   1m29s   ← never passed before
+musl TLS spike (x86_64-unknown-linux-musl)    success   2m03s   ← never passed before
+musl TLS spike (aarch64-unknown-linux-musl)   success   1m45s   ← never passed before
+docker-build (distroless image)               success   22m05s  ← never completed before
+```
+
+**Issue #45's proof has executed, in both halves, for the first time.** The two flush tests
+(`sigterm_/sigint_flushes_acknowledged_buffer_to_clickhouse`) pass inside `integration`, and the
+step at the end of `docker-build` — which had never run by *any* path, because the job kept dying
+on its 20-minute timeout — prints
+
+```
+docker stop -t 10: exit 0 after 0s (budget 5s)
+PASS  the image handles SIGTERM and exits cleanly inside the grace period
+```
+
+The issue stays **open** pending sign-off; this PR records the evidence rather than claiming it.
+
+`docker-build`'s 22m05s also settles the timeout as a measurement, not a guess: the old 20-minute
+budget was genuinely too small. And **`e2e-silver` is the one job in `docs/ci-gates.md` that has
+still never run** — it is a separate workflow, a `rust-ci` dispatch does not reach it, and nothing
+has triggered it. Its row remains a claim about a job, not a report from one.
+
+What follows is what the first heavy-lane run found, and how each was fixed.
+
+## The first heavy-lane run, and why it was red
 
 The weekly lane had **never executed** — zero `schedule` or `workflow_dispatch` events across
 143 runs. Run `37875017554` is the first, and it found three real defects plus one design flaw.
-All four are fixed here; none of them was findable without an actual run.
+All four are fixed here and all are green in the run above; none was findable without an actual run.
 
 ```
 release build                      success   ← had never executed; compiles clean
