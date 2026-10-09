@@ -496,6 +496,14 @@ Also this cycle, commit `d01e4ea` (`7689c16` before the rebase) removed 89 files
 agent layer (87) and the `meetings/` archive (2). `3a200ee` reverted the `.claude/` half, so those
 87 files are present and tracked; only `meetings/` stays deleted.
 
+**The weekly CI lane is green.** Run `37923509295` (`workflow_dispatch`, 2026-10-09) is the
+first all-success heavy-lane run: `gates`, `release build`, `supply-chain (cargo deny)`,
+`integration`, both `musl TLS spike` legs and `docker-build` at 22 m 05 s. `integration` had
+never passed before, and the `docker stop` assertion for issue #45 had never executed by any
+path — it now prints `docker stop -t 10: exit 0 after 0s (budget 5s)`. The issue stays open
+pending sign-off; the proof is on the record. `e2e-silver` is a separate workflow and has still
+never run. Detail in [`docs/ci-gates.md`](docs/ci-gates.md).
+
 **Unverified: nothing in the release lane has run against a real registry.** No GCP project, Artifact Registry repository or Workload Identity provider exists yet. Signing, attestation verification and `crane tag` on a multi-arch index have therefore not been exercised; [`infra/deploy/README.md`](infra/deploy/README.md) carries the specific "Unverified" notes and what to confirm on the first publish.
 
 **The vulnerability scan does not gate the push, and no longer tries to.** The scan step inside `release.yml` runs after `push: true` and inside a workflow nothing triggers, so on its own it met REQ-H-12 in form only. T24 was re-implemented off the push as [`image-scan.yml`](.github/workflows/image-scan.yml): a scan needs bytes, not a push, so it scans every shipped base image on the PR lane and the `docker save`d images weekly — a gate that runs and can fail, without a registry and without authorizing remote deploy. It is warn-only by one default (`IMAGE_SCAN_EXIT_CODE=0`), with the calibration numbers, the lane trade-off and the continuous teeth assertion recorded in [`docs/ci-gates.md`](docs/ci-gates.md). What still needs a registry — provenance, the SBOM attestation, cosign signing — stays deferred to T22/T23/T40 under DEC-A1/A2.

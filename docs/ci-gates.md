@@ -27,11 +27,11 @@ are weekly* below.
 | Workflow | Job | Lane | Covers | Required today | Promote when |
 |---|---|---|---|---|---|
 | `rust-ci` | `gates (fmt · clippy · test)` | **PR** | `cargo fmt --check`, `clippy -D warnings`, unit + golden + gRPC + doc tests | no | with the first required set |
-| `rust-ci` | `integration (every #[ignore]d test)` | **weekly** | every `#[ignore]`d test against a live ClickHouse (T09) — the round-trip, the gRPC export path, and **the SIGTERM flush proof for issue #45** — plus the orphan check that fails if an `#[ignore]`d test did not run | no | needs a ClickHouse service container; promote only if the PR lane gains one |
+| `rust-ci` | `integration (every #[ignore]d test)` | **weekly** | every `#[ignore]`d test against a live ClickHouse (T09) — the round-trip, the gRPC export path, and **the SIGTERM flush proof for issue #45** — plus the orphan check that fails if an `#[ignore]`d test did not run. Authenticates as `sentinel_migrator_u`, provisioned by `migrate.sh`; `default` is restricted to the container's loopback by the image itself, which is what made this job fail the first time it ran | no | needs a ClickHouse service container; promote only if the PR lane gains one |
 | `rust-ci` | `supply-chain (cargo deny)` | **PR** | licences, advisories, bans, `yanked = "deny"` | no | with the first required set |
 | `rust-ci` | `release build` | **weekly** | `cargo build --release --locked` | no | with the first required set |
 | `rust-ci` | `docker-build (distroless image)` | **weekly** | the image builds for `linux/amd64` **and `linux/arm64`**, `push: false` so a fork PR cannot publish. arm64 is emulated, so `docker/setup-qemu-action@v3` registers the binfmt handlers before buildx — without it the first non-native `RUN` fails with `exec format error` | no | with the first required set |
-| `rust-ci` | `musl TLS spike (<target>)` | **weekly** | T04's evidence for DEC-A4 — **not a gate**, and `continue-on-error` | no | never; delete with T42 |
+| `rust-ci` | `musl TLS spike (<target>)` | **weekly** | T04's evidence for DEC-A4 — **not a gate**, and `continue-on-error`. Needs `cargo-zigbuild`: `ring` compiles C for the target and a bare runner has no musl compiler for either triple | no | never; delete with T42 |
 | `python-ci` | `lint (ruff)` | **PR** | ruff over both Python packages | no | with the first required set |
 | `python-ci` | `test (python <version>)` | **PR** | pytest across the `PYTHON_IMAGE` matrix — 178 generator + 83 flow-ui | no | with the first required set |
 | `python-ci` | `supply-chain (pip-audit · bandit)` | **PR** | advisories + static security scan. `continue-on-error` at job level: it does not fail the **run**, but the **check** still reports failure (measured — see below) | no | after a lockfile exists (REQ-B-07) |
@@ -292,6 +292,59 @@ that green covers: the two base images as they stood on 2026-10-08, for amd64 an
 What it does **not** cover: the images as built (weekly lane, never yet run — its first run is the
 Monday schedule or a `workflow_dispatch`), anything below HIGH, unfixed findings, and every
 registry-side property T24 also named.
+
+**The weekly lane is green, and every claim in this table has now been executed at least once —
+except `e2e-silver`.** The heavy lane had never run at all until 2026-10-09. Its first run
+(`37875017554`) was red; `37923509295` is the second and it is **success on all seven jobs**:
+
+| Job | Result | Duration |
+|---|---|---|
+| `gates (fmt · clippy · test)` | success | 34 s |
+| `release build` | success | 43 s |
+| `supply-chain (cargo deny)` | success | 59 s |
+| `integration (every #[ignore]d test)` | **success** | 1 m 29 s |
+| `musl TLS spike (x86_64-unknown-linux-musl)` | **success** | 2 m 03 s |
+| `musl TLS spike (aarch64-unknown-linux-musl)` | **success** | 1 m 45 s |
+| `docker-build (distroless image)` | **success** | **22 m 05 s** |
+
+Four things that run tells us that nothing else could:
+
+**The `integration` job has never once passed before.** It now provisions the least-privilege
+roles with the repo's own `migrate.sh` — `migrate: 8 applied, 0 already applied`, so this is also
+the first CI exercise of the migration runner — and runs every `#[ignore]`d test as
+`sentinel_migrator_u`:
+
+```
+test golden_fixture_round_trip                         ... ok
+test otlp_grpc_payload_lands_in_clickhouse             ... ok
+test sigterm_flushes_acknowledged_buffer_to_clickhouse ... ok
+test sigint_flushes_acknowledged_buffer_to_clickhouse  ... ok
+integration targets: 5 declared, 5 attempted
+no orphans
+```
+
+**The SIGTERM flush proof for issue #45 has executed, in both halves.** The two flush tests above
+are the first half. The second is the step at the end of `docker-build`, which until this run had
+never executed by *any* path, because the job died on its 20-minute timeout:
+
+```
+docker stop -t 10: exit 0 after 0s (budget 5s)
+PASS  the image handles SIGTERM and exits cleanly inside the grace period
+```
+
+**`docker-build` took 22 m 05 s**, which settles the timeout question with a measurement rather
+than a guess: the old 20-minute budget was genuinely too small, not a flake. The budget is now 45,
+set for the cold-cache case.
+
+**The `musl TLS spike` has produced DEC-A4 evidence for the first time.** Both legs had been
+failing in `ring`'s build script for want of a target C compiler; both now compile and both pass
+the `statically linked | static-pie linked` assertion. The job still carries
+`continue-on-error`, so it is evidence and not a gate — but it is finally evidence.
+
+**`e2e-silver` is the one job in this document that has still never run.** It is a separate
+workflow, so a `rust-ci` dispatch does not reach it, and its triggers are `schedule`,
+`workflow_dispatch` and `push: branches: [main]` — none of which has fired for it. Everything in
+its row remains a claim about a job, not a report from one.
 
 Branch protection remains unset (issue #35), so every "no" in the Required column still
 stands — but it is now a policy gap, not a platform one. Configuring a required set is
