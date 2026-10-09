@@ -39,10 +39,25 @@ on:
   schedule:
     - cron: "0 6 * * 1" # weekly heavy gates
 
-# Cancel superseded runs on the same ref to save CI minutes.
+# Cancel superseded runs on the same ref to save CI minutes — but only for the
+# cheap, automatic lanes.
+#
+# The group used to be `rust-ci-${{ github.ref }}` for every event with
+# `cancel-in-progress: true`, which put the heavy lane and the PR lane in one
+# group: a `workflow_dispatch` or `schedule` run on a branch somebody is working
+# on was cancellable by the next push to that branch. The heavy lane takes
+# 20-45 minutes, so on an active branch it could essentially never finish — and
+# the one job that proves issue #45 lives there. (It is NOT what killed
+# `docker-build` in run 37875017554: that one died on `timeout-minutes`, at
+# 20m18s. The flaw is real regardless, and cheap to close.)
+#
+# Keying the group on the event name keeps the cost saving exactly where it was
+# aimed — successive pushes to one PR still supersede each other — while a
+# manual or scheduled run gets a group of its own and is never cancelled by
+# someone else's push.
 concurrency:
-  group: rust-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: rust-ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   # ── fmt · clippy · unit/golden tests · release build ──────────────────────
@@ -100,9 +115,42 @@ jobs:
       - name: Install pinned toolchain and target
         working-directory: services/collector-rust
         run: rustup show
+
+      # Why a cross toolchain is needed at all, found by running this job for the
+      # first time (run 37875017554): both matrix legs died identically in
+      # `ring 0.17.14`'s build script —
+      #
+      #   warning: ring@0.17.14: ToolNotFound: failed to find tool
+      #     "x86_64-linux-musl-gcc"
+      #   error: failed to run custom build command for `ring v0.17.14`
+      #
+      # `ring` compiles C and assembly, so `cc-rs` needs a C compiler FOR THE
+      # TARGET, which a bare runner has for neither musl triple. DEC-A4's `[M2]`
+      # measurement was taken inside a `rust:1.96` container that had `musl-tools`
+      # installed, which is precisely the difference nobody noticed.
+      #
+      # `musl-tools` alone would not fix this: it installs `/usr/bin/musl-gcc`
+      # for the host architecture only, so the aarch64 leg would still have no
+      # compiler and no linker. `cargo-zigbuild` uses Zig as the cross C compiler
+      # and linker and covers BOTH triples with one install, which is why it is
+      # preferred here over `musl-tools` plus a hand-written matrix of
+      # `CC_<target>` / `CARGO_TARGET_<TARGET>_LINKER` variables, and over
+      # `cross` (which would pull a container image per target).
+      #
+      # Verified before committing: inside `rust:1.96` on an arm64 host — so one
+      # leg a genuine cross-compile, `ring` in the graph both times — zigbuild
+      # produced `x86_64 … statically linked` and `ARM aarch64 … statically
+      # linked`. Deliberately unpinned: the current release is what was verified,
+      # and a version pin guessed without running it would be a certain failure
+      # rather than a small risk. Both musl targets come from
+      # `rust-toolchain.toml`'s `targets = [...]`, so `rustup show` above already
+      # installed their std.
+      - name: Install the Zig-based musl cross toolchain
+        run: pip install --break-system-packages --quiet cargo-zigbuild ziglang
+
       - name: Compile static TLS experiment
         working-directory: services/collector-rust
-        run: cargo build --release --locked --features tls-spike --target ${{ matrix.target }}
+        run: cargo zigbuild --release --locked --features tls-spike --target ${{ matrix.target }}
       # Both spellings are static. `file` says "statically linked" for the
       # aarch64 build and "static-pie linked" for x86_64, which is a
       # position-independent static executable and no less static — measured
@@ -149,11 +197,57 @@ jobs:
       - name: Start ClickHouse
         run: docker compose -f services/collector-rust/infra/docker-compose.yml up -d --wait
 
+      # The first ever run of this job (37875017554) failed here, and the reason
+      # is worth writing down because the error message points the wrong way:
+      #
+      #   Code: 194 … default: Authentication failed: password is incorrect, or
+      #   there is no user with such name. (REQUIRED_PASSWORD)
+      #
+      # It is not a password. `clickhouse/clickhouse-server` ships
+      # `users.d/default-user.xml`, which restricts `default` to `::1` and
+      # `127.0.0.1` **inside the container**; `cargo test` runs on the host and
+      # arrives through the published port from the Docker bridge, so it matches
+      # no network entry for `default` and ClickHouse reports the generic 194.
+      # Verified locally against 25.4.13.22: `clickhouse-client` inside the
+      # container answers `SELECT 1`; the same query from the host returns 194.
+      # Until T19 the repo mounted a `users.d` override opening `::/0` for
+      # `default`; T19 deleted it (REQ-B-14) and nothing noticed, because this
+      # job had never run.
+      #
+      # So the fix is the repo's own least-privilege identity, not a hole in the
+      # ACL: `0002_roles.sql` creates `sentinel_migrator_u` with no `HOST` clause
+      # and the grants a schema-owning identity should hold. Provisioned with
+      # `migrate.sh`, not hand-written SQL, so this job also becomes the first
+      # CI exercise of the migration runner.
+      #
+      # The password is generated per run and written to a file under
+      # RUNNER_TEMP — a path, never a value, matching SPEC §14.2 and
+      # `migrate.sh`'s own MIGRATION_PW_FILE reasoning. It never reaches an argv.
+      # Not `infra/secrets/`: nothing should write a real credential into the
+      # repo tree that `04-no-plaintext-secrets` polices.
+      - name: Provision the least-privilege roles
+        run: |
+          set -euo pipefail
+          umask 077
+          openssl rand -hex 24 > "$RUNNER_TEMP/ch_password"
+          MIGRATION_PW_FILE="$RUNNER_TEMP/ch_password" \
+          CH_CLIENT="docker compose -f services/collector-rust/infra/docker-compose.yml exec -T clickhouse clickhouse-client" \
+            bash infra/clickhouse/migrate.sh
+
       # Every #[ignore]d test in every target. No --test filter: a filter is how
       # the gRPC round-trip came to run nowhere. The log is kept for the orphan
       # check below, which asserts against what actually ran.
+      # `tests/support/mod.rs` turns these two into the client's credential and
+      # into the `clickhouse:` block of the config the SIGTERM test writes for
+      # the collector process it spawns, so the writer and the verifier
+      # authenticate identically. No new `std::env::var` in `src/`:
+      # `clippy.toml` bans it there and the URL still comes through
+      # `clickhouse_exporter::url_from_env`.
       - name: Live tests (all #[ignore]d)
         working-directory: services/collector-rust
+        env:
+          CLICKHOUSE_USER: sentinel_migrator_u
+          CLICKHOUSE_PASSWORD_FILE: ${{ runner.temp }}/ch_password
         run: |
           set -o pipefail
           cargo test --locked -- --ignored 2>&1 | tee "$RUNNER_TEMP/ignored.log"
@@ -247,7 +341,16 @@ jobs:
     name: docker-build (distroless image)
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 45, not 20. Measured on run 37875017554, the first time this job ever
+    # executed: started 02:32:00, cancelled 02:52:18 — 20m18s against a 20-minute
+    # budget, eighteen seconds over. The arm64 leg is a full Rust musl compile
+    # under QEMU emulation with a cold `type=gha` cache, and that is simply more
+    # than twenty minutes of work. Because it timed out, the `docker stop`
+    # assertion for issue #45 at the end of this job has still never run by any
+    # path. A warm cache should bring this well under the new ceiling; the ceiling
+    # is set for the cold case, because the cold case is what a weekly run gets
+    # after a dependency bump.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       # arm64 is built by emulation on an amd64 runner. buildx alone reports
