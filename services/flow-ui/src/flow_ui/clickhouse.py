@@ -97,8 +97,11 @@ class ClickHouse:
         database: str,
         timeout: float = 4.0,
         user: str = "",
+        # `password_file` is a path to a credential, never a credential (T06,
+        # REQ-H-05). The empty default means "none supplied" — `_auth_headers`
+        # then sets no `X-ClickHouse-Key` at all. Not a default password.
         password_file: str = "",
-    ) -> None:
+    ) -> None:  # nosec B107
         self._url = url.rstrip("/")
         self._db = database
         self._client = httpx.AsyncClient(timeout=timeout, headers=_auth_headers(user, password_file))

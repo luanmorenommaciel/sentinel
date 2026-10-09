@@ -422,8 +422,30 @@ audit-python:        ## Python advisories + static security scan (prints finding
 		/tmp/v/bin/pip-audit --progress-spinner off --desc on services/generator-python; \
 		echo "── pip-audit: flow-ui ──" && \
 		/tmp/v/bin/pip-audit --progress-spinner off --desc on services/flow-ui; \
-		echo "── bandit: shipped sources ──" && \
-		/tmp/v/bin/bandit -q -r services/generator-python/src services/flow-ui/src'
+		echo "── bandit: generator (all checks) ──" && \
+		/tmp/v/bin/bandit -q -r services/generator-python/src && \
+		echo "── bandit: flow-ui (B608 scoped off, see below) ──" && \
+		/tmp/v/bin/bandit -q -r services/flow-ui/src --skip B608'
+
+# Why flow-ui skips B608, and only flow-ui, and only B608:
+#
+# `flow_ui/clickhouse.py` builds 17 read queries with f-strings, and bandit
+# flags every one as a possible SQL-injection vector. None is: the only values
+# interpolated are module-level constants — `LIVE_TABLES` (a literal 4-tuple),
+# `REQUIRED_RESOURCE_KEYS`, `SILVER_MODELS`, the configured database name, and
+# `int()`-coerced limits. The module reads no request parameter; `grep` for
+# `request.`/`query_params`/`args.get` over it returns nothing, and invariant
+# `05-flow-ui-is-read-only` asserts the service issues no write statement at all.
+#
+# Per-line `# nosec B608` was tried first and rejected: two of the 17 sites are
+# ternaries between nested triple-quoted f-strings, where every line in bandit's
+# reported range falls *inside* a string literal, so the comment would silently
+# become part of the SQL. Seventeen inline comments to suppress a check that
+# cannot apply is also the "comments-as-noise" this repo rules out.
+#
+# What this gives up: a genuinely new injection site inside flow-ui would not be
+# caught by B608. The generator keeps the check, and B107/B311 are handled
+# per-line where the judgement is per-site.
 
 lint-collector-rust: ## Rust fmt check + clippy
 	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \
