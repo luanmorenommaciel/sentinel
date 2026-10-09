@@ -32,9 +32,9 @@
 #
 # `rust-ci.yml` is deliberately NOT edited for this: REQ-I-03 calls it load-bearing,
 # and `up -d --wait` / `down -v` against this path keep working unchanged.
+# No `volumes:` block here. This file used to re-declare `clickhouse_data` to
+# pin its name, which older Compose rejects as a conflict with the imported
+# resource — the pin now lives in the included file and arrives with the
+# import.
 include:
   - ../../../infra/clickhouse/compose.clickhouse.yml
-
-volumes:
-  clickhouse_data:
-    name: sentinel-clickhouse-data
