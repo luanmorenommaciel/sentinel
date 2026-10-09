@@ -1,0 +1,142 @@
+---
+name: {skill-name}
+description: {One-line description of what this skill does. Use when {trigger condition}.}
+argument-hint: "{usage pattern with [optional] and <required> args}"
+---
+
+# /{skill-name}
+
+{One-sentence description of purpose and when to use.}
+
+## Usage
+
+```bash
+/{skill-name}                        # Default behavior
+/{skill-name} <required-arg>         # With required argument
+/{skill-name} --flag                 # With optional flag
+```
+
+Examples:
+- `/{skill-name} {concrete-example-1}`
+- `/{skill-name} {concrete-example-2}`
+
+---
+
+## What it does
+
+{2-3 bullet points explaining the skill's behavior at a high level.}
+
+1. **{Step verb}** — {what happens}
+2. **{Step verb}** — {what happens}
+3. **{Step verb}** — {what happens}
+
+---
+
+## Execution steps
+
+### Step 1: {Validate / gather input}
+
+{Describe what the skill checks or asks before starting. Use AskUserQuestion only when there's a genuine decision the user must make.}
+
+```text
+# Illustrative tool calls
+Read("{file}")
+Glob("{pattern}")
+```
+
+### Step 2: {Core logic}
+
+{Describe the main processing step. Include tool-call patterns where useful.}
+
+```text
+# Illustrative tool calls
+Grep("{pattern}")
+Edit("{file}", old_string=..., new_string=...)
+# Or dispatch a subagent:
+Agent(subagent_type="{agent-name}", description="{purpose}", prompt="...")
+```
+
+### Step 3: {Output / verify}
+
+{Describe what the skill produces and how it verifies success.}
+
+```text
+{SKILL-NAME} RESULTS
+────────────────────
+{Summary of what was done}
+Files written: ...
+Confidence: ...
+Next steps: ...
+```
+
+---
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview changes without writing |
+| `{--flag}` | {Description} |
+
+---
+
+## Conventions
+
+- **{Sentinel-specific naming or path convention this skill enforces}**
+- **Idempotent.** Re-running the skill converges to the same state — does not duplicate.
+- **Attribution.** When the skill commits, mandatory `Co-Authored-By` trailers per the Crew B contract.
+- **No emojis** (project rule).
+- **Mermaid for diagrams** (project rule — never ASCII art).
+
+---
+
+## Conventions for files this skill produces
+
+| Path pattern | Format | Notes |
+|---|---|---|
+| `{output-path-1}` | `.md` / `.yaml` / `.rs` / ... | {What it represents} |
+| `{output-path-2}` | ... | ... |
+
+---
+
+## Examples
+
+```bash
+# Example 1: {description}
+/{skill-name} {args}
+
+# Example 2: {description}
+/{skill-name} {args}
+
+# Example 3: {edge / error case}
+/{skill-name} {args-that-trigger-edge}
+```
+
+---
+
+## When NOT to use
+
+- {Anti-trigger 1 — a related task that belongs to a different skill or agent}
+- {Anti-trigger 2}
+
+---
+
+## Notes
+
+- {Important constraint or behavior to document}
+- {Edge case or prerequisite}
+- {Relationship to other skills if applicable}
+
+---
+
+## Related
+
+- `/{sibling-skill-1}` — {how it relates}
+- `/{sibling-skill-2}` — {how it relates}
+- `{agent-name}` agent — {which agent this skill dispatches, if any}
+- `.claude/kb/{relevant-kb}/index.md` — {primary KB the skill consumes}
+- `.claude/docs/{relevant-doc}.md` — {project doc the skill references}
+
+---
+
+*Authored from `.claude/skills/_template.md.example`. Update the template when the skill shape evolves — skills authored before the update may not reflect the latest conventions.*

@@ -1,0 +1,89 @@
+---
+title: {{DOMAIN_DISPLAY_NAME}}
+last_updated: {{VALIDATION_DATE}}
+confidence: {{CONFIDENCE}}
+---
+
+# {{DOMAIN_DISPLAY_NAME}} Knowledge Base
+
+> **Purpose**: {{DOMAIN_DESCRIPTION}}
+> **MCP Validated**: {{VALIDATION_DATE}}
+> **Sentinel context**: {{SENTINEL_RELEVANCE}}
+
+## Quick Navigation
+
+### Concepts (< 150 lines each)
+
+| File | Purpose |
+|------|---------|
+| [concepts/{{CONCEPT_1}}.md](concepts/{{CONCEPT_1}}.md) | {{CONCEPT_1_PURPOSE}} |
+| [concepts/{{CONCEPT_2}}.md](concepts/{{CONCEPT_2}}.md) | {{CONCEPT_2_PURPOSE}} |
+
+### Patterns (< 200 lines each)
+
+| File | Purpose |
+|------|---------|
+| [patterns/{{PATTERN_1}}.md](patterns/{{PATTERN_1}}.md) | {{PATTERN_1_PURPOSE}} |
+| [patterns/{{PATTERN_2}}.md](patterns/{{PATTERN_2}}.md) | {{PATTERN_2_PURPOSE}} |
+
+### Reference (comprehensive)
+
+| File | Purpose |
+|------|---------|
+| [reference/{{REF_1}}.md](reference/{{REF_1}}.md) | {{REF_1_PURPOSE}} |
+
+### Specs (machine-readable)
+
+| File | Purpose |
+|------|---------|
+| [specs/{{SPEC_1}}.yaml](specs/{{SPEC_1}}.yaml) | {{SPEC_1_PURPOSE}} |
+
+---
+
+## Quick Reference
+
+- [quick-reference.md](quick-reference.md) — Fast lookup tables, snippets, gotchas.
+
+---
+
+## Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **{{KEY_CONCEPT_1}}** | {{KEY_CONCEPT_1_DESC}} |
+| **{{KEY_CONCEPT_2}}** | {{KEY_CONCEPT_2_DESC}} |
+
+---
+
+## Sentinel Touch Points
+
+| Watcher / Pod / Component | How this KB applies |
+|---|---|
+| {{TOUCHPOINT_1}} | {{TOUCHPOINT_1_DESC}} |
+
+---
+
+## Learning Path
+
+| Level | Files |
+|-------|-------|
+| **Beginner** | concepts/{{BEGINNER_PATH}} |
+| **Intermediate** | patterns/{{INTERMEDIATE_PATH}} |
+| **Advanced** | reference/{{ADVANCED_PATH}} |
+
+---
+
+## Agent Usage
+
+| Agent | Primary Files | Use Case |
+|-------|---------------|----------|
+| {{AGENT_NAME}} | {{PRIMARY_FILES}} | {{USE_CASE}} |
+
+---
+
+## See also
+
+- [`.claude/CLAUDE.md`](../../CLAUDE.md) — project context
+- [`.claude/kb/README.md`](../README.md) — KB index
+- Related KBs: {{RELATED_KBS}}
+- Related ADRs: {{RELATED_ADRS}}

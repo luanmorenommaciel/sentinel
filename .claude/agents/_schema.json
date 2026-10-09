@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": ".claude/agents/_schema.json",
+  "title": "Sentinel Agent Frontmatter Schema",
+  "description": "Reference schema for the YAML frontmatter of every .claude/agents/**/*.md file. PORTED FROM UPSTREAM (claude-code-lab) and adapted: color/kb_domains/<example> blocks are recommended-not-required so the initial Sentinel agent fleet (12 agents at bootstrap) passes. Tighten requirements as the fleet matures. No CI gate yet (per the Phase-0 bootstrap decision); see .claude/docs/ROADMAP.md for when to enforce.",
+  "type": "object",
+  "required": ["name", "description", "tools", "model"],
+  "additionalProperties": true,
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]+$",
+      "description": "kebab-case identifier; must match the filename without .md."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 50,
+      "description": "One sentence summary + 'Use PROACTIVELY when …' trigger. Auto-invocation depends on the exact 'Use PROACTIVELY' phrasing. Recommended: include at least one <example> block describing a worked invocation."
+    },
+    "tools": {
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Comma-separated tool list (current Sentinel convention from bootstrap)."
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^(Read|Write|Edit|MultiEdit|Bash|Grep|Glob|TodoWrite|WebSearch|WebFetch|mcp__.*)$"
+          },
+          "description": "Tool list as YAML array (lab convention; preferred long-term)."
+        }
+      ],
+      "description": "Whitelist of tools the agent may use. mcp__* wildcards allowed."
+    },
+    "model": {
+      "type": "string",
+      "enum": ["opus", "sonnet", "haiku"],
+      "description": "Model tier. Picking guide: haiku = simple lookups, classification, format conversion. sonnet = most engineering work (default). opus = deep design, complex multi-step planning, hard debugging."
+    },
+    "disallowedTools": {
+      "type": "string",
+      "description": "Optional. Space-separated list of tools the agent must not use (e.g., 'Write Edit' for read-only agents)."
+    },
+    "color": {
+      "type": "string",
+      "enum": ["blue", "green", "orange", "purple", "red", "yellow", "cyan"],
+      "description": "Optional in Sentinel today; required in upstream lab. Color tag for UI hint. Adopt when the fleet grows past ~20 agents and visual grouping helps."
+    },
+    "kb_domains": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Optional in Sentinel today; required in upstream lab. Leaf folder names from .claude/kb/ this agent consults. Empty array [] is valid for cross-cutting agents (workflow, exploration, communication). Documenting kb_domains enables automated KB <-> agent linkage; recommended for new agents."
+    },
+    "memory": {
+      "type": "string",
+      "enum": ["user"],
+      "description": "Optional. Set to 'user' for agents that benefit from cross-session memory."
+    },
+    "effort": {
+      "type": "string",
+      "enum": ["low", "standard", "high"],
+      "description": "Optional. Reasoning intensity hint. low = file ops/summarization, standard = most agents (default), high = complex multi-step reasoning."
+    },
+    "docs_refs": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Optional. Filenames from .claude/docs/ this agent should consult. Sentinel-specific: rust-specialist should declare 'RUST_PROJECT_STANDARDS.md', for example."
+    }
+  }
+}

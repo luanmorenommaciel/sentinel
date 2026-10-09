@@ -72,7 +72,8 @@ invariant 09 fails the build on a hard-coded `127.0.0.1:<port>` anywhere in it.
   and `silver.*` read-only, plus Pod 1's `topology/default.yaml` and the collector's
   `config.docker.yaml`, both mounted read-only — the picture is drawn from the files that define the thing, so it
   cannot drift from them. Nothing in the pipeline depends on it being up.
-- **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*. One `git worktree` per agent under `.worktrees/`, branches named `leg/<area>/<task>-v<n>`, and **every leg declares disjoint paths** before it opens. The ADR is the record; the `.claude/` companion that carried the commands was removed in `7689c16`. Export a shared `CARGO_TARGET_DIR` before running a fleet, or N worktrees means N cold Rust builds.
+- **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*. One `git worktree` per agent under `.worktrees/`, branches named `leg/<area>/<task>-v<n>`, and **every leg declares disjoint paths** before it opens. The ADR is the record; [`.claude/docs/AGENTIC_GITFLOW.md`](.claude/docs/AGENTIC_GITFLOW.md) is the practical companion, restored alongside the rest of `.claude/` (agents, skills, KB, rules) after it was briefly deleted on this branch. Export a shared `CARGO_TARGET_DIR` before running a fleet, or N worktrees means N cold Rust builds.
+- **The delivery process is one page: [`docs/sdlc.md`](docs/sdlc.md).** Stage → Artifact → Gate → Owner, from `prompts/00..03` through `plan/`, `plan/decisions/`, `docs/ci-gates.md`, the PR template and README §8. It is a consolidation, not a new process — the method is the installed Matt Pocock skill chain (`/grilling` → `/to-spec` → `/to-tickets` → `/implement` → `/code-review`) wrapped in this repo's gates.
 - **No comments-as-noise**; match each service's existing style. Keep the repo clean for the agentic phase that follows this baseline.
 
 ## Gotchas
@@ -114,7 +115,7 @@ repositories on the account, so none of the CI above has actually executed.
 | Drift | Where | Resolution owner |
 |---|---|---|
 | ADR-0007 / ADR-0008 still `Proposed` | `docs/adr/` | cross-Pod ratification at sync |
-| Pod↔layer mapping unratified (README POD3 = storage/read-layer vs the removed `.claude/CLAUDE.md`'s B3 = watchers). The second source is gone as of `7689c16`, so README is now the only statement — ratify it rather than reconcile two | `README.md` | Captain / Commander |
+| Pod↔layer mapping unratified: README POD3 = storage/read-layer vs [`.claude/CLAUDE.md`](.claude/CLAUDE.md)'s B3 = Volume/Schema/Latency/Storage watchers. Both sources are live again now that `.claude/` is restored, so this needs a ratification that reconciles the two — `.claude/CLAUDE.md` already carries a do-not-propagate warning on its own table | `README.md` + `.claude/CLAUDE.md` | Captain / Commander |
 | ADR-0009 amends the WoW's "squash-merge to main" rule | `docs/adr/0009-agentic-gitflow.md` | Captain / Commander |
 
 Historical records under `docs/research/`, `docs/proposals/`, `docs/clickhouse-schema-divergence*.md`, `intent/` and `spec/` are point-in-time artifacts — they mention the Go collector by design. Don't "fix" them; they carry a superseded banner. **`plan/` is not in that set:** `plan/core-plan.md` is the live ticket registry and `plan/decisions/` are live briefs that gain evidence until their decision is taken. Amend those; don't freeze them.

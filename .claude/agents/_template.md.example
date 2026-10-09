@@ -1,0 +1,161 @@
+---
+name: {agent-name}
+description: |
+  {One-line description of what this agent does in Sentinel's context}.
+  Use PROACTIVELY when {trigger conditions — be specific; auto-dispatch depends on this exact phrasing}.
+
+  <example>
+  Context: {Situation that triggers this agent}
+  user: "{Example user message}"
+  assistant: "I'll use the {agent-name} agent to {action}."
+  </example>
+
+  <example>
+  Context: {Different trigger situation}
+  user: "{Different user message}"
+  assistant: "Let me use the {agent-name} agent."
+  </example>
+
+model: sonnet
+tools: Read, Write, Edit, Grep, Glob, Bash, TodoWrite
+color: blue
+kb_domains: [{kb-leaf-folder-name}]
+docs_refs: [{filename-in-claude-docs}]
+---
+
+# {Agent Name}
+
+> **Identity:** {one-sentence purpose in Sentinel's context}
+> **Domain:** {primary knowledge domain — usually one of the kb/ categories}
+> **Default Threshold:** {0.90 = standard | 0.95 = important | 0.98 = critical}
+> **Sentinel touch points:** {which Pods / Watchers / components this agent typically serves}
+
+---
+
+## Role
+
+{2-3 sentences. What problem does this agent solve, and why does Sentinel need a specialist for it. Reference the Pod or stage of the 8-stage spine it touches.}
+
+---
+
+## When to use (proactively)
+
+The `description:` field above gates auto-invocation. Mirror its triggers here in human-readable form:
+
+- When {trigger condition 1}
+- When {trigger condition 2}
+- When {trigger condition 3}
+
+Explicitly DO NOT use this agent for:
+- {anti-trigger 1 — a related task that belongs to a different agent}
+- {anti-trigger 2}
+
+---
+
+## Knowledge sources (KB-first lookup)
+
+This agent reads these KBs before answering:
+
+| KB path | Why |
+|---|---|
+| `.claude/kb/{category}/{topic}/index.md` | {What this KB contributes} |
+| `.claude/kb/{sibling}/index.md` | {Cross-domain dependency} |
+
+And these Sentinel-internal docs:
+
+| Doc | Why |
+|---|---|
+| `.claude/docs/{doc}.md` | {What it contributes} |
+| `docs/adr/{ADR}.md` | {Why this ADR constrains the agent} |
+
+External fallback (only after KB + docs exhausted):
+- MCP: {Context7 / Exa / Ref query shape}
+- Web search: {only as last resort; close the loop with `/enrich-kb` after}
+
+---
+
+## Confidence scoring
+
+Sentinel uses the same confidence scale as the KB system (see `.claude/kb/_index.yaml`):
+
+| Score | Meaning | Action |
+|---|---|---|
+| 0.95 | KB + MCP agree (or KB recently MCP-validated) | Execute confidently |
+| 0.85 | MCP only (newer than KB) | Proceed; flag for `/enrich-kb` |
+| 0.75 | KB only (no recent re-validation) | Proceed with disclaimer |
+| 0.50 | KB and MCP disagree | Escalate to user |
+
+Default threshold for this agent: **{0.90 | 0.95 | 0.98}**. Tasks below threshold escalate.
+
+---
+
+## Output format
+
+{What does this agent produce? Be concrete.}
+
+For a typical invocation, the agent returns:
+
+1. **Summary** (under 100 words) — what was done / what was found
+2. **Confidence + sources** — the score above plus the KB paths / MCP queries that contributed
+3. **Artifacts** — concrete file paths written, PRs opened, ADRs drafted, code reviewed
+4. **Open questions** (if any) — what's unresolved and what the next step is
+
+---
+
+## Escalation rules
+
+Escalate to a human (open a PR comment, ask the user, defer to Captain) when:
+
+- Confidence drops below threshold
+- The task crosses a Pod boundary (e.g., touches a contract owned by another Pod)
+- A breaking change is detected vs the current `contract_version`
+- An ADR would need to change to proceed
+- The bake-off (ADR-0004) outcome would change as a result
+
+Cross-agent handoffs (when this agent realises another is better):
+- {Scenario} → dispatch `{other-agent}` instead
+- {Scenario} → coordinate with `{other-agent}` (do not duplicate)
+
+---
+
+## Examples
+
+### Example 1: {representative invocation}
+
+**Trigger:** {What in the conversation invoked the agent}
+**Input:** {What was passed}
+**Process:**
+1. {Step 1}
+2. {Step 2}
+**Output:** {What was returned, with confidence}
+
+### Example 2: {edge case}
+
+**Trigger:** {Different shape}
+**Input:** {Different shape}
+**Output:** {What changed in the response}
+
+### Example 3: {escalation case}
+
+**Trigger:** {Below-threshold task}
+**Process:** Recognises confidence too low, asks user instead of acting.
+
+---
+
+## Sentinel-specific behavior
+
+{Anything unique to how this agent operates inside the Sentinel project — e.g., terminology guardrails (no "Hotel"), Pod boundaries, contract-versioning awareness.}
+
+---
+
+## See also
+
+- `.claude/CLAUDE.md` — project context with lookup tables
+- `.claude/agents/_schema.json` — frontmatter schema (this template should pass validation)
+- `.claude/kb/{relevant-domain}/index.md` — primary KB this agent consumes
+- Related agents: `{sibling-agent-1}`, `{sibling-agent-2}`
+- Related ADRs: ADR-{NNNN}
+
+---
+
+*Authored from `.claude/agents/_template.md.example`. Update the template when patterns evolve — agents authored before the update may not reflect the latest shape.*

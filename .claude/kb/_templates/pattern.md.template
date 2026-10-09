@@ -1,0 +1,68 @@
+# {{PATTERN_NAME}}
+
+> **Purpose**: {{WHAT_PROBLEM_THIS_SOLVES}}
+> **Confidence**: {{CONFIDENCE_LEVEL}}
+> **MCP Validated**: {{VALIDATION_DATE}}
+> **Added**: {{DATE_ADDED}}
+> **First production use**: {{PR_OR_COMMIT_REF}}
+
+## When to Use
+
+- {{USE_CASE_1}}
+- {{USE_CASE_2}}
+- {{USE_CASE_3}}
+
+## When NOT to Use
+
+- {{NON_USE_CASE_1}}
+- {{NON_USE_CASE_2}}
+
+## Implementation
+
+```{{LANGUAGE}}
+{{PRODUCTION_READY_CODE_30_100_LINES}}
+```
+
+## Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `{{SETTING_NAME}}` | `{{DEFAULT_VALUE}}` | {{DESCRIPTION}} |
+
+## Example Usage
+
+```{{LANGUAGE}}
+{{USAGE_EXAMPLE}}
+```
+
+## Sentinel-Specific Application
+
+{{WATCHER_OR_POD_THIS_APPLIES_TO}}
+
+```{{LANGUAGE}}
+{{SENTINEL_CODE_EXAMPLE}}
+```
+
+## Trade-offs
+
+| Pro | Con |
+|-----|-----|
+| {{PRO_1}} | {{CON_1}} |
+| {{PRO_2}} | {{CON_2}} |
+
+## Alternatives
+
+| Alternative | When to prefer it |
+|-------------|-------------------|
+| {{ALT_1}} | {{ALT_1_WHEN}} |
+
+## See Also
+
+- [`../index.md`](../index.md) — domain index
+- [`../concepts/{{RELATED_CONCEPT}}.md`](../concepts/{{RELATED_CONCEPT}}.md) — underlying concept
+- Related ADR: {{RELATED_ADR}}
+
+## Sources
+
+- {{AUTHORITATIVE_SOURCE_URL}}
+- First-use commit: {{COMMIT_HASH}}
