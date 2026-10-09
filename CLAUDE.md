@@ -106,9 +106,18 @@ that scope and unverified against a deployed target.
 **Open:** ADR-0007 acceptance (Pod 3 sign-off) · histogram/summary metrics (no v1.0.0 type) ·
 branch protection, which is a GitHub setting and not a file — [`docs/ci-gates.md`](docs/ci-gates.md)
 is the required-check set to configure from, and `main` carries no rule today (issue #35) · the
-agentic layer (agent fleet, KBs, routines) · **GitHub Actions has been failing account-wide since
-2026-10-05** — jobs end in 1–3 s with no runner assigned, across every workflow here and other
-repositories on the account, so none of the CI above has actually executed.
+agentic layer (agent fleet, KBs, routines).
+
+**GitHub Actions resumed on 2026-10-08.** From 2026-10-05 it had been failing account-wide —
+jobs ending in 1–3 s with no runner assigned, across every workflow here and other repositories
+on the account — so for three days none of the CI above had executed. That is over: the first
+real run confirmed the lean two-lane split (the four heavy jobs skip on a PR) and surfaced three
+failures that no local run could, each fixed on `sdlc-e2e-review`. Details, per-check results
+and the one mechanism correction — `continue-on-error` keeps the **run** green but the **check**
+still reports failure — are in [`docs/ci-gates.md`](docs/ci-gates.md). Two consequences worth
+carrying: **a green local `run-invariants.sh` is not evidence about CI unless the Compose
+version matches** (v5.1.4 tolerates a volume conflict that v2.27/v2.39 reject), and branch
+protection is now a policy gap rather than a platform one.
 
 **Known doc drift** — decisions taken by merge that the records don't yet reflect:
 
