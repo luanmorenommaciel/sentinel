@@ -5,7 +5,7 @@
 **Ruling 2026-10-06:** defer TLS. T42 is not implemented in this cycle; requirements for
 a future deployed environment remain. See [the current-cycle ruling](DEC-2026-10-06-local-scope.md).
 
-Tags: **[M]** measured this session · **[S]** per spec §11.1 · **[D]** document assertion · **[R]** reasoned · **[M2]** measured 2026-10-06, T04's spike run locally.
+Tags: **[M]** measured this session · **[S]** per spec §11.1 · **[D]** document assertion · **[R]** reasoned · **[M2]** measured 2026-10-06, T04's spike run locally · **[M3]** observed 2026-10-09, T04's spike run in CI for the first time.
 
 ## 1. The question
 
@@ -37,10 +37,15 @@ Does the collector terminate TLS itself (server TLS on `:4317` and/or client TLS
 
 **[M2] T04 has now reported, and the prerequisite is satisfied on both targets.** The brief said
 "do not decide before T04 reports". T04's job (`rust-ci.yml:musl-tls-spike`) landed in this cycle
-but has never run: it is gated to `schedule`/`workflow_dispatch`, and no such event has ever fired
-(Actions was down account-wide 2026-10-05–10-08 and has since only served `pull_request` and `push`).
-Its exact command was therefore run locally on 2026-10-06, in `rust:1.96` containers with
-`musl-tools`:
+and was dispatched for the first time on 2026-10-09 (run `37875017554`), where it **failed on both
+targets**: `ring 0.17.14`'s build script aborts with `failed to find tool "x86_64-linux-musl-gcc"`
+(and the aarch64 equivalent), because the job installs the Rust target but no musl cross-linker.
+**[M3] That is a defect in the job, not in the result below.** The measurement was taken on
+2026-10-06 by running the job's exact command locally, in `rust:1.96` containers *with `musl-tools`
+installed* — which is exactly what the runner lacks. The static-link evidence stands; the job needs
+a musl cross-toolchain for both targets before CI can reproduce it, and until then T04's CI
+evidence is a red check rather than a confirmation. It carries `continue-on-error: true`, so it
+does not fail the run; it does report a failed check. The local measurement:
 
 | Target | `cargo build --release --locked --features tls-spike` | `file` says | Static? |
 |---|---|---|---|

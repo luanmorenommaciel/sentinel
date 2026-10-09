@@ -32,6 +32,8 @@ about a laptop, not about CI: during the 2026-10-05–10-08 Actions outage `run-
 passed 10/10 here while failing 2/10 on the runner, purely on a Compose version difference.
 Actions runs again as of 2026-10-08 and the **PR lane** (`gates`, `lint`, the pytest matrix,
 both supply-chain jobs, `invariants`, `linked-issue`) now proves something. The **weekly lane**
-still does not: no `schedule` or `workflow_dispatch` event has ever fired, so `release build`,
-`docker-build`, `integration` and `e2e-silver` have no real run behind them. A ticket is Done
+proves much less: it was dispatched by hand for the first time on 2026-10-09 (run
+`37875017554`) and came back red — only `release build` passed, `integration` and both
+`musl TLS spike` legs failed, `docker-build` hit its 20-minute timeout, and `e2e-silver`
+has still never executed. Treat a weekly job as unproven until you have read its run. A ticket is Done
 when its checks are green **in CI** and the code is on `main`; until then it is *Done (local)*.
