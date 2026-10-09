@@ -4,7 +4,49 @@ CI that actually runs, on a single pinned ClickHouse, with the delivery path's
 documentation consolidated into one page. The pipeline itself — generator → collector →
 `bronze.*` — is untouched.
 
-50 commits, 122 files, rebased onto `main` at `1aa8d92` (which carries PR #59).
+**52 commits, 123 files changed**, rebased onto `main` at `1aa8d92`,
+which carries PR #59.
+
+<details>
+<summary>Why you may have seen 44 commits / 200 files quoted earlier</summary>
+
+Four different measures were in circulation. The two in the line above are the ones this
+PR's own diff shows — commits since the merge-base with `main`, and files in
+`git diff origin/main...HEAD`:
+
+```
+$ git rev-list --count origin/main..HEAD                       #  commits in the PR
+52
+$ git diff --name-only origin/main...HEAD | wc -l              #  files in the PR diff
+123
+$ git rev-list --count origin/origin/sdlc-e2e-review..HEAD      #  commits not on the old
+54                                                              #  remote head (pre-rebase)
+$ git log --format='' --name-only origin/main..HEAD \
+    | sed '/^$/d' | sort -u | wc -l                             #  files touched across all
+210                                                             #  commits, union
+```
+
+**54** counts against the stale remote head `ac0b633`, so it also includes `main`'s own two
+commits that the old head predates. **210** is the union across every commit, including files
+a later commit reverted — which is where the "~200 files" figure came from.
+
+The PR diff fell from **207** files to **123** for one reason: restoring `.claude/` removed 87
+deletion entries from it. The arithmetic closes exactly:
+
+```
+$ git diff --name-only origin/main...93141c4 | wc -l            #  before any of this work
+207
+$ git diff --name-only origin/main...93141c4 | grep -c '^\.claude/'
+87
+
+207 − 87 restored + 3 new files (docs/sdlc.md, docs/pr-body-sdlc-e2e-review.md,
+                                services/collector-rust/tests/docker-stop.test.sh) = 123
+```
+
+The earlier "44 commits" was measured before the rebase, against the old merge-base
+`3af2ee7`; that count is now 47 for the same range, plus the 5 commits added by this work.
+
+</details>
 
 ```diff
  .github/workflows/
@@ -38,7 +80,7 @@ trade-off in writing.
 
 This branch was **not** split into the five focused PRs that were considered (Process
 Docs · CI · Migrations · Silver/Backfill · Flow-UI). The split lines cut through
-individual commits rather than between them — measured, not assumed: **24 of 50 commits
+individual commits rather than between them — measured, not assumed: **24 of 52 commits
 touch more than one of those five areas**, and the two commits below are the worst cases.
 Splitting would mean rewriting commit *contents*, not reordering them.
 
