@@ -772,9 +772,17 @@ in the gated-off `release.yml`, unchanged, under DEC-A1/A2. T24's literal words,
 **push**", are not met and cannot be. What REQ-H-12 asks for — crate-level vulnerability
 discipline extended to container images, in a gate that runs and can fail — is.
 
-**Status: Done (local), pending the CI result recorded in `docs/ci-gates.md`.** Reasoning, lane
-choice, the trade-off and the one-flag flip are all in *The image scan, and why it is not in
-`release.yml`* there.
+**CI evidence.** Run `37876581847` (18 s): both platforms of both shipped base images at
+`0 HIGH / 0 CRITICAL`, the teeth fixture at `6 fixable CRITICAL`, and the built-image job
+correctly skipped on the PR. Run `37876696811`, from a one-commit flip to
+`IMAGE_SCAN_EXIT_CODE=1` / `IMAGE_SCAN_IGNORE_UNFIXED=false` and reverted immediately after,
+concluded **failure** — `44 HIGH` on each platform, `88 finding(s) … makes them blocking`,
+`exit code 2`. So both directions are proven on a runner, not only on a laptop.
+
+**Status: Done (local).** The PR lane is green and the negative proof is live; the weekly
+built-image lane is the part still carrying less evidence. Reasoning, lane choice, the trade-off,
+the calibration numbers and the one-flag flip are all in *The image scan, and why it is not in
+`release.yml`* in `docs/ci-gates.md`.
 
 ---
 
