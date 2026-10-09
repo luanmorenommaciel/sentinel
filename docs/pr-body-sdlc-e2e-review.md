@@ -4,9 +4,9 @@ CI that actually runs, on a single pinned ClickHouse, with the delivery path's
 documentation consolidated into one page. The pipeline itself — generator → collector →
 `bronze.*` — is untouched.
 
-**61 commits, 126 files changed**, rebased onto `main` at `1aa8d92`, which carries PR #59.
-Both figures are measured at the commit that carries this body, with the two commands in the
-block below; a further commit on the branch moves the commit count and may move the file count.
+**67 commits, 128 files changed as of `408be12`**, rebased onto `main` at `1aa8d92`, which
+carries PR #59. Every figure below names the commit it was measured at, because this branch is
+still receiving commits: re-run the commands in the block for the current head.
 
 <details>
 <summary>Why you may have seen 44 commits / 200 files quoted earlier</summary>
@@ -16,24 +16,24 @@ PR's own diff shows — commits since the merge-base with `main`, and files in
 `git diff origin/main...HEAD`:
 
 ```
-$ git rev-list --count origin/main..HEAD                       #  commits in the PR
-61
-$ git diff --name-only origin/main...HEAD | wc -l              #  files in the PR diff
-126
+$ git rev-list --count origin/main..408be12                    #  commits in the PR
+67
+$ git diff --name-only origin/main...408be12 | wc -l           #  files in the PR diff
+128
 $ git rev-list --count origin/origin/sdlc-e2e-review..HEAD      #  counted against the
 54                                                              #  PRE-REBASE remote head
-$ git log --format='' --name-only origin/main..HEAD \
+$ git log --format='' --name-only origin/main..408be12 \
     | sed '/^$/d' | sort -u | wc -l                             #  files touched across all
-213                                                             #  commits, union
+215                                                             #  commits, union
 ```
 
 **54** was counted against the pre-rebase remote head `ac0b633`, so it also included
 `main`'s own two commits that the old head predates. That head has since been replaced by
-this branch, so the figure is historical. **213** is the union across every commit,
+this branch, so the figure is historical. **215** is the union across every commit,
 including files a later commit reverted — which is where the "~200 files" figure came from.
 
-The PR diff fell from **207** files to **126** for one reason: restoring `.claude/` removed 87
-deletion entries from it. The arithmetic closes exactly — the six additions are everything in
+The PR diff fell from **207** files to **128** for one reason: restoring `.claude/` removed 87
+deletion entries from it. The arithmetic closes exactly — the eight additions are everything in
 `comm -13` between the two file lists, and nothing else left the diff:
 
 ```
@@ -43,10 +43,12 @@ $ git diff --name-only origin/main...93141c4 | grep -c '^\.claude/'
 87
 
 $ git diff --name-only origin/main...93141c4 | sort > old
-$ git diff --name-only origin/main...HEAD    | sort > new
+$ git diff --name-only origin/main...408be12 | sort > new
 $ comm -13 old new                                              #  in the diff now, not before
+.github/workflows/image-scan.yml
 docs/pr-body-sdlc-e2e-review.md
 docs/sdlc.md
+scripts/ci/audit-images.sh
 services/collector-rust/deny.toml
 services/collector-rust/tests/docker-stop.test.sh
 services/generator-python/src/otelgen/exporters/otlp.py
@@ -54,11 +56,11 @@ services/generator-python/src/otelgen/seeding.py
 $ comm -23 old new | grep -vc '^\.claude/'                      #  left the diff, excluding .claude/
 0
 
-207 − 87 restored + 6 new files = 126
+207 − 87 restored + 8 new files = 128
 ```
 
 The earlier "44 commits" was measured before the rebase, against the old merge-base
-`3af2ee7`; that count is now 47 for the same range, plus the 14 commits added by this work (47 + 14 = 61).
+`3af2ee7`; that count is now 47 for the same range, plus the 20 commits added since (47 + 20 = 67).
 
 </details>
 
@@ -95,10 +97,10 @@ trade-off in writing.
 
 This branch was **not** split into the five focused PRs that were considered (Process
 Docs · CI · Migrations · Silver/Backfill · Flow-UI). The split lines cut through
-individual commits rather than between them — measured, not assumed: **26 of 61 commits
-touch more than one area**, counting each commit's files against those five plus an
-"everything else" bucket (the collector crate, the `Makefile`, `docker-compose.yml`), and
-measured at this commit. The two below are the worst cases.
+individual commits rather than between them — measured, not assumed: **27 of the 67 commits
+at `408be12` touch more than one area**, counting each commit's files against those five plus
+an "everything else" bucket (the collector crate, the `Makefile`, `docker-compose.yml`). The
+two below are the worst cases.
 Splitting would mean rewriting commit *contents*, not reordering them.
 
 So the code those two commits carry is called out here instead, because their subject
