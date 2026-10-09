@@ -4,7 +4,7 @@ CI that actually runs, on a single pinned ClickHouse, with the delivery path's
 documentation consolidated into one page. The pipeline itself — generator → collector →
 `bronze.*` — is untouched.
 
-**52 commits, 123 files changed**, rebased onto `main` at `1aa8d92`,
+**56 commits, 126 files changed**, rebased onto `main` at `1aa8d92`,
 which carries PR #59.
 
 <details>
@@ -16,19 +16,20 @@ PR's own diff shows — commits since the merge-base with `main`, and files in
 
 ```
 $ git rev-list --count origin/main..HEAD                       #  commits in the PR
-52
+56
 $ git diff --name-only origin/main...HEAD | wc -l              #  files in the PR diff
-123
-$ git rev-list --count origin/origin/sdlc-e2e-review..HEAD      #  commits not on the old
-54                                                              #  remote head (pre-rebase)
+126
+$ git rev-list --count origin/origin/sdlc-e2e-review..HEAD      #  counted against the
+54                                                              #  PRE-REBASE remote head
 $ git log --format='' --name-only origin/main..HEAD \
     | sed '/^$/d' | sort -u | wc -l                             #  files touched across all
-210                                                             #  commits, union
+213                                                             #  commits, union
 ```
 
-**54** counts against the stale remote head `ac0b633`, so it also includes `main`'s own two
-commits that the old head predates. **210** is the union across every commit, including files
-a later commit reverted — which is where the "~200 files" figure came from.
+**54** was counted against the pre-rebase remote head `ac0b633`, so it also included
+`main`'s own two commits that the old head predates. That head has since been replaced by
+this branch, so the figure is historical. **213** is the union across every commit,
+including files a later commit reverted — which is where the "~200 files" figure came from.
 
 The PR diff fell from **207** files to **123** for one reason: restoring `.claude/` removed 87
 deletion entries from it. The arithmetic closes exactly:
@@ -44,7 +45,7 @@ $ git diff --name-only origin/main...93141c4 | grep -c '^\.claude/'
 ```
 
 The earlier "44 commits" was measured before the rebase, against the old merge-base
-`3af2ee7`; that count is now 47 for the same range, plus the 5 commits added by this work.
+`3af2ee7`; that count is now 47 for the same range, plus the 9 commits added by this work.
 
 </details>
 
@@ -80,7 +81,7 @@ trade-off in writing.
 
 This branch was **not** split into the five focused PRs that were considered (Process
 Docs · CI · Migrations · Silver/Backfill · Flow-UI). The split lines cut through
-individual commits rather than between them — measured, not assumed: **24 of 52 commits
+individual commits rather than between them — measured, not assumed: **25 of 56 commits
 touch more than one of those five areas**, and the two commits below are the worst cases.
 Splitting would mean rewriting commit *contents*, not reordering them.
 
@@ -133,25 +134,79 @@ actionlint .github/workflows/*.yml                       → 2 pre-existing styl
 shellcheck tests/docker-stop.test.sh                     → clean
 ```
 
-**Not run in this session, and not claimed:** `make test-generator`, `make test-flow-ui`,
-`make test-hyperdx`, `make lint` and `make test-silver`. All five go through Docker
-(`DK_RUN`) or need ruff, and this environment has neither a reachable Docker daemon nor
-ruff on `PATH`. The Python sources are unchanged by the last three commits on this branch,
-but that is an argument, not a test run. The `docker stop` assertion itself has likewise
-only been exercised down its skip and `REQUIRE_DOCKER=1` paths — its first real run will
-be the weekly `docker-build` job.
-
-**Not run, and this is the whole point of the PR:**
+**Python suites, now actually run** (outside Docker, in a 3.14 venv, because this
+environment has no Docker daemon):
 
 ```
-every workflow in .github/workflows/   → has never executed
+flow-ui    pytest          → 87 passed
+generator  pytest          → 178 passed, 6 errors (the live-ClickHouse integration tests)
+ruff       the 3 edited files → All checks passed!
+bandit     generator (all checks)        → exit 0
+bandit     flow-ui (B608 scoped off)     → exit 0
+cargo deny --all-features check          → advisories/bans/licenses/sources ok
+invariants under Compose v2.27.0 / v2.39.4 / v5.1.4 → 10 run, 0 failed (each)
 ```
 
-GitHub Actions has been failing account-wide since 2026-10-05 — jobs end in 1–3 s with
-`runner_name: ""` and zero steps, across every workflow here and other repositories on
-the same account. The two shellcheck notes were confirmed present on the pre-rebase
-branch, so neither is introduced here. clippy and the tests ran on host cargo 1.99.0,
-not the 1.96.0 that `rust-toolchain.toml` pins, so CI could still differ.
+**Still not run:** `make test-silver` and `make test-hyperdx` (Docker), and the
+`docker stop` assertion itself, which has only been exercised down its skip and
+`REQUIRE_DOCKER=1` paths — its first real run is the weekly `docker-build` job. Two
+pre-existing ruff errors sit in `services/generator-python/tests/` (E501, I001); they are
+outside `make lint-generator`'s scope, which checks `src` only, and are not touched here.
+
+**CI ran, for the first time since 2026-10-05.** The account-wide Actions failure (jobs
+ending in 1–3 s with `runner_name: ""`) cleared on 2026-10-08. The first real run on this
+branch both confirmed the lean shape and found three things no local run could:
+
+```
+gates (fmt · clippy · test)            pass   1m12s
+lint (ruff)                            pass   7s
+test (python 3.10 / 3.11 / 3.12)       pass   46s / 58s / 48s
+linked-issue                           pass   4s
+integration · docker-build ·           skipped on the PR  ← the lean default, working
+  release build · musl TLS spike
+
+invariants                             FAILED 2 of 10   → fixed
+supply-chain (cargo deny)              FAILED           → fixed
+supply-chain (pip-audit · bandit)      FAILED           → fixed
+```
+
+**1. `invariants`: a Compose portability defect.** `02-service-named-clickhouse` and
+`03-no-duplicate-host-8080` read merged `docker compose config`, and the runner rejected
+the `collector-ci` stack: `volumes.clickhouse_data conflicts with imported resource`.
+`services/collector-rust/infra/docker-compose.yml` both `include:`d
+`compose.clickhouse.yml` *and* re-declared `clickhouse_data` to pin its name — a conflict
+with an imported resource, not an override. **The local toolchain (v5.1.4) tolerates it
+and passed 10/10, which is why it survived unnoticed.** Reproduced against v2.27.0 and
+v2.39.4, fixed by making the included file the single owner *and* moving the `name:` pin
+into it, re-verified 10/10 under all three versions.
+
+**2. `cargo deny`: `RUSTSEC-2025-0134`** — `rustls-pemfile` unmaintained (not a
+vulnerability). Absent from the default feature set; it reaches the graph only via
+`tls-spike`, T04's compile-only TLS experiment, because CI runs `--all-features`.
+Removing it needs tonic 0.13+ and the whole opentelemetry 0.27 stack, which is
+contract-adjacent and does not belong here. One scoped, dated `ignore` in `deny.toml`
+naming T42 as its removal trigger; the `unmaintained` lint stays on otherwise.
+`cargo deny --all-features check` → `advisories ok, bans ok, licenses ok, sources ok`.
+
+**3. `bandit`: 22 findings, split by judgement rather than blanket-suppressed.**
+pip-audit was clean. B110 (×3) was a real smell — three silent `except Exception: pass`
+on exporter shutdown — and is **fixed**: teardown stays best-effort but logs, so a
+half-closed exporter is no longer invisible. B311 (×1) and B107 (×1) are false positives
+with per-line `# nosec` and reasons (`random.Random(seed)` *is* the contract — `SEED=42`
+must replay the golden fixture; `password_file` is a path, not a credential). B608 (×17,
+`flow_ui/clickhouse.py`) are false positives — every interpolation is a module constant
+and the module reads no request input — and are scoped off for flow-ui only, in
+`make audit-python`, with the trade-off written there. Both bandit invocations now exit 0.
+
+Also corrected: this repo recorded `continue-on-error` as making a check non-blocking.
+Measured on run `37871412941`, the **run** concluded `success` while the **job**
+concluded `failure` — so the check still shows red. It buys "does not fail the run",
+never "shows green". Those checks are green now because the findings are fixed.
+
+**Still true:** the two shellcheck notes were confirmed present on the pre-rebase branch,
+so neither is introduced here; and the Rust clippy/test runs quoted above were on host
+cargo 1.99.0, not the 1.96.0 `rust-toolchain.toml` pins — though CI's own `gates` job has
+now passed on the pinned toolchain.
 
 ## Why
 
@@ -192,6 +247,25 @@ alone.
 - **A single ClickHouse pin at 25.4** replaces three coexisting pins. Anyone holding a
   volume created under 24.3 must `make reset` — `CREATE TABLE IF NOT EXISTS` will not
   update a changed schema, and inserts fail with `NO_SUCH_COLUMN` instead.
+- **The root stack's ClickHouse volume is renamed, and this one needs reading.** Fixing
+  the Compose conflict moved the `name: sentinel-clickhouse-data` pin into the included
+  file, so it now reaches *every* consumer. Measured before and after with
+  `docker compose config`:
+
+  ```
+  before   docker-compose.yml                       → origin-sdlc-e2e-review_clickhouse_data
+           collector-rust/infra/docker-compose.yml  → sentinel-clickhouse-data
+  after    both                                     → sentinel-clickhouse-data
+  ```
+
+  Two consequences. Existing local data in the project-prefixed volume is **orphaned, not
+  migrated** — the stack comes up empty and `make reset` is the clean path, which is the
+  stale-volume gotcha the README already warns about. And the root stack and the
+  collector-ci stack now **share one named volume**, so a `docker compose down -v` in
+  either removes the other's data locally. That follows from "one ClickHouse definition"
+  (REQ-I-01/I-02) and is arguably correct, but it is a behaviour change, not a pure
+  conflict removal. The alternative — dropping the pin instead — would have removed the
+  conflict while losing a stable volume name, which is the worse trade.
 - **`release.yml` no longer triggers on push to `main` or on a `v*` tag.** If anyone
   believed images were being published from `main`, they were not — the registry does not
   exist — but the workflow will now also stop *appearing* to try. Re-enabling is one PR,
