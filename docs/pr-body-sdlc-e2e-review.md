@@ -4,8 +4,9 @@ CI that actually runs, on a single pinned ClickHouse, with the delivery path's
 documentation consolidated into one page. The pipeline itself — generator → collector →
 `bronze.*` — is untouched.
 
-**59 commits, 126 files changed**, rebased onto `main` at `1aa8d92`,
-which carries PR #59.
+**61 commits, 126 files changed**, rebased onto `main` at `1aa8d92`, which carries PR #59.
+Both figures are measured at the commit that carries this body, with the two commands in the
+block below; a further commit on the branch moves the commit count and may move the file count.
 
 <details>
 <summary>Why you may have seen 44 commits / 200 files quoted earlier</summary>
@@ -16,7 +17,7 @@ PR's own diff shows — commits since the merge-base with `main`, and files in
 
 ```
 $ git rev-list --count origin/main..HEAD                       #  commits in the PR
-59
+61
 $ git diff --name-only origin/main...HEAD | wc -l              #  files in the PR diff
 126
 $ git rev-list --count origin/origin/sdlc-e2e-review..HEAD      #  counted against the
@@ -31,8 +32,9 @@ $ git log --format='' --name-only origin/main..HEAD \
 this branch, so the figure is historical. **213** is the union across every commit,
 including files a later commit reverted — which is where the "~200 files" figure came from.
 
-The PR diff fell from **207** files to **123** for one reason: restoring `.claude/` removed 87
-deletion entries from it. The arithmetic closes exactly:
+The PR diff fell from **207** files to **126** for one reason: restoring `.claude/` removed 87
+deletion entries from it. The arithmetic closes exactly — the six additions are everything in
+`comm -13` between the two file lists, and nothing else left the diff:
 
 ```
 $ git diff --name-only origin/main...93141c4 | wc -l            #  before any of this work
@@ -40,12 +42,23 @@ $ git diff --name-only origin/main...93141c4 | wc -l            #  before any of
 $ git diff --name-only origin/main...93141c4 | grep -c '^\.claude/'
 87
 
-207 − 87 restored + 3 new files (docs/sdlc.md, docs/pr-body-sdlc-e2e-review.md,
-                                services/collector-rust/tests/docker-stop.test.sh) = 123
+$ git diff --name-only origin/main...93141c4 | sort > old
+$ git diff --name-only origin/main...HEAD    | sort > new
+$ comm -13 old new                                              #  in the diff now, not before
+docs/pr-body-sdlc-e2e-review.md
+docs/sdlc.md
+services/collector-rust/deny.toml
+services/collector-rust/tests/docker-stop.test.sh
+services/generator-python/src/otelgen/exporters/otlp.py
+services/generator-python/src/otelgen/seeding.py
+$ comm -23 old new | grep -vc '^\.claude/'                      #  left the diff, excluding .claude/
+0
+
+207 − 87 restored + 6 new files = 126
 ```
 
 The earlier "44 commits" was measured before the rebase, against the old merge-base
-`3af2ee7`; that count is now 47 for the same range, plus the 12 commits added by this work.
+`3af2ee7`; that count is now 47 for the same range, plus the 14 commits added by this work (47 + 14 = 61).
 
 </details>
 
@@ -56,7 +69,8 @@ The earlier "44 commits" was measured before the rebase, against the old merge-b
 +│                          # weekly: integration · release-build · docker-build · musl spike
 +├── python-ci.yml          # PR: ruff · pytest matrix · supply-chain*
 +├── repo-invariants.yml    # PR: 10 whole-tree asserts
-+├── e2e-silver.yml         # weekly: real pipeline + 18 silver asserts
++├── e2e-silver.yml         # weekly + push to main + dispatch:
++│                          # real pipeline + 18 silver asserts
 +├── pr-linked-issue.yml    # PR: requires Closes #n
 +└── release.yml            # GATED OFF — workflow_dispatch only, no registry exists
                             # (* = deliberately non-blocking)
@@ -81,8 +95,10 @@ trade-off in writing.
 
 This branch was **not** split into the five focused PRs that were considered (Process
 Docs · CI · Migrations · Silver/Backfill · Flow-UI). The split lines cut through
-individual commits rather than between them — measured, not assumed: **25 of 59 commits
-touch more than one of those five areas**, and the two commits below are the worst cases.
+individual commits rather than between them — measured, not assumed: **26 of 61 commits
+touch more than one area**, counting each commit's files against those five plus an
+"everything else" bucket (the collector crate, the `Makefile`, `docker-compose.yml`), and
+measured at this commit. The two below are the worst cases.
 Splitting would mean rewriting commit *contents*, not reordering them.
 
 So the code those two commits carry is called out here instead, because their subject
@@ -91,7 +107,7 @@ lines say "docs" and a reviewer reading subject lines would miss it:
 | Commit | Subject says | Also contains |
 |---|---|---|
 | `8417bee` | `docs: update README with task status tracking` | **5 areas, 10 files.** `migrations/0005_silver_watcher_models.sql` (+264) — the four Pod 3 Watcher read models and their MVs · `tests/03-watcher-models.test.sql` (+247) · `queries/03-watcher-sample.sql` · invariants `07-silver-mv-determinism.sh` (+84) and `08-no-verdict-in-silver.sh` (+46) · `e2e-silver.yml` · `Makefile` · `spec/core-spec.md` |
-| `97982b9` | `docs: reconcile the records with the 2026-10-06 rulings` | **6 areas, 40 files.** The whole backfill runner — `backfill.sh` (+211), 20 canonical/phase SQL files, `runner-refusal.test.sh`, `canonical-sync.test.sh` · `migrations/0006_repoint_metric_rollup.sql` (+81) · invariant `09-local-compose-boundary.sh` (+51) · **flow-ui Python**: `clickhouse.py` (+90), `pipeline.py`, `test_clickhouse.py` · `docker-compose.yml` · `Makefile` (+55) |
+| `97982b9` | `docs: reconcile the records with the 2026-10-06 rulings` | **6 areas, 40 files.** The whole backfill runner — `backfill.sh` (+211), 14 canonical/phase SQL files (7 in `canonical/`, 7 in `sql/`), `runner-refusal.test.sh`, `canonical-sync.test.sh` · `migrations/0006_repoint_metric_rollup.sql` (+81) · invariant `09-local-compose-boundary.sh` (+51) · **flow-ui Python**: `clickhouse.py` (+90), `pipeline.py`, `test_clickhouse.py` · `docker-compose.yml` · `Makefile` (+55) |
 
 Reviewing those two commits as documentation changes would miss a 264-line migration, a
 211-line shell runner, three new repository invariants and a change to flow-ui's read
@@ -249,9 +265,12 @@ alone.
 - **CI behaviour changes for every PR, in both directions.** Four PR-lane checks appear
   where there was one. Four jobs *leave* the PR lane for a weekly schedule, so a PR can
   break the live ClickHouse round-trip, the 18 silver assertions or the `linux/arm64`
-  image and still show a green PR lane. That regression window is up to a week wide, it
-  is the deliberate cost of PR #59's shape, and it is written down in
-  `docs/ci-gates.md`. Any author who suspects they touched those paths can trigger the
+  image and still show a green PR lane. For the three `rust-ci` jobs that window is up to a
+  week wide, because they are gated to `schedule`/`workflow_dispatch`. `e2e-silver` is
+  narrower and worth knowing: its workflow carries `push: branches: [main]` and the job has
+  no `event_name` guard, so the silver assertions do run on the merge itself — after review
+  rather than before it. Either way it is the deliberate cost of PR #59's shape, and it is
+  written down in `docs/ci-gates.md`. Any author who suspects they touched those paths can trigger the
   heavy lane with `workflow_dispatch` before asking for review.
 - **A single ClickHouse pin at 25.4** replaces three coexisting pins. Anyone holding a
   volume created under 24.3 must `make reset` — `CREATE TABLE IF NOT EXISTS` will not

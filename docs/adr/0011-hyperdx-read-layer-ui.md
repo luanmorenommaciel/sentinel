@@ -61,7 +61,7 @@ Run `hyperdx/hyperdx:2.40.0` (UI + API) and `mongo:5.0.32-focal` (the version Hy
 
 - **Image drift.** The tag is pinned (`2.40.0`); the `DEFAULT_*` bootstrap is HyperDX's, not a stable contract. A bump needs a re-check of source field names, and `make test-hyperdx` will not catch HyperDX renaming one.
 - **Large silver reads.** HyperDX can issue arbitrary `SELECT`s as `sentinel_hyperdx_u`. No quota or `max_execution_time` is set; local scope only.
-- **Unverified in CI.** GitHub Actions has not run since 2026-10-05. The `test-hyperdx` target is not yet in a workflow.
+- **Unverified in CI.** The `test-hyperdx` target is not yet in a workflow. *(Amended 2026-10-08: as written, this risk gave the account-wide Actions outage as the reason. Actions resumed on 2026-10-08 and the PR lane runs green; the remaining reason is simply that no workflow invokes `make test-hyperdx`.)*
 
 ## Verification (2026-10-07, local, Docker Desktop, ClickHouse 25.4.13.22)
 

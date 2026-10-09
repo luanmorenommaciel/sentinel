@@ -27,7 +27,11 @@ the command output quoted, not summarised:
 Then run `scripts/ci/run-invariants.sh`: the ten repository invariants are properties of the
 whole tree, so any ticket can break one.
 
-**Do not mark a ticket Done on the strength of a local run alone.** GitHub Actions has not
-executed since 2026-10-05 (account-wide failure, jobs end in 1–3 s with no runner assigned), so
-no workflow in `.github/workflows/` has proved anything. A ticket is Done when its checks are
-green **in CI** and the code is on `main`; until then it is *Done (local)*.
+**Do not mark a ticket Done on the strength of a local run alone.** A local green is evidence
+about a laptop, not about CI: during the 2026-10-05–10-08 Actions outage `run-invariants.sh`
+passed 10/10 here while failing 2/10 on the runner, purely on a Compose version difference.
+Actions runs again as of 2026-10-08 and the **PR lane** (`gates`, `lint`, the pytest matrix,
+both supply-chain jobs, `invariants`, `linked-issue`) now proves something. The **weekly lane**
+still does not: no `schedule` or `workflow_dispatch` event has ever fired, so `release build`,
+`docker-build`, `integration` and `e2e-silver` have no real run behind them. A ticket is Done
+when its checks are green **in CI** and the code is on `main`; until then it is *Done (local)*.

@@ -18,8 +18,11 @@ compared instead of assumed (`SPEC §12.4`, REQ-B-10).
 **Two lanes, after PR #59's lean default.** A *PR lane* runs on every pull request: cheap,
 cached, no service containers. A *weekly lane* runs Mondays 06:00 UTC and on
 `workflow_dispatch`: anything that needs a live ClickHouse, an emulated architecture, or a
-cold cross-compile. The split is a cost and latency decision, not a statement that the weekly
-jobs matter less — see *Why the heavy jobs are weekly* below.
+cold cross-compile. One weekly job is wider than that: `e2e-silver` is **not** gated on
+`github.event_name`, and its workflow also triggers on `push: branches: [main]`, so it runs
+on every merge to `main` as well — after review, not before it. The split is a cost and
+latency decision, not a statement that the weekly jobs matter less — see *Why the heavy jobs
+are weekly* below.
 
 | Workflow | Job | Lane | Covers | Required today | Promote when |
 |---|---|---|---|---|---|
@@ -33,7 +36,7 @@ jobs matter less — see *Why the heavy jobs are weekly* below.
 | `python-ci` | `test (python <version>)` | **PR** | pytest across the `PYTHON_IMAGE` matrix — 178 generator + 83 flow-ui | no | with the first required set |
 | `python-ci` | `supply-chain (pip-audit · bandit)` | **PR** | advisories + static security scan. `continue-on-error` at job level: it does not fail the **run**, but the **check** still reports failure (measured — see below) | no | after a lockfile exists (REQ-B-07) |
 | `repo-invariants` | `invariants (scripts/ci/invariants.d)` | **PR** | the ten cross-cutting properties below | no | **ready now** — all ten pass in CI as of 2026-10-08, and locally under Compose v2.27.0 / v2.39.4 / v5.1.4 |
-| `e2e-silver` | `e2e-silver (live ClickHouse)` | **weekly** | the real pipeline, the 18 silver assertions, the generator integration suite, and the role grants | no | after a week of real runs (`SPEC §16`) — it is the heaviest job here at 30 min, and the one most likely to flake |
+| `e2e-silver` | `e2e-silver (live ClickHouse)` | **weekly + push to `main`** + `workflow_dispatch` | the real pipeline, the 18 silver assertions, the generator integration suite, and the role grants | no | after a week of real runs (`SPEC §16`) — it is the heaviest job here at 30 min, and the one most likely to flake |
 | `pr-linked-issue` | `linked-issue` | **PR** | the PR closes an issue, or carries `no-issue` | no | with the first required set |
 | `release` | `publish (<image>)` | **gated off** | build, push, provenance, SBOM, cosign signing | n/a | `workflow_dispatch` only — see *`release` is gated off* below |
 | `release` | `promote (<image>)` | **gated off** | digest promotion with verify-before-tag | n/a | `workflow_dispatch` only — see below |
@@ -67,7 +70,7 @@ plus `workflow_dispatch`. Four jobs sit in the weekly lane, each for a named rea
 | Job | Why not per-PR |
 |---|---|
 | `integration (every #[ignore]d test)` | needs a live ClickHouse brought up with `docker compose … --wait`. Moving ClickHouse off the PR path is precisely what #59 did |
-| `e2e-silver` | the same, at 30 minutes — the largest single budget in the repo |
+| `e2e-silver` | the same, at 30 minutes — the largest single budget in the repo. It is the one weekly job that also runs on `push` to `main` |
 | `docker-build` | builds `linux/arm64` under QEMU emulation, which is several times slower than the native leg |
 | `musl TLS spike` | two musl cross-compiles with no warm target cache, and it is evidence for DEC-A4 rather than a gate |
 

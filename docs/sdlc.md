@@ -17,7 +17,8 @@ is a substitute for the other.
 > for three days no gate below had ever run. It works again, and the **PR lane is green**. Two
 > things still make "finished" a claim about the future rather than the past: the **weekly lane
 > has never run at all** (the live round-trip, the silver assertions, the arm64 image and the
-> `docker stop` proof are all in it), so a green PR tells you nothing about them; and **no
+> `docker stop` proof are all in it), so a green PR tells you nothing about them — `e2e-silver`
+> alone also fires on the merge to `main`, which is after review rather than before; and **no
 > branch-protection rule exists** (issue #35), so nothing below is actually *required*. A green
 > local run is still evidence about a laptop — and the outage proved that sharply: the invariant
 > harness passed 10/10 locally while failing 2/10 on the runner, purely on a Compose version
@@ -45,7 +46,7 @@ decisions marked `type:commander-attention` and change GitHub repository setting
 | 6 | **Three green checks** | quoted command output | `make test` (+ `make test-silver` when `migrations/` or `silver.*` is touched) · `make lint` · `make build` — all three, output quoted, not summarised. Then `scripts/ci/run-invariants.sh`: all **ten** invariants pass, because they are properties of the whole tree and any ticket can break one. | leg agent |
 | 7 | **Pre-PR discipline** | the issue number, and the doc fixes | (i) An issue covers the work, or the `no-issue` label records who decided it did not — `pr-linked-issue.yml` fails a PR that closes neither. Issues are **proposed, never created unprompted** (`docs/agents/issue-tracker.md`). (ii) `git ls-files '*.md' \| xargs grep -ln "<what you touched>"`, and every **live** doc that no longer holds is fixed **in the same PR** (DEC-I2). `docs/adr/`, `intent/`, `spec/`, `docs/proposals/` are records — left alone. `plan/` is live — amended. | author |
 | 8 | **Code review** | the PR | `/code-review` on two axes — Standards (repo conventions) and Spec (does it do what the ticket's REQ asked). WoW asks for two approvals: peer, then Captain. | reviewer + Captain |
-| 9 | **CI gates** | the status checks in `docs/ci-gates.md` | The required set is green. **Today: unreachable.** No branch-protection rule exists on `main` (issue #35, API returns 404) and no workflow has executed since 2026-10-05. `docs/ci-gates.md` is the table to configure the required set *from*, once Actions runs. | Commander (setting) · Captain (table) |
+| 9 | **CI gates** | the status checks in `docs/ci-gates.md` | The required set is green. **Today: half of it is reachable.** Actions resumed on 2026-10-08 and the PR lane executes and is green — 9 checks pass, 4 skip by design. Two gaps remain. The **weekly lane has never executed**: no `schedule` or `workflow_dispatch` event has ever fired on this repository (143 runs, every one a `pull_request` or a `push`), so `make build`, `docker-build`, `integration` and `e2e-silver` have no real run behind them. And **no branch-protection rule exists** on `main` (issue #35, the API returns 404), so nothing here is actually *required* — the green is advisory. `docs/ci-gates.md` is the table to configure the required set *from*. | Commander (setting) · Captain (table) |
 | 10 | **Merge to `main`** | the squash commit | Conventional Commits · signed (`git commit -S`) · `Co-Authored-By:` for every human and LLM contributor. ADR-0009 amends the WoW's blanket "squash-merge to main" for legs. | Captain |
 | 11 | **Status record** | [README §8](../README.md#8-current-status) per-ticket registry | A ticket moves to **Done** only when its checks are green **in CI** and the code is on `main`. Otherwise it is ***Done (local)*** — done within DEC-2026-10-06's local scope and unverified against any deployed target. Drift between a record and reality goes in `CLAUDE.md` → *Known doc drift* with a named resolution owner. | Captain |
 
@@ -65,7 +66,7 @@ State as of **2026-10-08**, when Actions resumed after a three-day account-wide 
 | `pr-linked-issue` | **PR** | the PR closes an issue or carries `no-issue` | **executed, green** |
 | `make build` | **weekly** — `rust-ci` `release build` | `cargo build --release` | skipped on PRs by design; **not yet executed** |
 | `docker stop` (#45) | **weekly** — `rust-ci` `docker-build` | the image handles SIGTERM as PID 1 | skipped on PRs by design; **not yet executed** |
-| `make test-silver` / `e2e-silver` | **weekly** | the real pipeline + the silver SQL assertions | skipped on PRs by design; **not yet executed**; the check most likely to flake — read a week of real runs before promoting it |
+| `make test-silver` / `e2e-silver` | **weekly + push to `main`** + `workflow_dispatch` | the real pipeline + the silver SQL assertions | skipped on PRs by design; **not yet executed** — its only six runs are outage stubs (`pull_request`, zero steps, under the superseded per-PR shape). Unlike the three `rust-ci` jobs above it is **not** gated to `schedule`/`workflow_dispatch`, so it also runs on every merge to `main`; the check most likely to flake — read a week of real runs before promoting it |
 | `release` | **gated off** | build · push · provenance · SBOM · cosign signing | `workflow_dispatch` only: no registry exists, and remote deploy is unauthorized (DEC-A1/A2) |
 | branch protection | — | that any of the above is *required* | **does not exist** — issue #35 |
 
@@ -74,7 +75,8 @@ satisfied by a human or an agent in this repository today, and stage 9 finally c
 the PR lane executes and is green. What stands between that and stage 10–11 is no longer
 the platform but a repository setting only the Commander can make. Two caveats keep
 "Done" honest: four gates sit in the weekly lane and have **never run**, so a PR can be
-green and still have broken them; and ***Done (local)*** remains the right status for
+green and still have broken them (`e2e-silver` is the partial exception — it also fires on
+the merge to `main`, which is after review, not before); and ***Done (local)*** remains the right status for
 anything whose only evidence is a laptop.
 
 **One lesson worth carrying out of the outage.** A green local run is not evidence about

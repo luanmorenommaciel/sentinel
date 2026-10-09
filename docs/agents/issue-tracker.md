@@ -48,6 +48,6 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 These override nothing above; they constrain *when* a write happens.
 
-- **Never create an issue unprompted.** The pre-PR discipline rule — removed in `7689c16`, and restated here because this is the only place that still depends on it — is detect-and-propose: search open issues first, and if none covers the work, propose one (title, four labels, two-line body) and **wait for confirmation**. The tracker is shared.
+- **Never create an issue unprompted.** The pre-PR discipline rule ([`.claude/rules/pre-pr-discipline.md`](../../.claude/rules/pre-pr-discipline.md), restored on this branch after a brief deletion, and restated here because this is the place that depends on it) is detect-and-propose: search open issues first, and if none covers the work, propose one (title, four labels, two-line body) and **wait for confirmation**. The tracker is shared.
 - **Every PR closes an issue, or declares why not.** `.github/workflows/pr-linked-issue.yml` fails a PR that closes none. Put `Closes #<n>` in the body, or apply the `no-issue` label for a typo, revert, or hotfix.
 - **Search before proposing**: `gh issue list --state open --search "<terms>"`.

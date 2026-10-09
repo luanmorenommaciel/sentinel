@@ -7,7 +7,7 @@ are dissolved as separate legs; their documentation scope is absorbed by the cor
 implementation work. Serialize concurrent legs that touch the same documentation path to
 preserve ADR-0009 R1. See [the current-cycle ruling](DEC-2026-10-06-local-scope.md).
 
-Tags: **[M]** measured this session · **[D]** document assertion · **[R]** reasoned · **[M2]** re-measured 2026-10-06, after the cycle's own doc changes.
+Tags: **[M]** measured this session · **[D]** document assertion · **[R]** reasoned · **[M2]** re-measured 2026-10-06, after the cycle's own doc changes · **[M3]** re-measured 2026-10-08, after `.claude/` was restored.
 
 ## 1. The question
 
@@ -15,7 +15,7 @@ When a leg invalidates a claim in `README.md` or `CLAUDE.md`, does the repo (a) 
 
 ## 2. Why it's open
 
-- `.claude/rules/pre-pr-discipline.md` check 2: a doc that describes something that no longer exists "is broken by the change that made it wrong"; fix the ones that do not hold "**in the same PR**" (`git show HEAD:.claude/rules/pre-pr-discipline.md`, last reviewed 2026-09-02). **[M2] That file is now permanently gone, not pending recreation:** `7689c16` deleted the whole `.claude/` tree, and `9b9b8c1` restated the rule's substance inline in `docs/agents/issue-tracker.md` rather than re-pointing at it. So rule 2 no longer exists as a standalone rule — its only surviving statement is the *What could this break* section of `.github/PULL_REQUEST_TEMPLATE.md` ("Fix the ones that no longer hold, here"), which is checked in and live. The conflict has not gone away; it has moved to **a live PR template versus an unratified ADR**.
+- `.claude/rules/pre-pr-discipline.md` check 2: a doc that describes something that no longer exists "is broken by the change that made it wrong"; fix the ones that do not hold "**in the same PR**" (`git show HEAD:.claude/rules/pre-pr-discipline.md`, last reviewed 2026-09-02). **[M2] That file is now permanently gone, not pending recreation:** `7689c16` deleted the whole `.claude/` tree, and `9b9b8c1` restated the rule's substance inline in `docs/agents/issue-tracker.md` rather than re-pointing at it. So rule 2 no longer exists as a standalone rule — its only surviving statement is the *What could this break* section of `.github/PULL_REQUEST_TEMPLATE.md` ("Fix the ones that no longer hold, here"), which is checked in and live. The conflict has not gone away; it has moved to **a live PR template versus an unratified ADR**. **[M3] Corrected 2026-10-08 — the file is not gone.** `3a200ee` reverted the `.claude/` deletion on this branch, so `.claude/rules/pre-pr-discipline.md` is tracked and live again (`find .claude -type f | wc -l` → 87). Check 2 is a standalone rule once more and the conflict is back to its original shape — a live rule file versus an unratified ADR — with the PR template as a second, independent statement of the same substance. The ruling above is unaffected: it was taken on the substance, not on which file carried it.
 - ADR-0009 R1: "Two open legs in a swimlane **may not** declare overlapping paths. If they must overlap, they are one leg — or the shared part is extracted into a leg that lands first" (`docs/adr/0009-agentic-gitflow.md:198-201`). ADR-0009 is `Proposed`, not ratified.
 - Spec §12.3 and plan §4 pick a per-wave docs leg (T45-T48) and say plainly this violates the letter of check 2. `leg/docs/wave-<n>-v1` satisfies R1 (its paths are disjoint) and breaks rule 2 (docs lag code by one leg).
 

@@ -76,8 +76,9 @@ The enforced lint policy is package-level `[lints]` in `Cargo.toml`: `unsafe_cod
 deliberately commented out** — aspirational until a dedicated cleanup PR clears the existing
 warnings. Don't assume pedantic is on. (It becomes `[workspace.lints]` if a second Rust crate
 ever appears.) Full standards:
-the Rust project standards, removed in `7689c16`; the workspace lint policy in
-`Cargo.toml` is now the enforceable statement of them.
+[`.claude/docs/RUST_PROJECT_STANDARDS.md`](../../.claude/docs/RUST_PROJECT_STANDARDS.md),
+restored on this branch; the workspace lint policy in `Cargo.toml` is the enforceable
+statement of them.
 
 ## Layout
 

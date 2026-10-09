@@ -37,8 +37,10 @@ Does the collector terminate TLS itself (server TLS on `:4317` and/or client TLS
 
 **[M2] T04 has now reported, and the prerequisite is satisfied on both targets.** The brief said
 "do not decide before T04 reports". T04's job (`rust-ci.yml:musl-tls-spike`) landed in this cycle
-but has never run, because GitHub Actions has been failing account-wide since 2026-10-05. Its exact
-command was therefore run locally on 2026-10-06, in `rust:1.96` containers with `musl-tools`:
+but has never run: it is gated to `schedule`/`workflow_dispatch`, and no such event has ever fired
+(Actions was down account-wide 2026-10-05–10-08 and has since only served `pull_request` and `push`).
+Its exact command was therefore run locally on 2026-10-06, in `rust:1.96` containers with
+`musl-tools`:
 
 | Target | `cargo build --release --locked --features tls-spike` | `file` says | Static? |
 |---|---|---|---|

@@ -334,7 +334,7 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
   the API reports `protected: false`), so nothing rejects a push that skips it. The candidates for the
   required-check set are documented in [`docs/ci-gates.md`](docs/ci-gates.md) (T21), and configuring the
   rules on GitHub is tracked separately in issue #35.
-- **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*: one git worktree per agent, legs declaring **disjoint paths**, squash into the swimlane and a merge commit into `main` so per-leg attribution survives. The ADR is the record; the `.claude/` agent layer that carried the mechanics was removed from the repo in `7689c16`.
+- **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*: one git worktree per agent, legs declaring **disjoint paths**, squash into the swimlane and a merge commit into `main` so per-leg attribution survives. The ADR is the record; [`.claude/docs/AGENTIC_GITFLOW.md`](.claude/docs/AGENTIC_GITFLOW.md) is the practical companion, restored with the rest of `.claude/` (agents, skills, KB, rules) after it was briefly deleted on this branch.
 - **CI is five workflows** in [`.github/workflows/`](.github/workflows/): [`rust-ci.yml`](.github/workflows/rust-ci.yml) (gates · integration · cargo-deny · docker-build), [`python-ci.yml`](.github/workflows/python-ci.yml) (ruff · pytest · supply-chain), [`repo-invariants.yml`](.github/workflows/repo-invariants.yml), [`release.yml`](.github/workflows/release.yml) and [`pr-linked-issue.yml`](.github/workflows/pr-linked-issue.yml). Component gates are path-filtered; several jobs are deliberately non-blocking today — see §8 for which, and why.
 - **Contracts are jointly owned** by the Pods on both sides of a boundary (input = Pod 1 + Pod 2; the bronze read schema = Pod 2 + Pod 3). **Components are singly owned.**
 - The **bronze DDL is Pod-3-owned** (`create_schema:false`); collectors only `INSERT`.
@@ -483,7 +483,9 @@ Every ticket defined in [`plan/core-plan.md`](plan/core-plan.md) with its curren
 | **Promotion** (T23) | Digest promotion `main` → `:staging`, `v*` → `:prod`; `cosign verify` runs before any tag moves | **Unverified against real registry** (see below) |
 | **Image scan** (T24) | Trivy scan by digest | **Warn-only** (runs post-push) |
 
-Also this cycle, commit `7689c16` removed the `.claude/` agent layer and the `meetings/` archive (89 files).
+Also this cycle, commit `d01e4ea` (`7689c16` before the rebase) removed 89 files — the `.claude/`
+agent layer (87) and the `meetings/` archive (2). `3a200ee` reverted the `.claude/` half, so those
+87 files are present and tracked; only `meetings/` stays deleted.
 
 **Unverified: nothing in the release lane has run against a real registry.** No GCP project, Artifact Registry repository or Workload Identity provider exists yet. Signing, attestation verification and `crane tag` on a multi-arch index have therefore not been exercised; [`infra/deploy/README.md`](infra/deploy/README.md) carries the specific "Unverified" notes and what to confirm on the first publish.
 

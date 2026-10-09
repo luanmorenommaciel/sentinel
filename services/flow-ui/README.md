@@ -212,7 +212,8 @@ The ranked shortlist it draws from is
 [`docs/research/data-observability-competitive-landscape.md`](../../docs/research/data-observability-competitive-landscape.md)
 **§6**, ordered by *(differentiation × evidence) ÷ effort*. The filename says what the
 document *is* — a survey of what the category ships — and §6 is what it is *for*. Note that
-The knowledge-system roadmap (`7689c16` removed it) was a different thing entirely: the plan for the knowledge system,
+The knowledge-system roadmap ([`.claude/docs/ROADMAP.md`](../../.claude/docs/ROADMAP.md), deleted and then
+restored on this branch) is a different thing entirely: the plan for the knowledge system,
 not for this service.
 
 ## Contracts this reads
