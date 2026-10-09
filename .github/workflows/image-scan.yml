@@ -71,6 +71,11 @@ jobs:
       # here. The teeth assertion inside the script runs on every invocation, so
       # "warn-only" never decays into "cannot fail".
       - name: Scan shipped base images
+        # TEMPORARY — live negative proof for T24, reverted in the next commit.
+        # Blocking + counting unfixed findings, which python:3.12-slim has 44 of.
+        env:
+          IMAGE_SCAN_EXIT_CODE: "1"
+          IMAGE_SCAN_IGNORE_UNFIXED: "false"
         run: make audit-images
 
   built-scan:
