@@ -31,7 +31,11 @@ from opentelemetry.proto.logs.v1 import logs_pb2 as L
 from opentelemetry.proto.metrics.v1 import metrics_pb2 as M
 from opentelemetry.proto.resource.v1 import resource_pb2 as R
 
-kv = lambda k, v: C.KeyValue(key=k, value=C.AnyValue(string_value=v))
+
+def kv(k, v):
+    return C.KeyValue(key=k, value=C.AnyValue(string_value=v))
+
+
 # Four of the five required keys. `sentinel.run_id` is absent — one missing key is enough.
 RES = R.Resource(attributes=[
     kv("service.name", "third-party-agent"),

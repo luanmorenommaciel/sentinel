@@ -1,0 +1,201 @@
+# The live-ClickHouse oracle (T20, REQ-B-04, B-05, B-09, H-06).
+#
+# 18 silver SQL assertions and the Python suites ran on a laptop and nowhere else
+# (issue #34). This stands up the real pipeline — generator → collector → bronze →
+# silver — and runs them against it.
+#
+# It is also the oracle for the role grants. REQ-H-06 makes this job, not SPEC
+# §14.1 and not a reviewer, the authority on whether the least-privilege grants are
+# complete: the services connect as `sentinel_collector_u` and `sentinel_reader_u`,
+# so a missing grant fails here instead of in staging. That already happened once —
+# `0002_roles.sql` records the SELECT the `clickhouse` crate turned out to need.
+#
+# NOT a required check yet, deliberately. SPEC §16 names this the job most likely
+# to flake and the quiescence loop below is reasoned rather than measured, so it
+# lands reporting honestly and gets promoted in T21 after a week of real PRs.
+# Note that "non-required" is a branch-protection setting, not `continue-on-error`:
+# the flag is deliberately absent, because a job that always reports green tells
+# you nothing about its own flake rate.
+name: e2e-silver
+
+# Lean default (PR #59): this job brings up ClickHouse, runs the real pipeline
+# and 18 silver assertions, and is budgeted at 30 minutes. That is the heaviest
+# thing in the repo, so it runs weekly + on demand instead of on every PR.
+# Promotion to a per-PR required check is a decision for the first required set
+# (docs/ci-gates.md), after a week of real runs has measured its flake rate.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, alongside rust-ci's heavy jobs
+  push:
+    branches: [main]
+
+concurrency:
+  group: e2e-silver-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-silver:
+    name: e2e-silver (live ClickHouse)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The role password. `make migrate` refuses to run without it, and the root
+      # stack mounts it into the collector and flow-ui, so it must exist before
+      # `make up` — Docker would otherwise create a directory at the mount path.
+      # Generated per run and never printed: this is a throwaway credential for a
+      # container that lives for one job.
+      - name: Create the CI role password
+        run: |
+          set -euo pipefail
+          mkdir -p infra/secrets
+          openssl rand -hex 24 > infra/secrets/ch_password
+          chmod 0400 infra/secrets/ch_password
+
+      - name: Up (ClickHouse + collector)
+        run: make up
+
+      - name: Migrate
+        run: make migrate
+
+      # T29 depends on the refreshable-MV feature selected by DEC-I1. Migration
+      # creates this view without an experimental setting; inspect the live
+      # server metadata and pin assertion to the repo's 25.4 engine line.
+      # Three checks, because `[V-3a]` flips by version and can regress silently.
+      # Refreshable MVs need no setting on 25.4.13.22 (the flag reports `Obsolete
+      # setting, does nothing`) and are gated on 24.3.18.7 with Code: 344. The
+      # original probe reached the wrong conclusion because it always set the
+      # experimental flag and never tested without it.
+      #
+      # The throwaway probe is issue #49's acceptance and is not redundant with the
+      # two checks around it: those inspect an object `0005` already created, so they
+      # confirm the capability only by inference from migrate having succeeded. This
+      # exercises the ungated path directly and reads `system.view_refreshes`, which
+      # proves the refresh scheduler registered the view rather than just that its
+      # DDL contains the words.
+      - name: Refreshable materialized view availability (T29, #49)
+        run: |
+          set -uo pipefail
+          version="$(docker compose exec -T clickhouse clickhouse-client -q 'SELECT version()' | tr -d '[:space:]')"
+          echo "asserting against the shipped ClickHouse: $version"
+          case "$version" in
+            25.4.*) ;;
+            *) echo "::error::expected ClickHouse 25.4.x for T29, got $version"; exit 1 ;;
+          esac
+
+          if ! docker compose exec -T clickhouse clickhouse-client --multiquery <<'SQL'
+          CREATE DATABASE IF NOT EXISTS _v3a_probe;
+          CREATE TABLE _v3a_probe.src (x UInt64) ENGINE = MergeTree ORDER BY x;
+          CREATE TABLE _v3a_probe.dst (n UInt64) ENGINE = MergeTree ORDER BY n;
+          CREATE MATERIALIZED VIEW _v3a_probe.rmv REFRESH EVERY 1 HOUR TO _v3a_probe.dst
+          AS SELECT toUInt64(count()) AS n FROM _v3a_probe.src;
+          SQL
+          then
+            docker compose exec -T clickhouse clickhouse-client -q "DROP DATABASE IF EXISTS _v3a_probe" || true
+            echo "::error::refreshable MVs are gated on $version with no experimental setting supplied." >&2
+            echo "  silver.call_edges_1m_rmv cannot exist here. Either pin a version where they are" >&2
+            echo "  ungated (25.4+), or build the scheduled-INSERT fallback - which cannot reuse" >&2
+            echo "  backfill.sh, because REQ-E-12 forbids a range ending >= today() and" >&2
+            echo "  call_edges_1m is always live (issue #48)." >&2
+            exit 1
+          fi
+
+          refreshes="$(docker compose exec -T clickhouse clickhouse-client -q \
+            "SELECT count() FROM system.view_refreshes WHERE database='_v3a_probe'" | tr -d '[:space:]')"
+          docker compose exec -T clickhouse clickhouse-client -q "DROP DATABASE IF EXISTS _v3a_probe"
+          if [ "${refreshes:-0}" -lt 1 ]; then
+            echo "::error::created but never registered in system.view_refreshes on $version" >&2
+            exit 1
+          fi
+          echo "ungated and registered on $version ($refreshes refresh entry)"
+
+          docker compose exec -T clickhouse clickhouse-client -q "
+            SELECT throwIf(count() != 1,
+                           'call_edges_1m_rmv is not registered as a refreshable MV')
+            FROM system.view_refreshes
+            WHERE database = 'silver' AND view = 'call_edges_1m_rmv'
+          "
+
+      - name: Generate
+        run: make generate
+      - name: Wait for quiescence
+        run: |
+          set -uo pipefail
+
+          ingested() {
+            curl -fsS http://localhost:9090/metrics 2>/dev/null \
+              | awk '/^sentinel_signals_ingested_total\{/ {s += $NF} END {printf "%d", s+0}'
+          }
+
+          persisted() {
+            docker compose exec -T clickhouse clickhouse-client -q "
+              SELECT (SELECT count() FROM bronze.otel_logs)
+                   + (SELECT count() FROM bronze.otel_traces)
+                   + (SELECT count() FROM bronze.otel_metrics_gauge)
+                   + (SELECT count() FROM bronze.otel_metrics_sum)" 2>/dev/null \
+              | tr -d '[:space:]'
+          }
+
+          deadline=$(( SECONDS + 60 ))
+          prev=""
+          while (( SECONDS < deadline )); do
+            cur="$(ingested)"
+            rows="$(persisted)"
+            : "${rows:=0}"
+            echo "ingested=$cur persisted=$rows"
+            # Two consecutive equal samples AND bronze caught up. Either alone is
+            # not enough: the counter plateaus between flushes, and rows can lag a
+            # plateau by a whole flush interval.
+            if [[ -n "$prev" && "$cur" == "$prev" && "$rows" == "$cur" && "$cur" != "0" ]]; then
+              echo "quiescent at $cur signals"
+              exit 0
+            fi
+            prev="$cur"
+            sleep 2
+          done
+
+          echo "::error::quiescence timed out after 60s — ingested=$(ingested) persisted=$(persisted)"
+          exit 1
+
+      - name: Silver assertions (18 base + watcher models)
+        run: make test-silver
+
+      - name: Generator integration suite
+        run: make test-generator-integration
+
+      # REQ-B-09: CI's output becomes the authoritative count, which T45 consumes
+      # instead of recounting by hand.
+      - name: Collected counts to the job summary
+        if: always()
+        run: |
+          set -uo pipefail
+          {
+            echo "## e2e-silver"
+            echo
+            echo "| Suite | Count |"
+            echo "|---|---:|"
+            echo "| base silver SQL assertions | $(grep -c 'throwIf' infra/clickhouse/tests/02-silver-layer.test.sql) |"
+            echo "| watcher model SQL assertions | $(grep -c 'throwIf' infra/clickhouse/tests/03-watcher-models.test.sql) |"
+            echo "| bronze rows persisted | $(docker compose exec -T clickhouse clickhouse-client -q "
+                   SELECT (SELECT count() FROM bronze.otel_logs)
+                        + (SELECT count() FROM bronze.otel_traces)
+                        + (SELECT count() FROM bronze.otel_metrics_gauge)
+                        + (SELECT count() FROM bronze.otel_metrics_sum)" 2>/dev/null | tr -d '[:space:]') |"
+            echo "| silver objects | $(docker compose exec -T clickhouse clickhouse-client -q \
+                   "SELECT count() FROM system.tables WHERE database='silver'" 2>/dev/null | tr -d '[:space:]') |"
+            echo
+            echo "ClickHouse: $(docker compose exec -T clickhouse clickhouse-client -q 'SELECT version()' 2>/dev/null | tr -d '[:space:]')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collector logs on failure
+        if: failure()
+        run: docker compose logs collector-rust | tail -100
+
+      - name: Down
+        if: always()
+        run: make reset

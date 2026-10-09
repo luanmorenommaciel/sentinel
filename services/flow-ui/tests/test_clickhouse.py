@@ -1,26 +1,27 @@
-"""Silver's state is read from `system.tables`, so the parsing is the whole risk."""
+"""Silver's state is read from `system.tables`, so the parsing is the whole risk.
+
+The `_query` fake and the coverage response builder come from `conftest.py`: the
+dual-source boards assert both coverage branches, and a fake defined per file cannot be
+shared with them.
+"""
 
 import asyncio
 
 import httpx
 import pytest
 
-from flow_ui.clickhouse import ClickHouse
+from flow_ui.clickhouse import ClickHouse, fallback_removal_ready
 
 
-def silver(rows: str | Exception) -> dict:
-    ch = ClickHouse("http://ch:8123", "bronze")
+@pytest.fixture
+def silver(run_query):
+    def _silver(rows: str | Exception) -> dict:
+        return run_query(rows, lambda ch: ch.silver_state())
 
-    async def _query(_sql: str) -> str:
-        if isinstance(rows, Exception):
-            raise rows
-        return rows
-
-    ch._query = _query  # type: ignore[method-assign]
-    return asyncio.run(ch.silver_state())
+    return _silver
 
 
-def test_engine_decides_what_a_table_counts_as():
+def test_engine_decides_what_a_table_counts_as(silver):
     state = silver(
         "MergeTree\toperation_executions\t12849\n"
         "MergeTree\tlog_events\t7\n"
@@ -34,7 +35,7 @@ def test_engine_decides_what_a_table_counts_as():
     assert state["mvs"] == 1
 
 
-def test_an_empty_silver_is_present_and_an_absent_one_is_not():
+def test_an_empty_silver_is_present_and_an_absent_one_is_not(silver):
     """A volume older than the Silver DDL has no `silver` database at all.
 
     Both states are normal — the MVs do not POPULATE, so a fresh stack has the tables
@@ -48,27 +49,25 @@ def test_an_empty_silver_is_present_and_an_absent_one_is_not():
     assert absent["present"] is False and absent["models"] == {}
 
 
-def test_an_unreachable_clickhouse_reads_as_absent_rather_than_raising():
+def test_an_unreachable_clickhouse_reads_as_absent_rather_than_raising(silver):
     """The slow lane must not take the board down because Silver could not be probed."""
     assert silver(httpx.ConnectError("refused")) == {
         "present": False, "models": {}, "views": [], "mvs": 0}
 
 
 @pytest.mark.parametrize("line", ["", "   ", "MergeTree\tno_count_column"])
-def test_a_row_that_does_not_parse_is_skipped_not_fatal(line):
+def test_a_row_that_does_not_parse_is_skipped_not_fatal(line, silver):
     assert silver(f"MergeTree\tlog_events\t3\n{line}\n")["models"] == {"log_events": 3}
 
 
-def sgraph(rows, cols: str = "") -> dict:
-    ch = ClickHouse("http://ch:8123", "bronze")
+@pytest.fixture
+def sgraph(run_query):
+    def _sgraph(rows, cols: str = "") -> dict:
+        answers = rows if isinstance(rows, Exception) else {
+            "system.tables": rows, "system.columns": cols}
+        return run_query(answers, lambda ch: ch.silver_graph())
 
-    async def _query(sql: str) -> str:
-        if isinstance(rows, Exception):
-            raise rows
-        return rows if "system.tables" in sql else cols
-
-    ch._query = _query  # type: ignore[method-assign]
-    return asyncio.run(ch.silver_graph())
+    return _sgraph
 
 
 MV = ("CREATE MATERIALIZED VIEW silver.log_events_mv TO silver.log_events "
@@ -77,7 +76,7 @@ VIEW = "CREATE VIEW silver.log_health_1m AS SELECT * FROM silver.log_events"
 TBL = "CREATE TABLE silver.log_events (body String) ENGINE = MergeTree"
 
 
-def test_the_three_kinds_are_told_apart_by_engine():
+def test_the_three_kinds_are_told_apart_by_engine(sgraph):
     """A table stores rows, an MV is an insert trigger, a view is a query. Collapsing them
     is exactly the thing the board now exists to un-collapse."""
     g = sgraph(f"log_events\tMergeTree\tscenario\t{TBL}\n"
@@ -87,7 +86,7 @@ def test_the_three_kinds_are_told_apart_by_engine():
         "log_events": "table", "log_events_mv": "mv", "log_health_1m": "view"}
 
 
-def test_an_mv_reads_its_from_and_writes_its_to():
+def test_an_mv_reads_its_from_and_writes_its_to(sgraph):
     """`TO silver.x` is the target and must not be reported as a source, or the MV would
     look like it reads the table it writes."""
     g = sgraph(f"log_events_mv\tMaterializedView\t\t{MV}\n")
@@ -95,7 +94,7 @@ def test_an_mv_reads_its_from_and_writes_its_to():
     assert g["log_events_mv"]["target"] == "log_events"
 
 
-def test_a_view_reads_every_table_it_names():
+def test_a_view_reads_every_table_it_names(sgraph):
     ddl = ("CREATE VIEW silver.run_summary AS SELECT * FROM silver.log_events "
            "JOIN silver.operation_executions USING run_id")
     g = sgraph(f"run_summary\tView\t\t{ddl}\n")
@@ -103,7 +102,7 @@ def test_a_view_reads_every_table_it_names():
         "silver.log_events", "silver.operation_executions"]
 
 
-def test_a_table_added_to_the_ddl_needs_no_code_change():
+def test_a_table_added_to_the_ddl_needs_no_code_change(sgraph):
     """The whole point of reading `system.tables`: the board is the database's shape, not a
     list maintained here. Verified live too — a view created in ClickHouse appeared on the
     board, wired to its source, with nothing edited."""
@@ -112,14 +111,14 @@ def test_a_table_added_to_the_ddl_needs_no_code_change():
     assert g["brand_new"]["kind"] == "table"
 
 
-def test_an_mv_does_not_repeat_its_targets_columns():
+def test_an_mv_does_not_repeat_its_targets_columns(sgraph):
     """An MV's columns *are* its target's, so listing them says the same thing twice."""
     g = sgraph(f"log_events_mv\tMaterializedView\t\t{MV}\n",
                "log_events_mv\tbody\tString\n")
     assert g["log_events_mv"]["columns"] == []
 
 
-def test_an_unreachable_clickhouse_yields_no_graph_rather_than_raising():
+def test_an_unreachable_clickhouse_yields_no_graph_rather_than_raising(sgraph):
     assert sgraph(httpx.ConnectError("refused")) == {}
 
 
@@ -130,7 +129,7 @@ def test_every_read_view_the_box_lists_has_something_to_say_about_itself():
         assert len(what) <= 41, (name, len(what))
 
 
-def test_the_whole_mergetree_family_is_a_table():
+def test_the_whole_mergetree_family_is_a_table(sgraph):
     """A SummingMergeTree rollup is the obvious engine for a second-stage model.
 
     Matching the literal string "MergeTree" made one invisible on the board with its own MV
@@ -142,7 +141,7 @@ def test_the_whole_mergetree_family_is_a_table():
     assert g["log_events_hourly"]["kind"] == "table"
 
 
-def test_silver_state_classifies_engines_the_same_way():
+def test_silver_state_classifies_engines_the_same_way(silver):
     """The two readings must agree, or the board draws a table it has no count for."""
     state = silver("SummingMergeTree\tlog_events_hourly\t22\n"
                    "MergeTree\tlog_events\t7\n"
@@ -152,7 +151,7 @@ def test_silver_state_classifies_engines_the_same_way():
     assert state["views"] == ["log_health_1m"] and state["mvs"] == 1
 
 
-def test_a_second_stage_mv_reads_silver_not_bronze():
+def test_a_second_stage_mv_reads_silver_not_bronze(sgraph):
     """An hourly rollup reads a silver table. Laid out by kind it fell back into the first
     column and its edge ran right to left; depth puts it after what it reads."""
     ddl = ("CREATE MATERIALIZED VIEW silver.log_events_hourly_mv TO silver.log_events_hourly "
@@ -160,3 +159,118 @@ def test_a_second_stage_mv_reads_silver_not_bronze():
     g = sgraph(f"log_events_hourly_mv\tMaterializedView\t\t{ddl}\n")
     assert g["log_events_hourly_mv"]["sources"] == ["silver.log_events"]
     assert g["log_events_hourly_mv"]["target"] == "log_events_hourly"
+
+
+# ── the shared fixtures' own contract (REQ-E-13) ─────────────────────────────
+#
+# The dual-source boards read silver only when silver's history reaches back past the
+# window they need. The decision is a comparison against `now`, so the builder that
+# produces the probe response has to put the oldest silver row on the correct side of the
+# window — and that is worth asserting here rather than discovering as a board that drew
+# the wrong source.
+
+
+def test_the_coverage_builder_offers_both_sides_of_the_window(silver_coverage):
+    window = 60
+    boundary = silver_coverage.now - window * 60
+
+    covering = dict(_coverage_rows(silver_coverage.covering(window)))
+    short = dict(_coverage_rows(silver_coverage.short_of(window)))
+
+    assert set(covering) == set(short) == set(silver_coverage.tables)
+    for table in silver_coverage.tables:
+        assert covering[table] <= boundary, table
+        assert short[table] > boundary, table
+
+
+def test_an_absent_silver_is_a_third_state_not_a_zero(silver_coverage):
+    """A volume older than the silver DDL has no rows to report a minimum over. It must
+    not read as "oldest row at epoch 0", which covers every window there is."""
+    assert silver_coverage.absent() == ""
+    assert _coverage_rows(silver_coverage.absent()) == []
+
+
+def test_the_query_stub_answers_per_statement_and_counts_what_it_was_asked(ch_stub):
+    """REQ-E-14 is a statement about how many times a query is issued, so the fake has to
+    record that, not just answer."""
+    ch, stub = ch_stub({"system.tables": "a\tMergeTree\t1\n", "system.columns": "a\tb\tc\n"})
+    assert "MergeTree" in asyncio.run(ch._query("... FROM system.tables ..."))
+    assert stub.count_matching("system.tables") == 1
+    assert stub.count_matching("system.columns") == 0
+
+
+def _coverage_rows(tsv: str) -> list[tuple[str, int]]:
+    return [(parts[0], int(parts[1]))
+            for parts in (line.split("\t") for line in tsv.splitlines() if line.strip())]
+
+
+@pytest.fixture
+def coverage(run_query):
+    def _coverage(rows: str | Exception) -> dict[str, float]:
+        return run_query(rows, lambda ch: ch.silver_coverage())
+
+    return _coverage
+
+
+def test_coverage_reads_oldest_row_per_table_as_unix_timestamp(coverage, silver_coverage):
+    """The probe drives the dual-source decision: silver is read only when its history
+    reaches back past the window the board needs."""
+    result = coverage(silver_coverage.covering(window_minutes=60))
+    assert set(result) == set(silver_coverage.tables)
+    assert all(isinstance(v, float) for v in result.values())
+    # All tables have the same oldest timestamp for the test.
+    assert len(set(result.values())) == 1
+
+
+def test_coverage_handles_an_empty_silver(coverage, silver_coverage):
+    """A volume older than the Silver DDL has no rows to report a minimum over."""
+    assert coverage(silver_coverage.absent()) == {}
+
+
+def test_coverage_handles_an_unreachable_clickhouse(coverage):
+    """A probe failure degrades rather than raising, leaving silver_coverage empty."""
+    assert coverage(httpx.ConnectError("refused")) == {}
+
+
+def test_dual_source_boards_choose_silver_only_when_coverage_reaches_the_window(ch_stub, silver_coverage):
+    """T36-T38: complete Silver history is used; partial or absent history stays Bronze."""
+    rows = '{"svc":"api","med":10,"mad":1,"sd":1,"seen":2,"estate":2,"latest":10,"latest_t":1,"series":[]}\n'
+    ch, stub = ch_stub({"volume_1m": rows})
+    covered = {"log_events": silver_coverage.now - 3660,
+               "operation_executions": silver_coverage.now - 3660,
+               "metric_observations": silver_coverage.now - 3660}
+    assert asyncio.run(ch.volume_band(60, coverage=covered, now=silver_coverage.now))
+    assert stub.count_matching("silver.volume_1m") == 1
+
+    ch, stub = ch_stub({"otel_logs": rows})
+    assert asyncio.run(ch.volume_band(60, coverage={}, now=silver_coverage.now))
+    assert stub.count_matching("otel_logs") == 1
+
+
+def test_call_edges_stay_on_bronze_beyond_the_rollups_24_hour_history(ch_stub, silver_coverage):
+    ch, stub = ch_stub({"otel_traces": "a\tb\t1\t0\n"})
+    covered = {"operation_executions": silver_coverage.now - 172_860}
+    assert asyncio.run(ch.call_edges(60 * 25, coverage=covered, now=silver_coverage.now))
+    assert stub.count_matching("otel_traces") == 1
+
+
+def test_contract_violations_uses_silver_missing_counts_but_bronze_bad_rows(ch_stub, silver_coverage):
+    covered = {table: silver_coverage.now - 1_860 for table in silver_coverage.tables}
+    silver = "api\t10\t1\t0\t0\t0\t0\n"
+    bronze = "api\t1\n"
+    ch, stub = ch_stub({"resource_key_presence_1m": silver, "mapContains": bronze})
+    rows = asyncio.run(ch.contract_violations(coverage=covered, now=silver_coverage.now))
+    assert rows == [{"service": "api", "rows": 10, "violating": 1,
+                     "missing": {"sentinel.synthetic": 1}, "total_missing": 1,
+                     "source": "silver"}]
+    assert stub.count_matching("resource_key_presence_1m") == 1
+    assert stub.count_matching("mapContains") == 1
+
+
+def test_bronze_fallback_removal_requires_thirty_days_of_coverage_for_seven_continuous_days():
+    now = 10_000_000.0
+    old = now - 30 * 24 * 60 * 60 - 1
+    young = now - 30 * 24 * 60 * 60 + 1
+    assert not fallback_removal_ready([young] * 7, now)
+    assert fallback_removal_ready([old] * 7, now)
+    assert not fallback_removal_ready([old, old, young, old, old, old, old], now)

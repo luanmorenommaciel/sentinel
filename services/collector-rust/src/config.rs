@@ -10,6 +10,8 @@
 //! clickhouse:                 # omit this whole section for count-only mode
 //!   url: http://localhost:8123
 //!   database: bronze
+//!   user: sentinel_collector_u            # optional; omit for local dev
+//!   password_file: /etc/sentinel/secrets/ch_password   # a PATH, never a value
 //! contract:
 //!   expected_version: "1.0.0" # must match the version this binary was built for
 //!   strict: false             # true → any contract violation aborts before export
@@ -89,6 +91,20 @@ pub struct ClickHouseConfig {
     /// Target database. Defaults to `bronze`.
     #[serde(default = "default_database")]
     pub database: String,
+    /// ClickHouse user to authenticate as, e.g. `sentinel_collector_u`
+    /// (migration `0002`'s least-privilege role). `None` ⇒ the client's
+    /// default, which is the passwordless local-dev `default` user.
+    #[serde(default)]
+    pub user: Option<String>,
+    /// **Path to** a file holding the password for [`Self::user`] — never the
+    /// password itself (SPEC §14.2 rule 1). A path is the only shape
+    /// compatible with `clippy.toml`'s `std::env::var` ban, and it is what
+    /// lets this file live in git under review while the secret never does.
+    ///
+    /// There is deliberately **no** `password` field: `deny_unknown_fields`
+    /// turns an attempt to inline a secret into a parse failure.
+    #[serde(default)]
+    pub password_file: Option<PathBuf>,
     /// **gRPC mode only** (EP2.2 buffered exporter). Signals accumulated
     /// before a flush is forced, mirroring the Go collector's `BATCH_SIZE`
     /// (`internal/chstore/store.go`). Frozen bake-off value (ADR-0009/0010/
@@ -105,6 +121,40 @@ pub struct ClickHouseConfig {
 }
 
 impl ClickHouseConfig {
+    /// Resolve [`Self::password_file`] into the credential to send, reading the
+    /// file **at startup** (called from
+    /// [`crate::clickhouse_exporter::build_client_from_config`]).
+    ///
+    /// Returns `Ok(None)` when no `password_file` is configured — the local-dev
+    /// passwordless path. Exactly one trailing line ending is trimmed, so a
+    /// secret store that appends a newline and one that does not produce the
+    /// same credential, while a password that genuinely ends in a newline
+    /// survives as `"s3cr3t\n"` given `"s3cr3t\n\n"` on disk.
+    ///
+    /// The value is returned **out of band** and never stored on `self`: the
+    /// derived `Debug` a tracing subscriber prints therefore carries the path
+    /// and nothing else (SPEC §14.2 rule 2).
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::CredentialUnreadable`] if the file cannot be read. Its
+    /// `Display` names the path and the [`std::io::ErrorKind`] only — no bytes,
+    /// no length, no prefix. The underlying [`std::io::Error`] is deliberately
+    /// **not** retained as a `#[source]`: the cost is the raw OS message, and
+    /// the benefit is an error that is structurally incapable of carrying the
+    /// secret.
+    pub fn credential(&self) -> Result<Option<String>, ConfigError> {
+        let Some(path) = self.password_file.as_ref() else {
+            return Ok(None);
+        };
+        let raw =
+            std::fs::read_to_string(path).map_err(|source| ConfigError::CredentialUnreadable {
+                path: path.clone(),
+                kind: source.kind(),
+            })?;
+        Ok(Some(trim_one_trailing_newline(raw)))
+    }
+
     /// Build the [`crate::buffer::BufferConfig`] the gRPC server should use
     /// for its [`crate::buffer::BufferedExporter`], from this section's
     /// `batch_size` / `flush_interval_ms`.
@@ -119,6 +169,18 @@ impl ClickHouseConfig {
 
 fn default_database() -> String {
     "bronze".to_string()
+}
+
+/// Strip exactly one trailing line ending (`\n`, or the `\r\n` pair) from a
+/// credential read off disk. A CRLF pair is *one* newline, so both bytes go.
+fn trim_one_trailing_newline(mut value: String) -> String {
+    if value.ends_with('\n') {
+        value.pop();
+        if value.ends_with('\r') {
+            value.pop();
+        }
+    }
+    value
 }
 
 fn default_batch_size() -> usize {
@@ -289,6 +351,17 @@ pub enum ConfigError {
         compiled: String,
     },
 
+    /// `clickhouse.password_file` names a file that could not be read.
+    ///
+    /// The message carries the **path only** (plus the `io::ErrorKind`, which
+    /// distinguishes "not mounted" from "wrong mode" without revealing
+    /// anything about the file's contents) — SPEC §14.2 rule 2.
+    #[error("clickhouse.password_file {} is unreadable ({:?})", path.display(), kind)]
+    CredentialUnreadable {
+        path: PathBuf,
+        kind: std::io::ErrorKind,
+    },
+
     /// A runtime tuning value is outside its supported range.
     #[error("invalid configuration: {0}")]
     InvalidValue(String),
@@ -404,6 +477,8 @@ impl Config {
                     self.clickhouse = Some(ClickHouseConfig {
                         url,
                         database: default_database(),
+                        user: None,
+                        password_file: None,
                         batch_size: batch_size.unwrap_or_else(default_batch_size),
                         flush_interval_ms: flush_interval_ms
                             .unwrap_or_else(default_flush_interval_ms),
@@ -531,6 +606,8 @@ logging:
                 clickhouse: Some(ClickHouseConfig {
                     url: "http://ch:8123".to_string(),
                     database: "sentinel".to_string(),
+                    user: None,
+                    password_file: None,
                     batch_size,
                     flush_interval_ms,
                 }),
@@ -582,6 +659,8 @@ logging:
         cfg.clickhouse = Some(ClickHouseConfig {
             url: "http://injected:8123".to_string(),
             database: default_database(),
+            user: None,
+            password_file: None,
             batch_size: default_batch_size(),
             flush_interval_ms: default_flush_interval_ms(),
         });
@@ -633,11 +712,143 @@ logging:
         let ch = ClickHouseConfig {
             url: "http://ch:8123".to_string(),
             database: default_database(),
+            user: None,
+            password_file: None,
             batch_size: 250,
             flush_interval_ms: 750,
         };
         let buf = ch.buffer_config();
         assert_eq!(buf.batch_size, 250);
         assert_eq!(buf.flush_interval, std::time::Duration::from_millis(750));
+    }
+
+    // ── REQ-H-05 — `user` / `password_file` (SPEC §14.2) ────────────────────
+    //
+    // The config file carries a **path, never a value**. These four cases are
+    // the testable form of §14.2's rules 1 and 2.
+
+    /// Write `contents` to a uniquely named file under the system temp dir and
+    /// return its path. No `tempfile` dev-dependency: one more crate in the
+    /// lock file to write two strings to disk is not a trade worth making.
+    fn scratch_file(tag: &str, contents: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("sentinel-ch-cred-{}-{tag}-{n}", std::process::id()));
+        std::fs::write(&path, contents).expect("write scratch credential file");
+        path
+    }
+
+    #[test]
+    fn credential_absent_sends_nothing() {
+        let yaml = "clickhouse:\n  url: http://ch:8123\n";
+        let cfg: Config = serde_yaml::from_str(yaml).expect("parses");
+        let ch = cfg.clickhouse.expect("present");
+        assert_eq!(ch.user, None, "no user without an explicit one");
+        assert_eq!(ch.password_file, None);
+        assert_eq!(
+            ch.credential().expect("absent is not an error"),
+            None,
+            "a config with no password_file yields no credential at all"
+        );
+    }
+
+    #[test]
+    fn credential_unreadable_names_the_path_and_nothing_else() {
+        let missing = std::env::temp_dir().join("sentinel-ch-cred-does-not-exist");
+        let _ = std::fs::remove_file(&missing);
+        let ch = ClickHouseConfig {
+            url: "http://ch:8123".to_string(),
+            database: default_database(),
+            user: Some("sentinel_collector_u".to_string()),
+            password_file: Some(missing.clone()),
+            batch_size: default_batch_size(),
+            flush_interval_ms: default_flush_interval_ms(),
+        };
+        let err = ch
+            .credential()
+            .expect_err("a missing file is a startup error");
+        assert!(matches!(err, ConfigError::CredentialUnreadable { .. }));
+        // Exact equality is the proof that the message names the path *only*:
+        // nothing else can have been interpolated into it.
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "clickhouse.password_file {} is unreadable (NotFound)",
+                missing.display()
+            )
+        );
+    }
+
+    #[test]
+    fn credential_present_trims_exactly_one_trailing_newline() {
+        for (written, expected) in [
+            ("s3cr3t\n", "s3cr3t"),
+            ("s3cr3t", "s3cr3t"),
+            ("s3cr3t\n\n", "s3cr3t\n"),
+            ("s3cr3t\r\n", "s3cr3t"),
+            ("  padded  \n", "  padded  "),
+        ] {
+            let path = scratch_file("trim", written);
+            let ch = ClickHouseConfig {
+                url: "http://ch:8123".to_string(),
+                database: default_database(),
+                user: Some("sentinel_collector_u".to_string()),
+                password_file: Some(path.clone()),
+                batch_size: default_batch_size(),
+                flush_interval_ms: default_flush_interval_ms(),
+            };
+            assert_eq!(
+                ch.credential().expect("readable"),
+                Some(expected.to_string()),
+                "input {written:?}"
+            );
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    #[test]
+    fn config_debug_carries_the_path_never_the_credential() {
+        // `Debug` is what a tracing subscriber prints. The credential is
+        // returned out of band by `credential()` and never stored on the
+        // struct, so no amount of config logging can leak it (§14.2 rule 2).
+        let secret = "topsecretvalue";
+        let path = scratch_file("debug", secret);
+        let yaml = format!(
+            "clickhouse:\n  url: http://ch:8123\n  user: sentinel_collector_u\n  password_file: {}\n",
+            path.display()
+        );
+        let cfg: Config = serde_yaml::from_str(&yaml).expect("parses");
+        let ch = cfg.clickhouse.as_ref().expect("present");
+        assert_eq!(ch.user.as_deref(), Some("sentinel_collector_u"));
+        assert_eq!(ch.credential().expect("readable"), Some(secret.to_string()));
+
+        let rendered = format!("{cfg:?}");
+        assert!(
+            rendered.contains(&path.display().to_string()),
+            "the path is loggable: {rendered}"
+        );
+        assert!(
+            !rendered.contains(secret),
+            "the credential must never appear in Debug output"
+        );
+        assert!(
+            !rendered.contains(&secret.len().to_string()),
+            "not even its length"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn password_without_a_file_is_not_a_config_field() {
+        // There is deliberately no `password` key — `deny_unknown_fields`
+        // turns an attempt to inline a secret into a parse failure.
+        let yaml = "clickhouse:\n  url: http://ch:8123\n  password: inline-secret\n";
+        let err = serde_yaml::from_str::<Config>(yaml).expect_err("rejected");
+        assert!(
+            err.to_string().contains("password"),
+            "unexpected error: {err}"
+        );
     }
 }

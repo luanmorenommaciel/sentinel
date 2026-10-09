@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+#
+# ClickHouse DDL migration runner (REQ-A-04, A-09, A-13, A-14, D-11).
+#
+# Applies `migrations/NNNN_*.sql` in filename order and records every applied
+# version in `_meta.schema_migrations`, so "what schema is deployed?" is a
+# SELECT rather than a `SHOW CREATE TABLE` safari.
+#
+# Bash + clickhouse-client, nothing else (NFR-11). The same mechanism
+# `Makefile:72` already uses, and it needs no `docker-entrypoint-initdb.d` — which
+# is the point: a managed ClickHouse has no init.d (spec §12.2).
+#
+# Usage
+#   bash infra/clickhouse/migrate.sh [migrations_dir]
+#
+# The client command is injected, never guessed, because getting it wrong means
+# migrating the wrong database:
+#
+#   CH_CLIENT="docker compose exec -T clickhouse clickhouse-client" …   # local stack
+#   CLICKHOUSE_PASSWORD="$(cat /run/secrets/pw)" \
+#   CH_CLIENT="clickhouse-client --host=ch.internal --secure \
+#              --user=sentinel_migrator_u" …                            # deployed
+#
+# The password goes in `CLICKHOUSE_PASSWORD`, which the client reads itself
+# (verified on 24.3; there is no `--password-file`), and NEVER in `CH_CLIENT`:
+# this script prints the client command on an unreachable host, and `ps` shows
+# an argv to every user on the box.
+#
+# `--multiquery` is passed by this script and is not optional: the 24.3 client
+# rejects a multi-statement `-q` with `Code: 62` where 25.4 accepts it (measured,
+# #46), and every migration file holds more than one statement.
+#
+# Exit codes are part of the contract (spec §6.2):
+#   0  every file applied or skipped
+#   1  usage / environment error
+#   2  cannot reach ClickHouse
+#   3  a recorded file's checksum changed — migrations are append-only
+#   4  a migration failed; nothing was recorded, so the next run retries it
+
+set -uo pipefail
+
+MIGRATIONS_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/migrations}"
+
+# shellcheck disable=SC2206  # intentional word splitting: CH_CLIENT is a command line
+CLIENT=(${CH_CLIENT:-clickhouse-client})
+CLIENT+=(--multiquery)
+
+log() { printf '%s\n' "$*"; }
+err() { printf '%s\n' "$*" >&2; }
+
+# Run SQL from stdin. Every statement in this runner goes through here, so there
+# is one place the client is invoked and one place its args are set.
+ch() { "${CLIENT[@]}"; }
+
+# Escape a value for a single-quoted ClickHouse string literal. A branch name or
+# hostname carrying a quote would otherwise break — or alter — the ledger INSERT
+# after the migration has already been applied, which is the one write that must
+# not fail.
+# The quote char goes through a variable: `${1//\'/\'\'}` looks right and is not
+# — the replacement's backslashes are literal, so it yields `bran\'\'ch`.
+sql_quote() {
+    local q="'"
+    printf '%s' "${1//"$q"/$q$q}"
+}
+
+sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | cut -d' ' -f1
+    else
+        err "migrate: neither sha256sum nor shasum is available"
+        exit 1
+    fi
+}
+
+# A migration is timed by Bash's own `time` keyword, reported through TIMEFORMAT.
+# EPOCHREALTIME would be the obvious clock and is unusable: macOS ships Bash 3.2,
+# where it is unset, so a two-sample clock falls back to whole seconds and records
+# 0 ms for every migration on the primary dev platform — the one value
+# `duration_ms` must not always hold — while CI's Bash 5 hides it. `date +%s%3N` is
+# GNU-only, and NFR-11 rules out a helper binary, which leaves `time`: a builtin,
+# sub-second in every Bash we run on, and it times the migration itself rather than
+# straddling it with two clock reads.
+#
+# The report is newline-led and tagged because it shares one capture with the
+# migration's own output, which step 3 peels it back off: a client whose last line
+# arrived without a newline would otherwise have the timing glued onto it.
+ELAPSED_TAG='migrate-elapsed'
+TIMEFORMAT=$'\n'"$ELAPSED_TAG %3R"
+
+# `%3R` is seconds and milliseconds, separated by whatever radix character the
+# locale asks for, so both are accepted. Any other shape yields 0 rather than a
+# half-read number: `duration_ms` is UInt32, and it must not be what fails the one
+# INSERT that must not fail.
+real_to_ms() {
+    if [[ ! $1 =~ ^([0-9]+)[.,]([0-9]{3})$ ]]; then
+        printf '0'
+        return
+    fi
+    printf '%s' $(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} ))
+}
+
+# ── the role password, as a query parameter on stdin (T17, SPEC §14.1) ──────
+#
+# `0002_roles.sql` creates its users with `IDENTIFIED WITH sha256_password BY
+# {pw:String}`, so the value is never a literal in a migration file — migration
+# files are in git.
+#
+# It is supplied by prepending `SET param_pw` to the statement stream, NOT with
+# `--param_pw=…` on the client's command line. Same reason this script keeps the
+# connection password out of `CH_CLIENT`: an argv is visible to every user on the
+# box through `ps`, and stdin is not. Verified on 25.4.13.22 that `SET param_pw`
+# ahead of `CREATE USER … BY {pw:String}` yields auth_type `sha256_password`.
+#
+# `MIGRATION_PW_FILE` holds a path, never a value. Unset or absent is fine and is
+# the common case: only migrations that reference `{pw:…}` need it, and a
+# migration that needs it fails loudly on its own if it is missing.
+MIGRATION_PW_FILE="${MIGRATION_PW_FILE:-}"
+param_prelude=""
+if [[ -n "$MIGRATION_PW_FILE" ]]; then
+    if [[ ! -r "$MIGRATION_PW_FILE" ]]; then
+        err "migrate: MIGRATION_PW_FILE is set but not readable: $MIGRATION_PW_FILE"
+        exit 1
+    fi
+    # One trailing newline is stripped, matching how the collector reads its own
+    # password file, so a secret store that appends one and a store that does not
+    # produce the same credential.
+    pw="$(printf '%s' "$(cat "$MIGRATION_PW_FILE")")"
+    if [[ -z "$pw" ]]; then
+        err "migrate: $MIGRATION_PW_FILE is empty"
+        exit 1
+    fi
+    param_prelude="SET param_pw = '$(sql_quote "$pw")';"
+    unset pw
+fi
+
+if [[ ! -d "$MIGRATIONS_DIR" ]]; then
+    err "migrate: no migrations directory at $MIGRATIONS_DIR"
+    exit 1
+fi
+
+# ── reachability (exit 2) ────────────────────────────────────────────────────
+if ! probe="$(printf 'SELECT 1\n' | ch 2>&1)"; then
+    # ${CLIENT[0]} only: a caller that put a credential in CH_CLIENT anyway must
+    # not have it copied into a CI log by this error path.
+    err "migrate: cannot reach ClickHouse via '${CLIENT[0]}'"
+    err "${probe}"
+    exit 2
+fi
+
+# ── the ledger bootstraps itself (step 1) ────────────────────────────────────
+# Migration 0003 declares `_meta` as well, and records itself through this
+# runner; the two are byte-compatible because both are `IF NOT EXISTS`.
+if ! out="$(ch <<'SQL' 2>&1
+CREATE DATABASE IF NOT EXISTS _meta;
+CREATE TABLE IF NOT EXISTS _meta.schema_migrations
+(
+    `version`     String,
+    `filename`    String,
+    `checksum`    FixedString(64),
+    `applied_at`  DateTime DEFAULT now(),
+    `applied_by`  LowCardinality(String),
+    `duration_ms` UInt32,
+    `runner_host` LowCardinality(String)
+)
+ENGINE = MergeTree
+ORDER BY version;
+SQL
+)"; then
+    err "migrate: could not create the ledger"
+    err "$out"
+    exit 2
+fi
+
+# ── what is already recorded (step 2) ───────────────────────────────────────
+if ! recorded="$(printf "SELECT version, checksum FROM _meta.schema_migrations FORMAT TSV\n" | ch 2>&1)"; then
+    err "migrate: could not read _meta.schema_migrations"
+    err "$recorded"
+    exit 2
+fi
+
+recorded_checksum() {
+    printf '%s\n' "$recorded" | awk -F'\t' -v v="$1" '$1 == v { print $2; exit }'
+}
+
+APPLIED_BY="${APPLIED_BY:-$(git -C "$MIGRATIONS_DIR" rev-parse HEAD 2>/dev/null || echo unknown)}"
+RUNNER_HOST="$(hostname 2>/dev/null || echo unknown)"
+
+applied=0
+skipped=0
+
+# ── apply in filename order (step 3) ────────────────────────────────────────
+shopt -s nullglob
+for file in "$MIGRATIONS_DIR"/[0-9][0-9][0-9][0-9]_*.sql; do
+    filename="$(basename "$file")"
+    version="${filename%%_*}"
+    checksum="$(sha256 "$file")"
+    prior="$(recorded_checksum "$version")"
+
+    if [[ -n "$prior" ]]; then
+        if [[ "$prior" == "$checksum" ]]; then
+            log "already applied  $filename"
+            skipped=$((skipped + 1))
+            continue
+        fi
+        log "CHECKSUM DIVERGENCE  $filename"
+        log "  recorded: $prior"
+        log "  on disk:  $checksum"
+        err "migrate: $filename changed after it was applied. Migrations are append-only —"
+        err "          add a new migration instead of editing $filename. No further file attempted."
+        exit 3
+    fi
+
+    log "applying         $filename"
+    # The capture carries the client's output and, on its own last line, the
+    # TIMEFORMAT report; the two are split apart before either is used, so the
+    # failure path still prints only what the client said.
+    # The prelude goes on stdin ahead of the file so `{pw:String}` resolves; it is
+    # empty for every migration that does not need it.
+    captured="$( { time { { [[ -n "$param_prelude" ]] && printf '%s\n' "$param_prelude"; cat "$file"; } | ch; }; } 2>&1 )"
+    rc=$?
+    out="${captured%$'\n'"$ELAPSED_TAG" *}"
+    if (( rc != 0 )); then
+        err "migrate: $filename failed; nothing recorded, so the next run retries it"
+        err "$out"
+        exit 4
+    fi
+    duration_ms="$(real_to_ms "${captured##*$'\n'"$ELAPSED_TAG" }")"
+
+    if ! out="$(printf "INSERT INTO _meta.schema_migrations (version, filename, checksum, applied_by, duration_ms, runner_host) VALUES ('%s', '%s', '%s', '%s', %d, '%s')\n" \
+        "$(sql_quote "$version")" "$(sql_quote "$filename")" "$checksum" \
+        "$(sql_quote "$APPLIED_BY")" "$duration_ms" "$(sql_quote "$RUNNER_HOST")" | ch 2>&1)"; then
+        err "migrate: $filename applied but the ledger row could not be written"
+        err "$out"
+        exit 4
+    fi
+    applied=$((applied + 1))
+done
+
+if [[ $((applied + skipped)) -eq 0 ]]; then
+    err "migrate: no NNNN_*.sql files in $MIGRATIONS_DIR"
+    exit 1
+fi
+
+log "migrate: $applied applied, $skipped already applied"

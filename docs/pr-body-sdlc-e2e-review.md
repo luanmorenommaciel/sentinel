@@ -1,0 +1,460 @@
+## Summary
+
+CI that actually runs, on a single pinned ClickHouse, with the delivery path's
+documentation consolidated into one page. The pipeline itself — generator → collector →
+`bronze.*` — is untouched.
+
+**72 commits, 131 files changed** — 71 and 131 measured at `3405b68`, the commit before this
+body; the body itself adds one commit and no new file. Rebased onto `main` at `1aa8d92`, which
+carries PR #59. Every figure below names the commit it was measured at, because this branch is
+still receiving commits: re-run the commands in the block for the current head.
+
+<details>
+<summary>Why you may have seen 44 commits / 200 files quoted earlier</summary>
+
+Four different measures were in circulation. The two in the line above are the ones this
+PR's own diff shows — commits since the merge-base with `main`, and files in
+`git diff origin/main...HEAD`:
+
+```
+$ git rev-list --count origin/main..3405b68                    #  commits in the PR
+71
+$ git diff --name-only origin/main...3405b68 | wc -l           #  files in the PR diff
+131
+$ git rev-list --count origin/origin/sdlc-e2e-review..HEAD      #  counted against the
+54                                                              #  PRE-REBASE remote head
+$ git log --format='' --name-only origin/main..3405b68 \
+    | sed '/^$/d' | sort -u | wc -l                             #  files touched across all
+218                                                             #  commits, union
+```
+
+**218** and **54**: the first is the union, the second was counted against the pre-rebase remote head `ac0b633`, so it also included
+`main`'s own two commits that the old head predates. That head has since been replaced by
+this branch, so the figure is historical. **215** is the union across every commit,
+including files a later commit reverted — which is where the "~200 files" figure came from.
+
+The PR diff fell from **207** files to **131** for one reason: restoring `.claude/` removed 87
+deletion entries from it. The arithmetic closes exactly — the eleven additions are everything in
+`comm -13` between the two file lists, and nothing else left the diff:
+
+```
+$ git diff --name-only origin/main...93141c4 | wc -l            #  before any of this work
+207
+$ git diff --name-only origin/main...93141c4 | grep -c '^\.claude/'
+87
+
+$ git diff --name-only origin/main...93141c4 | sort > old
+$ git diff --name-only origin/main...3405b68 | sort > new
+$ comm -13 old new                                              #  in the diff now, not before
+.github/workflows/image-scan.yml
+docs/pr-body-sdlc-e2e-review.md
+docs/sdlc.md
+infra/clickhouse/migrations/0008_migrator_truncate.sql
+scripts/ci/audit-images.sh
+services/collector-rust/deny.toml
+services/collector-rust/tests/clickhouse_roundtrip.rs
+services/collector-rust/tests/docker-stop.test.sh
+services/collector-rust/tests/support/mod.rs
+services/generator-python/src/otelgen/exporters/otlp.py
+services/generator-python/src/otelgen/seeding.py
+$ comm -23 old new | grep -vc '^\.claude/'                      #  left the diff, excluding .claude/
+0
+
+207 − 87 restored + 11 new files = 131
+```
+
+The earlier "44 commits" was measured before the rebase, against the old merge-base
+`3af2ee7`; that count is now 47 for the same range, plus the 20 commits added since (47 + 20 = 67).
+
+</details>
+
+```diff
+ .github/workflows/
+-├── rust-ci.yml            # the only gate
++├── rust-ci.yml            # PR: gates · supply-chain
++│                          # weekly: integration · release-build · docker-build · musl spike
++├── python-ci.yml          # PR: ruff · pytest matrix · supply-chain*
++├── repo-invariants.yml    # PR: 10 whole-tree asserts
++├── e2e-silver.yml         # weekly + push to main + dispatch:
++│                          # real pipeline + 18 silver asserts
++├── pr-linked-issue.yml    # PR: requires Closes #n
++└── release.yml            # GATED OFF — workflow_dispatch only, no registry exists
+                            # (* = deliberately non-blocking)
+
+ infra/clickhouse/
+-├── three coexisting pins: 24.3, 25.4, 24.3
++├── compose.clickhouse.yml # ONE service definition, pinned 25.4
++├── migrations/0001..0006  # the DDL source of truth
++├── init.d/                # symlinks into migrations/ — one source, two apply paths
++└── backfill/              # runner + canonical SQL, refuses the live partition
+
+ docs/
++└── sdlc.md                # Stage · Artifact · Gate · Owner, one page
+```
+
+Two lanes, which is the shape PR #59 set and this branch keeps: cheap checks on every
+pull request, anything needing a live ClickHouse or an emulated architecture on a weekly
+schedule plus `workflow_dispatch`. `docs/ci-gates.md` carries the full table and the
+trade-off in writing.
+
+### Code that landed inside two documentation commits
+
+This branch was **not** split into the five focused PRs that were considered (Process
+Docs · CI · Migrations · Silver/Backfill · Flow-UI). The split lines cut through
+individual commits rather than between them — measured, not assumed: **27 of the 67 commits
+at `408be12` touch more than one area**, counting each commit's files against those five plus
+an "everything else" bucket (the collector crate, the `Makefile`, `docker-compose.yml`). The
+two below are the worst cases.
+Splitting would mean rewriting commit *contents*, not reordering them.
+
+So the code those two commits carry is called out here instead, because their subject
+lines say "docs" and a reviewer reading subject lines would miss it:
+
+| Commit | Subject says | Also contains |
+|---|---|---|
+| `8417bee` | `docs: update README with task status tracking` | **5 areas, 10 files.** `migrations/0005_silver_watcher_models.sql` (+264) — the four Pod 3 Watcher read models and their MVs · `tests/03-watcher-models.test.sql` (+247) · `queries/03-watcher-sample.sql` · invariants `07-silver-mv-determinism.sh` (+84) and `08-no-verdict-in-silver.sh` (+46) · `e2e-silver.yml` · `Makefile` · `spec/core-spec.md` |
+| `97982b9` | `docs: reconcile the records with the 2026-10-06 rulings` | **6 areas, 40 files.** The whole backfill runner — `backfill.sh` (+211), 14 canonical/phase SQL files (7 in `canonical/`, 7 in `sql/`), `runner-refusal.test.sh`, `canonical-sync.test.sh` · `migrations/0006_repoint_metric_rollup.sql` (+81) · invariant `09-local-compose-boundary.sh` (+51) · **flow-ui Python**: `clickhouse.py` (+90), `pipeline.py`, `test_clickhouse.py` · `docker-compose.yml` · `Makefile` (+55) |
+
+Reviewing those two commits as documentation changes would miss a 264-line migration, a
+211-line shell runner, three new repository invariants and a change to flow-ui's read
+path.
+
+## Evidence
+
+**SIGTERM, issue #45.** The missing acceptance criterion was `docker stop`. Verified by
+running the test both ways on host cargo 1.99.0:
+
+```
+with the fix (src/main.rs selects on SignalKind::terminate + ctrl_c):
+  cargo test --test shutdown_signals
+    sigterm_stops_collector_cleanly ... ok
+    sigint_stops_collector_cleanly  ... ok
+    2 passed; 0 failed; 2 ignored
+
+with shutdown_signal reverted to ctrl_c-only:
+  sigterm_stops_collector_cleanly ... FAILED
+    "SIGTERM should exit successfully: signal: 15 (SIGTERM)"
+```
+
+The test has teeth: it fails without the fix. New in this PR is
+`services/collector-rust/tests/docker-stop.test.sh` (`make test-collector-shutdown`),
+which asserts the *image* exits 0 within 5 s of `docker stop -t 10` — the configuration
+#45 actually observed failing (`docker stop -t 12` → exit 137, SIGKILL). A cargo test
+cannot reach it: the binary has to be PID 1 in distroless and receive Docker's own
+signal.
+
+**Local gates, all run:**
+
+```
+scripts/ci/run-invariants.sh                             → 10 assert(s) run, 0 failed
+cargo test --locked                                      → 99 unit + integration targets,
+                                                            0 failed, 4 ignored
+cargo fmt --all -- --check                               → clean
+cargo clippy --all-targets --all-features -- -D warnings → clean
+actionlint .github/workflows/*.yml                       → 2 pre-existing style notes,
+                                                            0 errors
+shellcheck tests/docker-stop.test.sh                     → clean
+```
+
+**Python suites, now actually run** (outside Docker, in a 3.14 venv, because this
+environment has no Docker daemon):
+
+```
+flow-ui    pytest          → 87 passed
+generator  pytest          → 178 passed, 6 errors (the live-ClickHouse integration tests)
+ruff       the 3 edited files → All checks passed!
+bandit     generator (all checks)        → exit 0
+bandit     flow-ui (B608 scoped off)     → exit 0
+cargo deny --all-features check          → advisories/bans/licenses/sources ok
+invariants under Compose v2.27.0 / v2.39.4 / v5.1.4 → 10 run, 0 failed (each)
+```
+
+**Still not run:** `make test-silver` and `make test-hyperdx` (Docker), and the
+`docker stop` assertion itself, which has only been exercised down its skip and
+`REQUIRE_DOCKER=1` paths — its first real run is the weekly `docker-build` job. Two
+pre-existing ruff errors sit in `services/generator-python/tests/` (E501, I001); they are
+outside `make lint-generator`'s scope, which checks `src` only, and are not touched here.
+
+**CI ran, for the first time since 2026-10-05.** The account-wide Actions failure (jobs
+ending in 1–3 s with `runner_name: ""`) cleared on 2026-10-08. The first real run on this
+branch both confirmed the lean shape and found three things no local run could:
+
+```
+gates (fmt · clippy · test)            pass   1m12s
+lint (ruff)                            pass   7s
+test (python 3.10 / 3.11 / 3.12)       pass   46s / 58s / 48s
+linked-issue                           pass   4s
+integration · docker-build ·           skipped on the PR  ← the lean default, working
+  release build · musl TLS spike
+
+invariants                             FAILED 2 of 10   → fixed
+supply-chain (cargo deny)              FAILED           → fixed
+supply-chain (pip-audit · bandit)      FAILED           → fixed
+```
+
+**1. `invariants`: a Compose portability defect.** `02-service-named-clickhouse` and
+`03-no-duplicate-host-8080` read merged `docker compose config`, and the runner rejected
+the `collector-ci` stack: `volumes.clickhouse_data conflicts with imported resource`.
+`services/collector-rust/infra/docker-compose.yml` both `include:`d
+`compose.clickhouse.yml` *and* re-declared `clickhouse_data` to pin its name — a conflict
+with an imported resource, not an override. **The local toolchain (v5.1.4) tolerates it
+and passed 10/10, which is why it survived unnoticed.** Reproduced against v2.27.0 and
+v2.39.4, fixed by making the included file the single owner *and* moving the `name:` pin
+into it, re-verified 10/10 under all three versions.
+
+**2. `cargo deny`: `RUSTSEC-2025-0134`** — `rustls-pemfile` unmaintained (not a
+vulnerability). Absent from the default feature set; it reaches the graph only via
+`tls-spike`, T04's compile-only TLS experiment, because CI runs `--all-features`.
+Removing it needs tonic 0.13+ and the whole opentelemetry 0.27 stack, which is
+contract-adjacent and does not belong here. One scoped, dated `ignore` in `deny.toml`
+naming T42 as its removal trigger; the `unmaintained` lint stays on otherwise.
+`cargo deny --all-features check` → `advisories ok, bans ok, licenses ok, sources ok`.
+
+**3. `bandit`: 22 findings, split by judgement rather than blanket-suppressed.**
+pip-audit was clean. B110 (×3) was a real smell — three silent `except Exception: pass`
+on exporter shutdown — and is **fixed**: teardown stays best-effort but logs, so a
+half-closed exporter is no longer invisible. B311 (×1) and B107 (×1) are false positives
+with per-line `# nosec` and reasons (`random.Random(seed)` *is* the contract — `SEED=42`
+must replay the golden fixture; `password_file` is a path, not a credential). B608 (×17,
+`flow_ui/clickhouse.py`) are false positives — every interpolation is a module constant
+and the module reads no request input — and are scoped off for flow-ui only, in
+`make audit-python`, with the trade-off written there. Both bandit invocations now exit 0.
+
+Also corrected: this repo recorded `continue-on-error` as making a check non-blocking.
+Measured on run `37871412941`, the **run** concluded `success` while the **job**
+concluded `failure` — so the check still shows red. It buys "does not fail the run",
+never "shows green". Those checks are green now because the findings are fixed.
+
+**Still true:** the two shellcheck notes were confirmed present on the pre-rebase branch,
+so neither is introduced here; and the Rust clippy/test runs quoted above were on host
+cargo 1.99.0, not the 1.96.0 `rust-toolchain.toml` pins — though CI's own `gates` job has
+now passed on the pinned toolchain.
+
+## The heavy lane is now green, and that took three fixes
+
+**Run `37923509295`** (`workflow_dispatch`, 2026-10-09) is the first all-success heavy-lane run
+in this repository's history:
+
+```
+gates (fmt · clippy · test)                   success   34s
+release build                                 success   43s
+supply-chain (cargo deny)                     success   59s
+integration (every #[ignore]d test)           success   1m29s   ← never passed before
+musl TLS spike (x86_64-unknown-linux-musl)    success   2m03s   ← never passed before
+musl TLS spike (aarch64-unknown-linux-musl)   success   1m45s   ← never passed before
+docker-build (distroless image)               success   22m05s  ← never completed before
+```
+
+**Issue #45's proof has executed, in both halves, for the first time.** The two flush tests
+(`sigterm_/sigint_flushes_acknowledged_buffer_to_clickhouse`) pass inside `integration`, and the
+step at the end of `docker-build` — which had never run by *any* path, because the job kept dying
+on its 20-minute timeout — prints
+
+```
+docker stop -t 10: exit 0 after 0s (budget 5s)
+PASS  the image handles SIGTERM and exits cleanly inside the grace period
+```
+
+The issue stays **open** pending sign-off; this PR records the evidence rather than claiming it.
+
+`docker-build`'s 22m05s also settles the timeout as a measurement, not a guess: the old 20-minute
+budget was genuinely too small. And **`e2e-silver` is the one job in `docs/ci-gates.md` that has
+still never run** — it is a separate workflow, a `rust-ci` dispatch does not reach it, and nothing
+has triggered it. Its row remains a claim about a job, not a report from one.
+
+What follows is what the first heavy-lane run found, and how each was fixed.
+
+## The first heavy-lane run, and why it was red
+
+The weekly lane had **never executed** — zero `schedule` or `workflow_dispatch` events across
+143 runs. Run `37875017554` is the first, and it found three real defects plus one design flaw.
+All four are fixed here and all are green in the run above; none was findable without an actual run.
+
+```
+release build                      success   ← had never executed; compiles clean
+gates · supply-chain (cargo deny)  success
+integration                        FAILURE   → fixed
+musl TLS spike (both targets)      FAILURE   → fixed
+docker-build                       cancelled at timeout-minutes: 20  → raised to 45
+```
+
+**1. `integration`: the branch's own security work broke its own test, invisibly.** Every live
+test connected as `default` and got
+
+```
+Code: 194. DB::Exception: default: Authentication failed: password is incorrect,
+or there is no user with such name. (REQUIRED_PASSWORD)
+```
+
+**It is not a password**, and that matters because "add a password" would not have fixed it.
+`clickhouse/clickhouse-server` ships `users.d/default-user.xml` restricting `default` to `::1`
+and `127.0.0.1` *inside the container*; `cargo test` runs on the host and arrives through the
+published port from the Docker bridge, matching no `<networks>` entry, and ClickHouse answers
+with the generic 194. Verified locally against 25.4.13.22: `clickhouse-client` inside the
+container answers `SELECT 1`, the identical query from the host returns 194. Until T19 the repo
+mounted a `users.d` override opening `::/0` for `default`; T19 deleted it (REQ-B-14) and nothing
+noticed, because these tests had never run.
+
+Fixed with the repo's own least-privilege identity, not a hole in the ACL. The job provisions the
+roles with `migrate.sh` — so it is now also the first CI exercise of the migration runner — and
+authenticates as `sentinel_migrator_u` with a per-run random password written to a file under
+`RUNNER_TEMP`: a path, never a value (SPEC §14.2), never in an argv, and not in `infra/secrets/`
+where `04-no-plaintext-secrets` would police it. `tests/support/mod.rs` holds the wiring once and
+also builds the `clickhouse:` block the SIGTERM test writes for the collector it spawns, so the
+writer and the verifier authenticate identically — a mismatch would not fail loudly, the flush
+would just write nothing. No new `std::env::var` in `src/` (clippy.toml bans it; the URL still
+comes through `url_from_env`, the collector's credential still through `password_file`).
+
+A second, smaller finding came with it: **`TRUNCATE` is its own privilege in ClickHouse and
+`DROP` does not imply it**, so the migrator could not clear a table
+(`Code: 497 … necessary to have the grant TRUNCATE ON bronze.otel_logs`). Migration `0008` grants
+it — a new file, because `0002` has been applied and the runner protects its checksum with exit 3.
+The role already holds `CREATE TABLE` + `DROP` on both databases, so it could already drop and
+rebuild; `TRUNCATE` is strictly weaker and widens nothing. Not granted to `sentinel_collector`,
+which stays at INSERT + SELECT.
+
+All four live tests now pass against the CI-shaped stack — the first time any of them has passed
+anywhere:
+
+```
+golden_fixture_round_trip                         ... ok
+otlp_grpc_payload_lands_in_clickhouse             ... ok
+sigterm_flushes_acknowledged_buffer_to_clickhouse ... ok
+sigint_flushes_acknowledged_buffer_to_clickhouse  ... ok
+```
+
+**2. `musl TLS spike`: no C compiler for either target.** Both legs died identically in
+`ring 0.17.14`'s build script — `ToolNotFound: failed to find tool "x86_64-linux-musl-gcc"`.
+`ring` compiles C and assembly, so `cc-rs` needs a compiler *for the target*, which a bare runner
+has for neither musl triple; DEC-A4's `[M2]` measurement was taken inside a `rust:1.96` container
+that had `musl-tools`, which is exactly the difference. `musl-tools` alone is **not** the fix — it
+installs `musl-gcc` for the host architecture only, leaving the aarch64 leg with no compiler and
+no linker — so the job now installs `cargo-zigbuild`, which covers both triples with one install.
+Verified before committing, inside `rust:1.96` on an arm64 host so one leg is a genuine
+cross-compile with `ring` in the graph both times:
+
+```
+x86_64-unknown-linux-musl:  ELF 64-bit LSB executable, x86-64, statically linked, stripped
+aarch64-unknown-linux-musl: ELF 64-bit LSB executable, ARM aarch64, statically linked, stripped
+```
+
+which is what the job's existing `file` assertion looks for. The job's entire purpose is
+DEC-A4/T42 evidence and it had never produced any.
+
+**3. `docker-build`: twenty minutes was eighteen seconds short.** Started 02:32:00, cancelled
+02:52:18 — 20m18s against a 20-minute budget. The arm64 leg is a full Rust musl compile under
+QEMU with a cold `type=gha` cache. Raised to 45, set for the cold case because a weekly run after
+a dependency bump gets the cold case. **This is what has kept the `docker stop` assertion for
+issue #45 from ever executing by any path**, and it is why #45 stays open.
+
+**4. A design flaw, found by reading rather than by running.** The concurrency group was
+`rust-ci-${{ github.ref }}` with `cancel-in-progress: true` for every event, so a manual or
+scheduled run on a branch someone is working on was cancellable by the next push to that branch.
+The heavy lane takes 20-45 minutes, so on an active branch it could essentially never finish — and
+the job that proves #45 lives in it. The group is now keyed on the event name: successive pushes
+to one PR still supersede each other, a manual or scheduled run gets its own group. To be clear,
+this is *not* what killed `docker-build` in that run; it died on its own timeout.
+
+## Every ticket is `Done (local)`, by this PR's own rule
+
+`docs/sdlc.md` step 11 — added by this PR — defines Done as green **in CI** *and* on `main`.
+Neither half holds: this branch is 72 commits ahead of `main` with nothing merged, and the heavy
+lane is red. The README carried 36 bare `Done` rows and a `| **Done** | 43 | 89.6% |` summary;
+all 43 ticket rows now read `Done (local)`, with a paragraph under the table saying why. The two
+`Done` rows left are in the *decisions* table, where it means a ruling was taken.
+
+## Why
+
+Closes #34
+
+`#34` is the issue this branch answers: `.github/workflows/` contained only `rust-ci.yml`,
+so 235 tests and 60 SQL asserts existed, were green, and gated nothing. They are wired now.
+
+Refs #45 · Refs #56 · Refs #35
+
+**Deliberately `Refs`, not `Closes`, for those three.** They were reopened as part of this
+work, and the PR lane going green does not finish any of them:
+
+- **#45** — SIGTERM handling is proven by a PR-lane test, but the `docker stop` half is
+  covered by `docker-build`, which **skips on PRs** (verified: bucket `skipping`). Its
+  first real execution is a weekly run that has not happened yet.
+- **#56** — the PR-lane gates now run and pass, but four gates sit in the weekly lane and
+  have never executed, and the cycle's own blockers (DEC-A3, DEC-D1) are untouched here.
+- **#35** — a GitHub repository setting, not a file. No rule exists on `main` today, and
+  only the Commander can create one. Nothing in a PR can close it.
+
+Marking any of them Done on merge would record a green nobody has seen for the part that
+still has no evidence. They close when the weekly lane has run and, for #35, when the rule
+is configured.
+
+## Merge Danger
+
+**Door:** two-way for everything except one migration.
+
+Reverting this PR restores the previous CI shape, the previous docs and the previous
+Makefile with no data consequence — none of it holds state.
+`migrations/0006_repoint_metric_rollup.sql` is the exception: it is
+`CREATE OR REPLACE VIEW silver.metric_rollup_1m`, so a revert leaves the replaced view in
+place on any volume that already applied it. Re-pointing it back is one statement, and
+`_meta.schema_migrations` records that it ran — but it is not undone by `git revert`
+alone.
+
+**Blast Radius:** repo-wide.
+
+- **CI behaviour changes for every PR, in both directions.** Four PR-lane checks appear
+  where there was one. Four jobs *leave* the PR lane for a weekly schedule, so a PR can
+  break the live ClickHouse round-trip, the 18 silver assertions or the `linux/arm64`
+  image and still show a green PR lane. For the three `rust-ci` jobs that window is up to a
+  week wide, because they are gated to `schedule`/`workflow_dispatch`. `e2e-silver` is
+  narrower and worth knowing: its workflow carries `push: branches: [main]` and the job has
+  no `event_name` guard, so the silver assertions do run on the merge itself — after review
+  rather than before it. Either way it is the deliberate cost of PR #59's shape, and it is
+  written down in `docs/ci-gates.md`. Any author who suspects they touched those paths can trigger the
+  heavy lane with `workflow_dispatch` before asking for review.
+- **A single ClickHouse pin at 25.4** replaces three coexisting pins. Anyone holding a
+  volume created under 24.3 must `make reset` — `CREATE TABLE IF NOT EXISTS` will not
+  update a changed schema, and inserts fail with `NO_SUCH_COLUMN` instead.
+- **The root stack's ClickHouse volume is renamed, and this one needs reading.** Fixing
+  the Compose conflict moved the `name: sentinel-clickhouse-data` pin into the included
+  file, so it now reaches *every* consumer. Measured before and after with
+  `docker compose config`:
+
+  ```
+  before   docker-compose.yml                       → origin-sdlc-e2e-review_clickhouse_data
+           collector-rust/infra/docker-compose.yml  → sentinel-clickhouse-data
+  after    both                                     → sentinel-clickhouse-data
+  ```
+
+  Two consequences. Existing local data in the project-prefixed volume is **orphaned, not
+  migrated** — the stack comes up empty and `make reset` is the clean path, which is the
+  stale-volume gotcha the README already warns about. And the root stack and the
+  collector-ci stack now **share one named volume**, so a `docker compose down -v` in
+  either removes the other's data locally. That follows from "one ClickHouse definition"
+  (REQ-I-01/I-02) and is arguably correct, but it is a behaviour change, not a pure
+  conflict removal. The alternative — dropping the pin instead — would have removed the
+  conflict while losing a stable volume name, which is the worse trade.
+- **`release.yml` no longer triggers on push to `main` or on a `v*` tag.** If anyone
+  believed images were being published from `main`, they were not — the registry does not
+  exist — but the workflow will now also stop *appearing* to try. Re-enabling is one PR,
+  and the steps are at the top of the file.
+- **`.claude/` is restored** (87 files: 16 agents, 10 skills, the 11-KB tree, 6 internal
+  standards, 2 path-scoped rules, 4 SDD artefacts). It was deleted earlier on this branch
+  while still tracked on `main`; this PR reverts that deletion, so the agent layer
+  `main` already had is preserved rather than dropped. `meetings/` (2 files) stays
+  deleted. One consequence to note: `.claude/CLAUDE.md`'s Crew B table is a live second
+  statement of the Pod↔layer mapping again, which the root `CLAUDE.md` drift table now
+  records as needing a ratification that reconciles both sources rather than one that
+  picks the survivor.
+- **The Rust service's `src/` changes are three files, 336 insertions:** `config.rs`
+  (+211 — the `user` / `password_file` credential config, T06), `clickhouse_exporter.rs`
+  (+57 — `build_client_from_config`, resolving the credential from a file path), and
+  `main.rs` (+85 — the shutdown signal handler plus the connect/credential-failure path).
+  A credential that cannot be read is now a startup failure rather than a silently
+  passwordless connection, so a misconfigured `password_file` turns a previously-starting
+  collector into one that exits `FAILURE`. That is intended (REQ-H-05), and it is the one
+  behaviour change in the ingest service worth a second look.
+- **Not touched:** the OTLP wire path and its parsing, the `bronze.*` schema, and both
+  contracts under `contracts/`.
+
+---
+🤖 Generated with [Claude Code](https://claude.com/claude-code)

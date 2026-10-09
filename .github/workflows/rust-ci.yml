@@ -39,10 +39,25 @@ on:
   schedule:
     - cron: "0 6 * * 1" # weekly heavy gates
 
-# Cancel superseded runs on the same ref to save CI minutes.
+# Cancel superseded runs on the same ref to save CI minutes — but only for the
+# cheap, automatic lanes.
+#
+# The group used to be `rust-ci-${{ github.ref }}` for every event with
+# `cancel-in-progress: true`, which put the heavy lane and the PR lane in one
+# group: a `workflow_dispatch` or `schedule` run on a branch somebody is working
+# on was cancellable by the next push to that branch. The heavy lane takes
+# 20-45 minutes, so on an active branch it could essentially never finish — and
+# the one job that proves issue #45 lives there. (It is NOT what killed
+# `docker-build` in run 37875017554: that one died on `timeout-minutes`, at
+# 20m18s. The flaw is real regardless, and cheap to close.)
+#
+# Keying the group on the event name keeps the cost saving exactly where it was
+# aimed — successive pushes to one PR still supersede each other — while a
+# manual or scheduled run gets a group of its own and is never cancelled by
+# someone else's push.
 concurrency:
-  group: rust-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: rust-ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   # ── fmt · clippy · unit/golden tests · release build ──────────────────────
@@ -77,12 +92,94 @@ jobs:
         working-directory: services/collector-rust
         run: cargo test --locked
 
+  # ── temporary evidence for DEC-A4; it must not select a TLS design ───────
+  musl-tls-spike:
+    name: musl TLS spike (${{ matrix.target }})
+    # Two musl cross-compiles with no cache hit on a cold target. It is DEC-A4
+    # evidence, not a gate, so it follows the lean default and runs weekly + on
+    # demand rather than on every PR.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/collector-rust
+      - name: Install pinned toolchain and target
+        working-directory: services/collector-rust
+        run: rustup show
+
+      # Why a cross toolchain is needed at all, found by running this job for the
+      # first time (run 37875017554): both matrix legs died identically in
+      # `ring 0.17.14`'s build script —
+      #
+      #   warning: ring@0.17.14: ToolNotFound: failed to find tool
+      #     "x86_64-linux-musl-gcc"
+      #   error: failed to run custom build command for `ring v0.17.14`
+      #
+      # `ring` compiles C and assembly, so `cc-rs` needs a C compiler FOR THE
+      # TARGET, which a bare runner has for neither musl triple. DEC-A4's `[M2]`
+      # measurement was taken inside a `rust:1.96` container that had `musl-tools`
+      # installed, which is precisely the difference nobody noticed.
+      #
+      # `musl-tools` alone would not fix this: it installs `/usr/bin/musl-gcc`
+      # for the host architecture only, so the aarch64 leg would still have no
+      # compiler and no linker. `cargo-zigbuild` uses Zig as the cross C compiler
+      # and linker and covers BOTH triples with one install, which is why it is
+      # preferred here over `musl-tools` plus a hand-written matrix of
+      # `CC_<target>` / `CARGO_TARGET_<TARGET>_LINKER` variables, and over
+      # `cross` (which would pull a container image per target).
+      #
+      # Verified before committing: inside `rust:1.96` on an arm64 host — so one
+      # leg a genuine cross-compile, `ring` in the graph both times — zigbuild
+      # produced `x86_64 … statically linked` and `ARM aarch64 … statically
+      # linked`. Deliberately unpinned: the current release is what was verified,
+      # and a version pin guessed without running it would be a certain failure
+      # rather than a small risk. Both musl targets come from
+      # `rust-toolchain.toml`'s `targets = [...]`, so `rustup show` above already
+      # installed their std.
+      - name: Install the Zig-based musl cross toolchain
+        run: pip install --break-system-packages --quiet cargo-zigbuild ziglang
+
+      - name: Compile static TLS experiment
+        working-directory: services/collector-rust
+        run: cargo zigbuild --release --locked --features tls-spike --target ${{ matrix.target }}
+      # Both spellings are static. `file` says "statically linked" for the
+      # aarch64 build and "static-pie linked" for x86_64, which is a
+      # position-independent static executable and no less static — measured
+      # 2026-10-06, both targets, see plan/decisions/DEC-A4.md §4. Matching only
+      # the first spelling reported a false negative on x86_64 for a binary that
+      # has no dynamic loader at all, which would have fed DEC-A4 bad evidence.
+      - name: Verify static linkage
+        working-directory: services/collector-rust
+        run: |
+          file "target/${{ matrix.target }}/release/sentinel-collector" \
+            | grep -qE "statically linked|static-pie linked"
+
   # ── live round-trip against a real ClickHouse ─────────────────────────────
+  #
+  # Runs EVERY #[ignore]d test, not one named target. The previous
+  # `--test clickhouse_roundtrip` filter meant
+  # tests/grpc_export_roundtrip.rs's otlp_grpc_payload_lands_in_clickhouse ran
+  # nowhere: the gRPC ingest path — the only path that drives the silver MVs
+  # under real inserts — had zero live coverage, and the whole silver lane rests
+  # on it. The orphan check below is what keeps that from recurring.
   integration:
-    name: integration (ClickHouse round-trip)
+    name: integration (every #[ignore]d test)
+    # Lean default (PR #59): this job needs a live ClickHouse service, so it runs
+    # weekly + on demand, not on every PR. See docs/ci-gates.md.
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      CLICKHOUSE_URL: http://localhost:8123
     steps:
       - uses: actions/checkout@v4
 
@@ -100,11 +197,104 @@ jobs:
       - name: Start ClickHouse
         run: docker compose -f services/collector-rust/infra/docker-compose.yml up -d --wait
 
-      - name: Round-trip test (golden file → ClickHouse)
+      # The first ever run of this job (37875017554) failed here, and the reason
+      # is worth writing down because the error message points the wrong way:
+      #
+      #   Code: 194 … default: Authentication failed: password is incorrect, or
+      #   there is no user with such name. (REQUIRED_PASSWORD)
+      #
+      # It is not a password. `clickhouse/clickhouse-server` ships
+      # `users.d/default-user.xml`, which restricts `default` to `::1` and
+      # `127.0.0.1` **inside the container**; `cargo test` runs on the host and
+      # arrives through the published port from the Docker bridge, so it matches
+      # no network entry for `default` and ClickHouse reports the generic 194.
+      # Verified locally against 25.4.13.22: `clickhouse-client` inside the
+      # container answers `SELECT 1`; the same query from the host returns 194.
+      # Until T19 the repo mounted a `users.d` override opening `::/0` for
+      # `default`; T19 deleted it (REQ-B-14) and nothing noticed, because this
+      # job had never run.
+      #
+      # So the fix is the repo's own least-privilege identity, not a hole in the
+      # ACL: `0002_roles.sql` creates `sentinel_migrator_u` with no `HOST` clause
+      # and the grants a schema-owning identity should hold. Provisioned with
+      # `migrate.sh`, not hand-written SQL, so this job also becomes the first
+      # CI exercise of the migration runner.
+      #
+      # The password is generated per run and written to a file under
+      # RUNNER_TEMP — a path, never a value, matching SPEC §14.2 and
+      # `migrate.sh`'s own MIGRATION_PW_FILE reasoning. It never reaches an argv.
+      # Not `infra/secrets/`: nothing should write a real credential into the
+      # repo tree that `04-no-plaintext-secrets` polices.
+      - name: Provision the least-privilege roles
+        run: |
+          set -euo pipefail
+          umask 077
+          openssl rand -hex 24 > "$RUNNER_TEMP/ch_password"
+          MIGRATION_PW_FILE="$RUNNER_TEMP/ch_password" \
+          CH_CLIENT="docker compose -f services/collector-rust/infra/docker-compose.yml exec -T clickhouse clickhouse-client" \
+            bash infra/clickhouse/migrate.sh
+
+      # Every #[ignore]d test in every target. No --test filter: a filter is how
+      # the gRPC round-trip came to run nowhere. The log is kept for the orphan
+      # check below, which asserts against what actually ran.
+      # `tests/support/mod.rs` turns these two into the client's credential and
+      # into the `clickhouse:` block of the config the SIGTERM test writes for
+      # the collector process it spawns, so the writer and the verifier
+      # authenticate identically. No new `std::env::var` in `src/`:
+      # `clippy.toml` bans it there and the URL still comes through
+      # `clickhouse_exporter::url_from_env`.
+      - name: Live tests (all #[ignore]d)
         working-directory: services/collector-rust
         env:
-          CLICKHOUSE_URL: http://localhost:8123
-        run: cargo test --test clickhouse_roundtrip --locked -- --ignored
+          CLICKHOUSE_USER: sentinel_migrator_u
+          CLICKHOUSE_PASSWORD_FILE: ${{ runner.temp }}/ch_password
+        run: |
+          set -o pipefail
+          cargo test --locked -- --ignored 2>&1 | tee "$RUNNER_TEMP/ignored.log"
+
+      # Fails if a test is #[ignore]d in tests/*.rs and did not appear in that
+      # run. Checking the LOG rather than `--list` is deliberate: it catches a
+      # reintroduced `--test <target>` filter, which is the exact regression
+      # this ticket repairs, and a `--list` would answer about a different
+      # invocation than the one that ran.
+      - name: No orphaned #[ignore]d tests
+        working-directory: services/collector-rust
+        run: |
+          declared="$(
+            awk '/^[[:space:]]*#\[ignore/ {f=1; next}
+                 f && match($0, /fn [a-z0-9_]+/) {
+                   print substr($0, RSTART + 3, RLENGTH - 3); f = 0
+                 }' tests/*.rs | sort -u
+          )"
+          ran="$(
+            sed -n 's/^test \([a-z0-9_:]*\) \.\.\. ok$/\1/p' "$RUNNER_TEMP/ignored.log" |
+              sed 's/.*:://' | sort -u
+          )"
+          echo "declared #[ignore]d in tests/*.rs:"; printf '%s\n' "$declared" | sed 's/^/  /'
+          echo "ran in the step above:";             printf '%s\n' "$ran"      | sed 's/^/  /'
+
+          if [ -z "$declared" ]; then
+            echo "::error::no #[ignore]d test found in tests/*.rs — the detector is broken"
+            exit 1
+          fi
+
+          orphans="$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$ran"))"
+          if [ -n "$orphans" ]; then
+            echo "::error::#[ignore]d tests that CI does not run:"
+            printf '%s\n' "$orphans" | sed 's/^/  /'
+            exit 1
+          fi
+
+          # Every integration target must have been attempted, not just the one
+          # holding a live test today.
+          targets="$(ls tests/*.rs | wc -l | tr -d ' ')"
+          attempted="$(grep -cE '^ *Running tests/' "$RUNNER_TEMP/ignored.log" || true)"
+          echo "integration targets: $targets declared, $attempted attempted"
+          if [ "$attempted" -ne "$targets" ]; then
+            echo "::error::$attempted of $targets integration targets attempted"
+            exit 1
+          fi
+          echo "no orphans"
 
       - name: Tear down ClickHouse
         if: always()
@@ -151,15 +341,53 @@ jobs:
     name: docker-build (distroless image)
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 45, not 20. Measured on run 37875017554, the first time this job ever
+    # executed: started 02:32:00, cancelled 02:52:18 — 20m18s against a 20-minute
+    # budget, eighteen seconds over. The arm64 leg is a full Rust musl compile
+    # under QEMU emulation with a cold `type=gha` cache, and that is simply more
+    # than twenty minutes of work. Because it timed out, the `docker stop`
+    # assertion for issue #45 at the end of this job has still never run by any
+    # path. A warm cache should bring this well under the new ceiling; the ceiling
+    # is set for the cold case, because the cold case is what a weekly run gets
+    # after a dependency bump.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      # arm64 is built by emulation on an amd64 runner. buildx alone reports
+      # `exec format error` the moment the Dockerfile RUNs anything for the
+      # non-native platform, so the binfmt handlers have to be registered first.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
       - uses: docker/setup-buildx-action@v3
-      - name: Build the collector image
+      - name: Build the collector image (amd64 + arm64)
         uses: docker/build-push-action@v6
         with:
           context: services/collector-rust
+          platforms: linux/amd64,linux/arm64
           push: false
           tags: sentinel-collector:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # A multi-arch result is a manifest list, which cannot be loaded into the
+      # runner's daemon — so the stop check gets a second, native-only build.
+      # It is a cache hit on the amd64 layers the step above just produced, so
+      # it costs little, and it is the only way to get a runnable image.
+      - name: Load the native image for the stop check
+        uses: docker/build-push-action@v6
+        with:
+          context: services/collector-rust
+          platforms: linux/amd64
+          load: true
+          tags: sentinel-collector:ci
+          cache-from: type=gha
+
+      # Issue #45: `docker stop` must exit 0 well inside the grace period. The
+      # cargo test proves the bare binary acts on SIGTERM; this proves it when
+      # it is PID 1 in the distroless image, which is how it is actually run.
+      # REQUIRE_DOCKER=1 turns the local "no daemon" skip into a failure here.
+      - name: docker stop exits 0 (issue #45)
+        env:
+          REQUIRE_DOCKER: "1"
+        run: bash services/collector-rust/tests/docker-stop.test.sh

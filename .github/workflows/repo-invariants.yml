@@ -1,0 +1,35 @@
+# Repo invariants — the asserts that keep a cross-cutting property true.
+#
+# Language-agnostic and not path-filtered: every assert in
+# scripts/ci/invariants.d/ is about a property of the repository as a whole
+# (one ClickHouse version, one service name, no duplicated host port, no
+# plaintext credential, flow-ui writes nothing), so any PR can break one.
+#
+# The flag is gone as of T21 (2026-10-06). It had been `continue-on-error: true`
+# because asserts 01–04 were authored to the end state of Candidate I / H and
+# failed on the tree as it stood; the condition for flipping it was "once the
+# single Compose definition and the role migration have landed", which is T12–T15
+# plus T17–T19. Both are in, all six asserts pass, so this job now gates.
+# docs/ci-gates.md carries the required-check set.
+
+name: repo-invariants
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: repo-invariants-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  invariants:
+    name: invariants (scripts/ci/invariants.d)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the invariant harness
+        run: bash scripts/ci/run-invariants.sh

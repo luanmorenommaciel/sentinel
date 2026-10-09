@@ -1,0 +1,256 @@
+# Publishes the three service images to Google Artifact Registry, signed, with a
+# provenance attestation and an SBOM.
+#
+# This workflow has no Make target, by design (SPEC §8.4): a laptop could only
+# authenticate to the registry with a long-lived credential, which is the exact
+# thing REQ-A-03 deletes. `release.yml` is the only caller. The PR-time build
+# check stays in rust-ci.yml's `docker-build` job with `push: false`, so a fork
+# PR can never publish.
+# ─────────────────────────────────────────────────────────────────────────────
+# GATED OFF. `workflow_dispatch` only — nothing triggers this automatically.
+#
+# Why: every job here pushes to a container registry that does not exist. No GCP
+# project, no Artifact Registry repository and no Workload Identity provider has
+# been created, so `publish` and `promote` would fail at authentication, and
+# DEC-2026-10-06 (DEC-A1/A2) leaves remote deployment unauthorized — there is no
+# selected platform or ClickHouse owner to deploy to. A workflow that cannot
+# succeed must not sit on `main`'s push trigger pretending to be a release path.
+#
+# To re-enable, in one PR: create the registry and the WIF provider, set the
+# repository variables the jobs read, restore
+#
+#   push:
+#     branches: [main]
+#     tags: ["v*"]
+#
+# and record the required-check decision in docs/ci-gates.md. Until then a human
+# can still exercise it by hand from the Actions tab, which is the only way it
+# can be run against a real registry for the first time.
+# ─────────────────────────────────────────────────────────────────────────────
+name: release
+
+on:
+  workflow_dispatch:
+
+# The SHA tag is immutable, so two runs for the same commit would push identical
+# bytes — but the channel tag is mutable, and a superseded run must not win the
+# race to move it.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: publish (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Mints the OIDC token twice over: once for Workload Identity Federation
+      # (REQ-A-03) and once as cosign's keyless signing identity (REQ-A-02).
+      id-token: write
+    strategy:
+      # One failed image must not leave the other two unpublished and unsigned.
+      fail-fast: false
+      matrix:
+        include:
+          - image: collector-rust
+            context: services/collector-rust
+          - image: generator
+            context: services/generator-python
+          - image: flow-ui
+            context: services/flow-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 is emulated on an amd64 runner; without QEMU the arm64 leg of the
+      # manifest fails to build.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # OIDC -> Workload Identity Federation -> the deploy service account. No
+      # JSON key exists in a GitHub secret (REQ-A-03); WIF_PROVIDER is a
+      # resource name, not a credential.
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.AR_LOCATION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      # The full git SHA is the immutable tag and the only thing a deployment
+      # ever names; `:main` and `:vX.Y.Z` are channel tags for humans.
+      # `latest=false` matters: metadata-action would otherwise add `:latest` on
+      # a semver tag, which REQ-A-01 forbids in any deployed environment.
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.AR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/sentinel/${{ matrix.image }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ github.sha }}
+            type=raw,value=main,enable={{is_default_branch}}
+            type=semver,pattern=v{{version}}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Warn-only on purpose, the same warn-then-promote shape as python-ci.yml's
+      # supply-chain job (REQ-H-12 is SHOULD, REQ-B-07's rationale applies): a base
+      # image picks up a new CVE with no change from us, so a blocking gate on day
+      # one turns every unrelated push red and gets switched off. `exit-code: 0` is
+      # the single flag to flip once the finding rate is known; promotion and the
+      # severity threshold are policy, and go to T21's required-check set.
+      #
+      # This step is NOT the T24 gate any more. It cannot be: this workflow is
+      # gated to `workflow_dispatch` because the registry does not exist, so a
+      # scan living only here never runs. REQ-H-12 is carried by
+      # .github/workflows/image-scan.yml, which scans the same images without a
+      # push (base images on the PR lane, `docker save` tarballs weekly). This
+      # step stays because scanning the published digest is still the right thing
+      # to do at this point once a registry exists — it is the by-digest half,
+      # not a duplicate.
+      #
+      # Job-level `continue-on-error` would be wrong here, unlike in python-ci.yml:
+      # this job also pushes and signs, and those failures must stay loud. Leaving
+      # the step's own failures un-swallowed is deliberate too — it keeps a scan
+      # that could not run (digest unreachable, rate limit) distinguishable from a
+      # scan that ran clean.
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ vars.AR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/sentinel/${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: "0"
+
+      - uses: sigstore/cosign-installer@v3
+
+      # Signed by digest, never by tag: a tag is mutable, so a tag signature
+      # says nothing about which bytes were signed.
+      - name: Sign the digest
+        run: |
+          cosign sign --yes \
+            "${{ vars.AR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/sentinel/${{ matrix.image }}@${{ steps.build.outputs.digest }}"
+
+  # Promotion re-points a tag at an existing digest (REQ-A-07). It never builds:
+  # there is no `docker build` in this job, which is the property that makes
+  # "roll back to the previous version" finally name an artifact.
+  #
+  # `main` -> `:staging`, a `v*` tag -> `:prod`, per SPEC §14.4.
+  promote:
+    name: promote (${{ matrix.image }})
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # cosign verify needs no token, but the registry read does, through the
+      # same WIF identity the publish job used.
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [collector-rust, generator, flow-ui]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.AR_LOCATION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - uses: imjasonh/setup-crane@v0.7
+      - uses: sigstore/cosign-installer@v3
+
+      # A tag push promotes staging -> prod, so the digest comes from `:staging`
+      # and not from this run's build. A `v*` push re-runs `publish`, and that
+      # rebuild is not guaranteed to be bit-reproducible; sourcing prod from the
+      # SHA tag would therefore promote bytes that never sat in staging. The
+      # cross-check below is what turns that from a silent swap into a failure.
+      - name: Resolve the source digest
+        id: src
+        run: |
+          set -euo pipefail
+          IMG="${{ vars.AR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/sentinel/${{ matrix.image }}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            STAGE=prod
+            SRC=$(crane digest "$IMG:staging")
+            SHA_D=$(crane digest "$IMG:${{ github.sha }}")
+            if [ "$SRC" != "$SHA_D" ]; then
+              echo "::error::staging holds $SRC but ${{ github.sha }} built $SHA_D." \
+                   "Promotion would ship bytes that were never in staging." >&2
+              exit 1
+            fi
+          else
+            STAGE=staging
+            SRC=$(crane digest "$IMG:${{ github.sha }}")
+          fi
+          echo "img=$IMG"     >> "$GITHUB_OUTPUT"
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+          echo "digest=$SRC"  >> "$GITHUB_OUTPUT"
+
+      # Verify-before-admit, the publish-side half of REQ-A-02: an unsigned
+      # digest must fail here, *before* anything is re-tagged. The admission
+      # controller half is only provable once a platform exists (T40, DEC-A1).
+      - name: Verify the signature before promoting
+        run: |
+          set -euo pipefail
+          cosign verify \
+            "${{ steps.src.outputs.img }}@${{ steps.src.outputs.digest }}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp '^https://github\.com/${{ github.repository_owner }}/'
+
+      # Per-environment differences live only here (REQ-A-07). The assert is
+      # cheap and it is the thing that keeps an env difference from migrating
+      # into the image.
+      - name: Assert the environment's config directory exists
+        run: |
+          set -euo pipefail
+          test -d "infra/deploy/config/${{ steps.src.outputs.stage }}"
+
+      - name: Move the channel tag by digest
+        run: |
+          set -euo pipefail
+          crane tag \
+            "${{ steps.src.outputs.img }}@${{ steps.src.outputs.digest }}" \
+            "${{ steps.src.outputs.stage }}"
+
+      # Digest equality is the whole assertion (REQ-A-07): the tag now resolves
+      # to the same bytes it was pointed at, so no rebuild happened in between.
+      - name: Assert the promoted tag is the same digest
+        run: |
+          set -euo pipefail
+          D2=$(crane digest "${{ steps.src.outputs.img }}:${{ steps.src.outputs.stage }}")
+          [ "${{ steps.src.outputs.digest }}" = "$D2" ]
+          echo "promoted ${{ matrix.image }} -> :${{ steps.src.outputs.stage }} @ $D2"
