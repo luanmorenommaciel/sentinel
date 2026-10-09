@@ -384,10 +384,19 @@ This cycle hardened how the pipeline is built, checked and published rather than
 
 | Status | Count | Percentage | Tickets |
 |---|---:|---:|---|
-| **Done** | 43 | 89.6% | T01–T41, T43–T44 |
+| **Done (local)** | 43 | 89.6% | T01–T41, T43–T44 |
 | **Deferred** | 1 | 2.1% | T42 (TLS, by DEC-A4) |
 | **Absorbed** | 4 | 8.3% | T45–T48 (same-PR docs, by DEC-I2) |
 | **Total** | **48** | **100%** | Full implementation plan |
+
+**No ticket is bare `Done`, and that is the honest reading of this repo's own rule.**
+[`docs/sdlc.md`](docs/sdlc.md) step 11 — added by this very PR — says a ticket moves to **Done**
+only when its checks are green **in CI** *and* the code is on `main`. Neither half holds yet:
+this branch is tens of commits ahead of `main` with nothing merged, and the weekly CI lane's
+first and only run (`37875017554`) came back red. Every one of the 43 is therefore
+***Done (local)*** — done within `DEC-2026-10-06`'s local scope and unverified against any
+deployed target. The two `Done` rows that remain in the document are in the *decisions* table
+below, where `Done` means a ruling was taken, not that code shipped.
 
 ---
 
@@ -397,45 +406,45 @@ Every ticket defined in [`plan/core-plan.md`](plan/core-plan.md) with its curren
 
 | ID | Title / Summary | Wave / Area | Blocked by | Status |
 |---|---|---|---|---|
-| **T01** | Invariant-assert harness with drop-in directory (`scripts/ci/run-invariants.sh`) | Wave 1 · CI | — | **Done** |
-| **T02** | flow-ui `conftest.py` two-coverage response builder | Wave 1 · flow-ui | — | **Done** |
-| **T03** | Compose `include:` path-resolution probe (`[V-4]`) | Wave 1 · Infra | — | **Done** |
-| **T04** | arm64 + x86_64 musl/TLS spike, toolchain target, CI `platforms:` | Wave 1 · CI | — | **Done** |
-| **T05** | `migrate.sh` + `_meta` schema ledger (`0003_meta.sql`) | Wave 1 · Infra | — | **Done** |
-| **T06** | Collector `user` / `password_file` credential config | Wave 1 · Collector | — | **Done** |
-| **T07** | `python-ci.yml`: ruff + pytest + `PYTHON_IMAGE` matrix + `-D warnings` | Wave 1 · CI | — | **Done** |
-| **T08** | Generator integration suite targeting live `CLICKHOUSE_URL` | Wave 1 · Test | — | **Done** |
-| **T09** | `rust-ci.yml` runs every `#[ignore]`d integration test | Wave 1 · CI | — | **Done** |
-| **T10** | Python supply-chain audit job (`pip-audit` + `bandit`, warn-only) | Wave 1 · CI | — | **Done** |
-| **T11** | `make migrate` target | Wave 1 · Build | T05, T07 | **Done** |
-| **T12** | `compose.clickhouse.yml` — single ClickHouse service definition (pinned 25.4) | Wave 1 · Infra | DEC-I1, T03 | **Done** |
-| **T13** | Root `docker-compose.yml` → `include:` unified ClickHouse service | Wave 1 · Infra | T12 | **Done** |
-| **T14** | CI Compose → `include:` + silver mount + drop env route | Wave 1 · Infra | T12, T09 | **Done** |
-| **T15** | Delete generator Compose file & update documentation | Wave 1 · Contract | T13, T14 | **Done** |
-| **T16** | Extract DDL into `migrations/0001`/`0004`, symlink `init.d/`, divergence assert | Wave 1 · Infra | T05, T01, T13 | **Done** |
-| **T17** | Least-privilege roles + users created (`0002_roles.sql`) | Wave 1 · Infra | T16 | **Done** |
-| **T18** | Collector & flow-ui connect as dedicated role users via secret file | Wave 1 · Infra | T06, T13, T14, T17 | **Done** |
-| **T19** | Delete open `::/0` default network route and drop `otelgen` user | Wave 1 · Infra | T15, T18 | **Done** |
-| **T20** | `e2e-silver.yml` — live-ClickHouse full pipeline test workflow | Wave 1 · CI | T07, T08, T09, T11, T19 | **Done** |
-| **T21** | `docs/ci-gates.md` status table + flip `repo-invariants` to blocking gate | Wave 1 · CI | T20 | **Done** |
-| **T22** | `release.yml` — Artifact Registry, OIDC, SLSA provenance, SBOM, Cosign signing | Wave 1 · Release | — | **Done** |
-| **T23** | Digest promotion `main` → `:staging`, `v*` → `:prod` with signature verification | Wave 1 · Release | T22 | **Done** |
+| **T01** | Invariant-assert harness with drop-in directory (`scripts/ci/run-invariants.sh`) | Wave 1 · CI | — | **Done (local)** |
+| **T02** | flow-ui `conftest.py` two-coverage response builder | Wave 1 · flow-ui | — | **Done (local)** |
+| **T03** | Compose `include:` path-resolution probe (`[V-4]`) | Wave 1 · Infra | — | **Done (local)** |
+| **T04** | arm64 + x86_64 musl/TLS spike, toolchain target, CI `platforms:` | Wave 1 · CI | — | **Done (local)** |
+| **T05** | `migrate.sh` + `_meta` schema ledger (`0003_meta.sql`) | Wave 1 · Infra | — | **Done (local)** |
+| **T06** | Collector `user` / `password_file` credential config | Wave 1 · Collector | — | **Done (local)** |
+| **T07** | `python-ci.yml`: ruff + pytest + `PYTHON_IMAGE` matrix + `-D warnings` | Wave 1 · CI | — | **Done (local)** |
+| **T08** | Generator integration suite targeting live `CLICKHOUSE_URL` | Wave 1 · Test | — | **Done (local)** |
+| **T09** | `rust-ci.yml` runs every `#[ignore]`d integration test | Wave 1 · CI | — | **Done (local)** |
+| **T10** | Python supply-chain audit job (`pip-audit` + `bandit`, warn-only) | Wave 1 · CI | — | **Done (local)** |
+| **T11** | `make migrate` target | Wave 1 · Build | T05, T07 | **Done (local)** |
+| **T12** | `compose.clickhouse.yml` — single ClickHouse service definition (pinned 25.4) | Wave 1 · Infra | DEC-I1, T03 | **Done (local)** |
+| **T13** | Root `docker-compose.yml` → `include:` unified ClickHouse service | Wave 1 · Infra | T12 | **Done (local)** |
+| **T14** | CI Compose → `include:` + silver mount + drop env route | Wave 1 · Infra | T12, T09 | **Done (local)** |
+| **T15** | Delete generator Compose file & update documentation | Wave 1 · Contract | T13, T14 | **Done (local)** |
+| **T16** | Extract DDL into `migrations/0001`/`0004`, symlink `init.d/`, divergence assert | Wave 1 · Infra | T05, T01, T13 | **Done (local)** |
+| **T17** | Least-privilege roles + users created (`0002_roles.sql`) | Wave 1 · Infra | T16 | **Done (local)** |
+| **T18** | Collector & flow-ui connect as dedicated role users via secret file | Wave 1 · Infra | T06, T13, T14, T17 | **Done (local)** |
+| **T19** | Delete open `::/0` default network route and drop `otelgen` user | Wave 1 · Infra | T15, T18 | **Done (local)** |
+| **T20** | `e2e-silver.yml` — live-ClickHouse full pipeline test workflow | Wave 1 · CI | T07, T08, T09, T11, T19 | **Done (local)** |
+| **T21** | `docs/ci-gates.md` status table + flip `repo-invariants` to blocking gate | Wave 1 · CI | T20 | **Done (local)** |
+| **T22** | `release.yml` — Artifact Registry, OIDC, SLSA provenance, SBOM, Cosign signing | Wave 1 · Release | — | **Done (local)** |
+| **T23** | Digest promotion `main` → `:staging`, `v*` → `:prod` with signature verification | Wave 1 · Release | T22 | **Done (local)** |
 | **T24** | Image vulnerability scan — **re-implemented off the push** as `image-scan.yml` (Trivy, warn-only, PR + weekly lanes) | Wave 1 · Release | ~~T22~~ | **Done (local)** |
-| **T25** | `0005a` `silver.metric_stats_1m` + MV + test suite (`03-watcher-models.test.sql`) | Wave 2 · Silver | T16, T20 | **Done** |
-| **T26** | Real-telemetry tripwire (`countIf(NOT is_synthetic)`) | Wave 2 · Silver | T25 | **Done** |
-| **T27** | `0005b` `silver.volume_1m` + 3 MVs (log, trace, metric) | Wave 2 · Silver | T25 | **Done** |
-| **T28** | `0005c` `silver.resource_key_presence_1m` + 3 MVs | Wave 2 · Silver | T27 | **Done** |
-| **T29** | `0005d` `silver.call_edges_1m` + determinism / no-verdict asserts | Wave 2 · Silver | T28, T01 | **Done** |
+| **T25** | `0005a` `silver.metric_stats_1m` + MV + test suite (`03-watcher-models.test.sql`) | Wave 2 · Silver | T16, T20 | **Done (local)** |
+| **T26** | Real-telemetry tripwire (`countIf(NOT is_synthetic)`) | Wave 2 · Silver | T25 | **Done (local)** |
+| **T27** | `0005b` `silver.volume_1m` + 3 MVs (log, trace, metric) | Wave 2 · Silver | T25 | **Done (local)** |
+| **T28** | `0005c` `silver.resource_key_presence_1m` + 3 MVs | Wave 2 · Silver | T27 | **Done (local)** |
+| **T29** | `0005d` `silver.call_edges_1m` + determinism / no-verdict asserts | Wave 2 · Silver | T28, T01 | **Done (local)** |
 | **T30** | Backfill runner skeleton + live-partition refusal + README (`backfill.sh`) | Wave 3 · Backfill | T05, T19, DEC-A2 | **Done (local)** |
 | **T31** | Backfill phase 1 — bronze → silver base, partition swap | Wave 3 · Backfill | T30 | **Done (local)** |
 | **T32** | REQ-E-11 in-runner content checksum | Wave 3 · Backfill | T31 | **Done (local)** |
 | **T33** | Backfill phase 2 — silver base → rollups, phase gate | Wave 3 · Backfill | T32, T29 | **Done (local)** |
 | **T34** | `0006` re-point `metric_rollup_1m` to storage-backed table, ledger-gated | Wave 3 · Backfill | T25, T33 | **Done (local)** |
-| **T35** | flow-ui `silver_coverage` probe on 30 s lane + `source` field | Wave 3 · flow-ui | T02 | **Done** |
-| **T36** | Dual-source `volume_band` on flow-ui + rename stale `_volume_state` | Wave 3 · flow-ui | T35, T27 | **Done** |
-| **T37** | Dual-source `call_edges` on flow-ui | Wave 3 · flow-ui | T35, T29 | **Done** |
-| **T38** | Dual-source `contract_violations` on flow-ui | Wave 3 · flow-ui | T35, T28 | **Done** |
-| **T39** | Fallback removal criterion as automated test | Wave 3 · flow-ui | T36, T37, T38 | **Done** |
+| **T35** | flow-ui `silver_coverage` probe on 30 s lane + `source` field | Wave 3 · flow-ui | T02 | **Done (local)** |
+| **T36** | Dual-source `volume_band` on flow-ui + rename stale `_volume_state` | Wave 3 · flow-ui | T35, T27 | **Done (local)** |
+| **T37** | Dual-source `call_edges` on flow-ui | Wave 3 · flow-ui | T35, T29 | **Done (local)** |
+| **T38** | Dual-source `contract_violations` on flow-ui | Wave 3 · flow-ui | T35, T28 | **Done (local)** |
+| **T39** | Fallback removal criterion as automated test | Wave 3 · flow-ui | T36, T37, T38 | **Done (local)** |
 | **T40** | Local Docker/Make startup, migrations-before-ingest, readiness | Wave 4 · Local runtime | DEC-A1, DEC-A2, T05 | **Done (local; configurable loopback OTLP port)** |
 | **T41** | flow-ui starts/stops independently in Compose | Wave 4 · Local runtime | T40 | **Done (local)** |
 | **T42** | TLS hop 2 + Dockerfile purity verification | Wave 4 · Security | DEC-A4, T04, T40 | **Deferred (DEC-A4)** |

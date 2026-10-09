@@ -1215,8 +1215,15 @@ negative proof.
 
 ### T45–T48 — one docs leg per wave
 **Leg** `leg/docs/wave-{1,2,3,4}-v1` · **Blocked by** T24 + DEC-I2 (W1) · T29 (W2) · T39, T34 (W3) · T44 (W4) · **REQ** B-09, I-06, NFR-08 · **Seam** none
-**Files** ~`README.md` · ~`CLAUDE.md`. **`.claude/**` is excluded** — as of `7689c16` it is
-deleted outright and not being recreated, so nothing writes there. `docs/adr/0*`,
+**Files** ~`README.md` · ~`CLAUDE.md`. **`.claude/**` is still excluded, but not for the reason
+first written here.** The claim was "as of `7689c16` it is deleted outright and not being
+recreated", and both halves are now wrong: `d01e4ea` removed the layer and `3a200ee` put it back,
+so **87 `.claude/` files are tracked today** (`git ls-files .claude | wc -l`). And `7689c16` is a
+pre-rebase sha that no longer resolves for anyone who clones this repository — the live equivalent
+is `d01e4ea`, which `git merge-base --is-ancestor d01e4ea HEAD` confirms is on the branch where
+`7689c16` is not. The exclusion stands on a different footing: the docs legs own `README.md` and
+`CLAUDE.md`, and `.claude/` is the agent layer's own material with its own authors, so a docs leg
+editing it would cross a path boundary ADR-0009 requires to stay disjoint. `docs/adr/0*`,
 `docs/proposals/`, `docs/research/`, `intent/` and `spec/` are **not touched** (NFR-08).
 **Does** Collects the claims that wave's legs invalidated. W1: the Compose inventory, the ClickHouse
 version, the auth posture, the gate list, and the test counts **taken from CI's own output**
