@@ -15,6 +15,8 @@ use opentelemetry_proto::tonic::collector::logs::v1::{
 use opentelemetry_proto::tonic::common::v1::{any_value, AnyValue};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 
+mod support;
+
 static NEXT_PROCESS: AtomicUsize = AtomicUsize::new(0);
 
 struct CollectorProcess {
@@ -38,8 +40,14 @@ impl CollectorProcess {
             "grpc:\n  listen: '127.0.0.1:{grpc_port}'\nmetrics:\n  listen: '127.0.0.1:{metrics_port}'\ncontract:\n  grpc_validation: off\n"
         );
         if let Some(url) = clickhouse_url {
-            yaml.push_str(&format!(
-                "clickhouse:\n  url: '{url}'\n  database: bronze\n  batch_size: 1000\n  flush_interval_ms: 60000\n"
+            // Through the helper, so this process gets the same credential the
+            // verifying client uses. A mismatch here would not fail the test
+            // loudly — the flush would simply write nothing and the SELECT would
+            // come back empty, which reads as a shutdown defect.
+            yaml.push_str(&support::clickhouse_config_block(
+                url,
+                "bronze",
+                "  batch_size: 1000\n  flush_interval_ms: 60000\n",
             ));
         }
         std::fs::write(&config, yaml).expect("write process configuration");
@@ -127,10 +135,8 @@ async fn sigint_stops_collector_cleanly() {
 }
 
 async fn buffered_log_is_flushed(signal: &str) {
-    let url = sentinel_collector::clickhouse_exporter::url_from_env()
-        .unwrap_or_else(|| "http://localhost:8123".to_string());
-    let verify =
-        sentinel_collector::clickhouse_exporter::build_client_with_database(&url, "bronze");
+    let url = support::clickhouse_url();
+    let verify = support::client("bronze");
     let mut collector = CollectorProcess::start(Some(&url));
     let mut client = collector.ready().await;
     let nonce = std::time::SystemTime::now()

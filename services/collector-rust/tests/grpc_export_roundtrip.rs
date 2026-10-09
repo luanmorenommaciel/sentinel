@@ -48,7 +48,7 @@ use opentelemetry_proto::tonic::metrics::v1::{
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span, Status};
 
-use sentinel_collector::clickhouse_exporter;
+mod support;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -70,11 +70,8 @@ const TIMESTAMP_NANOS: u64 = 1_900_000_000_000_000_000;
 /// never been executed since (REQ-B-13).
 fn client_from_env() -> clickhouse::Client {
     #[allow(clippy::disallowed_methods)]
-    let url =
-        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
-    #[allow(clippy::disallowed_methods)]
     let database = std::env::var("CLICKHOUSE_DATABASE").unwrap_or_else(|_| "bronze".to_string());
-    clickhouse_exporter::build_client_with_database(&url, &database)
+    support::client(&database)
 }
 
 /// Build a `Resource` carrying `service.name`.
