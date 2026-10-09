@@ -395,6 +395,9 @@ test-collector-rust: ## Rust collector tests (cargo test; live-ClickHouse tests 
 	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \
 		rust:1.96 cargo test --locked
 
+test-collector-shutdown: ## `docker stop` on the collector image exits 0 (issue #45)
+	IMAGE=$(COLLECTOR_IMAGE) bash services/collector-rust/tests/docker-stop.test.sh
+
 lint: lint-generator lint-collector-rust lint-flow-ui  ## Lint all services
 
 test-flow-ui:        ## flow-ui unit tests (pytest)
