@@ -4,7 +4,7 @@ CI that actually runs, on a single pinned ClickHouse, with the delivery path's
 documentation consolidated into one page. The pipeline itself — generator → collector →
 `bronze.*` — is untouched.
 
-**56 commits, 126 files changed**, rebased onto `main` at `1aa8d92`,
+**58 commits, 126 files changed**, rebased onto `main` at `1aa8d92`,
 which carries PR #59.
 
 <details>
@@ -16,7 +16,7 @@ PR's own diff shows — commits since the merge-base with `main`, and files in
 
 ```
 $ git rev-list --count origin/main..HEAD                       #  commits in the PR
-56
+58
 $ git diff --name-only origin/main...HEAD | wc -l              #  files in the PR diff
 126
 $ git rev-list --count origin/origin/sdlc-e2e-review..HEAD      #  counted against the
@@ -45,7 +45,7 @@ $ git diff --name-only origin/main...93141c4 | grep -c '^\.claude/'
 ```
 
 The earlier "44 commits" was measured before the rebase, against the old merge-base
-`3af2ee7`; that count is now 47 for the same range, plus the 9 commits added by this work.
+`3af2ee7`; that count is now 47 for the same range, plus the 11 commits added by this work.
 
 </details>
 
@@ -81,7 +81,7 @@ trade-off in writing.
 
 This branch was **not** split into the five focused PRs that were considered (Process
 Docs · CI · Migrations · Silver/Backfill · Flow-UI). The split lines cut through
-individual commits rather than between them — measured, not assumed: **25 of 56 commits
+individual commits rather than between them — measured, not assumed: **25 of 58 commits
 touch more than one of those five areas**, and the two commits below are the worst cases.
 Splitting would mean rewriting commit *contents*, not reordering them.
 
