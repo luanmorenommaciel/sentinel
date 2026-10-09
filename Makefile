@@ -44,7 +44,7 @@ HYPERDX_URL := http://127.0.0.1:$(HYPERDX_HOST_PORT)
 .PHONY: help up status init migrate generate generate-stream ui down-ui hyperdx down-hyperdx reset-hyperdx \
         e2e down reset logs ps \
         build test test-generator test-collector-rust test-flow-ui test-hyperdx \
-        test-generator-integration test-backfill audit-python \
+        test-generator-integration test-backfill audit-python audit-images audit-images-built \
         test-silver sample-silver lint lint-generator lint-collector-rust lint-flow-ui
 
 # Image builds that pull a base from an external registry can fail on a transient
@@ -450,3 +450,34 @@ audit-python:        ## Python advisories + static security scan (prints finding
 lint-collector-rust: ## Rust fmt check + clippy
 	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \
 		rust:1.96 bash -c "cargo fmt --check && cargo clippy --locked -- -D warnings"
+
+# ── image vulnerability scanning (REQ-H-12 / T24) ────────────────────────────
+#
+# T24 wanted this inside `release.yml`, scanning the digest it had just pushed.
+# No registry exists and DEC-A1/A2 leave remote deployment unauthorized, so that
+# digest is never produced — but a scan needs bytes, not a push. Both targets
+# below scan bytes that exist locally, which is what lets the gate run on every
+# PR instead of waiting for a platform decision. Policy, the warn-only default
+# and the one-flag flip to blocking are all in scripts/ci/audit-images.sh.
+#
+# Derived from `services/*/Dockerfile`, never a hard-coded list: a fourth service
+# is covered the day its Dockerfile lands.
+IMAGE_SCAN_SERVICES := $(notdir $(patsubst %/,%,$(dir $(wildcard services/*/Dockerfile))))
+IMAGE_TAR_DIR       ?= $(CURDIR)/.image-scan
+
+audit-images:        ## Image CVE scan of every shipped base image (warn-only)
+	@bash scripts/ci/audit-images.sh bases
+
+# The weekly half. It builds each image natively and scans the `docker save`
+# tarball, so it sees our own layers — the pip-installed packages a base-image
+# scan cannot reach. Single-arch on purpose: this is the expensive target, and
+# the per-arch base differences are already covered by `audit-images`, which
+# sweeps both platforms the repo ships.
+audit-images-built:  ## Image CVE scan of the images as built (builds them first)
+	@rm -rf "$(IMAGE_TAR_DIR)" && mkdir -p "$(IMAGE_TAR_DIR)"
+	@for svc in $(IMAGE_SCAN_SERVICES); do \
+		echo "── building services/$$svc"; \
+		docker build -t sentinel-imagescan:$$svc "services/$$svc" || exit 1; \
+		docker save -o "$(IMAGE_TAR_DIR)/$$svc.tar" sentinel-imagescan:$$svc || exit 1; \
+	done
+	@bash scripts/ci/audit-images.sh tars "$(IMAGE_TAR_DIR)"

@@ -1,0 +1,85 @@
+# Image vulnerability scanning (REQ-H-12 / T24).
+#
+# T24 put the scan in `release.yml` and asked to prove it "on a real push". That
+# proof is unreachable here: no container registry exists, `release.yml` is gated
+# to `workflow_dispatch` for exactly that reason, and DEC-A1/A2 leave remote
+# deployment unauthorized, so the pushed digest the ticket wants to scan is never
+# produced. A scan, though, does not need a push — only bytes. This workflow
+# scans bytes that exist without a registry, so the gate runs for real now
+# instead of waiting on a platform decision. The scan step inside `release.yml`
+# stays where it is: when a registry does exist it is the right place to scan a
+# published digest, and this workflow does not replace it.
+#
+# Both jobs call a Make target and nothing else (REQ-B-03), so what CI runs is
+# what `make audit-images` runs on a laptop. The policy — severity threshold,
+# ignore-unfixed, and the warn-only default with its one-flag flip to blocking —
+# lives in scripts/ci/audit-images.sh, not in this YAML.
+#
+# Lanes, following PR #59's lean default (docs/ci-gates.md):
+#
+#   PR lane (base images)   every shipped base image, pulled from its registry
+#                           and scanned for both platforms the repo ships.
+#                           Measured 2026-10-08 on a cold cache: ~80 s, no
+#                           service container, no build. For a distroless +
+#                           static-Rust image this IS the attack surface — the
+#                           collector's own layer is one static binary with no
+#                           OS packages at all.
+#
+#   weekly lane (built)     builds all three images and scans the `docker save`
+#                           tarballs, which adds what a base scan cannot see:
+#                           the pip-installed packages inside generator and
+#                           flow-ui. It pays a full Rust musl build, which is
+#                           why it is not on the PR path — the same reason
+#                           `docker-build` is weekly.
+#
+# NOT path-filtered, unlike rust-ci.yml and python-ci.yml, and that is
+# deliberate. The finding source here is the vulnerability database, which moves
+# without this repository changing: a base image picks up a new CVE on a day
+# nobody touched a Dockerfile. A path filter would mean the gate reports only on
+# PRs that could not have introduced the finding. The weekly run catches drift
+# between PRs; running on every PR is what catches a base-image bump at the
+# moment it is proposed.
+
+name: image-scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # same weekly slot as rust-ci's heavy lane
+
+concurrency:
+  group: image-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  base-scan:
+    name: image-scan (shipped base images)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Warn-only (IMAGE_SCAN_EXIT_CODE=0, the script's default). REQ-H-12 is
+      # SHOULD and T24 rules the blocking threshold a policy call, not a test,
+      # so promotion goes to the required-check set in docs/ci-gates.md — not
+      # here. The teeth assertion inside the script runs on every invocation, so
+      # "warn-only" never decays into "cannot fail".
+      - name: Scan shipped base images
+        run: make audit-images
+
+  built-scan:
+    name: image-scan (images as built)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build every service image and scan the saved tarballs
+        run: make audit-images-built

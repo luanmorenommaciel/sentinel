@@ -45,3 +45,6 @@ infra/secrets/*
 # Agentic gitflow worktrees (ADR-0009)
 .worktrees/
 .superpowers/
+
+# Image-scan tarballs (make audit-images-built)
+.image-scan/

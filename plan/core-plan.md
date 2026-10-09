@@ -725,12 +725,56 @@ digest fed to the job → non-zero before tagging.
 platform exists (DEC-A1); the admission-controller half is asserted in T40.
 
 ### T24 — Image vulnerability scan gates the push
-**Leg** `leg/release/registry-provenance-v1` · **Blocked by** T22 · **REQ** H-12 · **Seam** S4
-**Files** ~`.github/workflows/release.yml` (scan step, warn-only first)
+**Leg** `leg/release/registry-provenance-v1` · **Blocked by** ~~T22~~ *(no longer — see below)* · **REQ** H-12 · **Seam** S4
+**Files** ~`.github/workflows/release.yml` (scan step, warn-only first) ·
+**as implemented**: +`.github/workflows/image-scan.yml` · +`scripts/ci/audit-images.sh` ·
+~`Makefile` (`audit-images`, `audit-images-built`) · ~`docs/ci-gates.md`
 **Does** SHOULD-level; extends the Rust path's existing discipline from crates to images.
 **Proof** The step runs and prints findings on a real push; after calibration, flip to blocking and
 the negative proof is a deliberately vulnerable base image failing the job.
 **Judgement** The severity threshold at which a push is blocked is a policy call, not a test.
+
+**Amended 2026-10-08 — the proof as written was unreachable, so the scan moved off the push.**
+T24 as specified could not be satisfied and was not going to become satisfiable: it proves itself
+"on a real push", and `release.yml` is gated to `workflow_dispatch` because no registry exists,
+with DEC-A1/A2 leaving remote deployment unauthorized. A scan step inside a workflow nothing
+triggers is not a gate. The dependency on T22 (which creates the registry) is what made the whole
+ticket wait, and it was the wrong dependency: **a scan needs bytes, not a push.**
+
+Implemented as `image-scan.yml`, two jobs over one policy script:
+
+* **PR lane** — `image-scan (shipped base images)`. Scans the last `FROM` of every
+  `services/*/Dockerfile`, pulled from its registry, for both `linux/amd64` and `linux/arm64`.
+  Measured cold: ~80 s, no build, no service container. For distroless + static musl that is
+  nearly the entire surface — the collector's own layer is one static binary, and
+  `gcr.io/distroless/static-debian12:nonroot` scans **0 HIGH / 0 CRITICAL**.
+* **weekly lane** — `image-scan (images as built)`. Builds all three images and scans the
+  `docker save` tarballs, which is the only way to reach our own layers (the pip-installed
+  packages in generator and flow-ui). It pays a full Rust musl build, so it sits beside
+  `docker-build` rather than on the PR path.
+
+**Warn-only, with the threshold explicit.** `IMAGE_SCAN_EXIT_CODE=0` in
+`scripts/ci/audit-images.sh`; flipping that one default to `1` is the entire change to blocking,
+which keeps the ticket's "policy call, not a test" judgement intact. Calibration measured
+2026-10-08 on `python:3.12-slim`: 44 HIGH at `HIGH,CRITICAL`, **0** with `--ignore-unfixed`, every
+one of the 44 carrying no upstream fix. `--ignore-unfixed` is therefore on by default.
+
+**The negative proof the ticket demands is delivered, and made continuous.** Every invocation ends
+by scanning a digest-pinned `python:3.9-slim` — one token from the real base — under the current
+policy, and fails the job if that fixture yields no CRITICAL. Measured: `72 HIGH, 6 CRITICAL`,
+exit 1 with the flag flipped to blocking; the same tree warn-only prints the same 78 findings and
+exits 0. T24 asked for that proof once; running it on every invocation is what stops "warn-only"
+from decaying into "cannot fail".
+
+**Residue, still deferred and still T22/T23/T40's:** everything that genuinely needs a published
+digest — provenance `mode=max`, the SBOM attestation, cosign signing, verify-before-admit — stays
+in the gated-off `release.yml`, unchanged, under DEC-A1/A2. T24's literal words, "gates the
+**push**", are not met and cannot be. What REQ-H-12 asks for — crate-level vulnerability
+discipline extended to container images, in a gate that runs and can fail — is.
+
+**Status: Done (local), pending the CI result recorded in `docs/ci-gates.md`.** Reasoning, lane
+choice, the trade-off and the one-flag flip are all in *The image scan, and why it is not in
+`release.yml`* there.
 
 ---
 

@@ -420,7 +420,7 @@ Every ticket defined in [`plan/core-plan.md`](plan/core-plan.md) with its curren
 | **T21** | `docs/ci-gates.md` status table + flip `repo-invariants` to blocking gate | Wave 1 · CI | T20 | **Done** |
 | **T22** | `release.yml` — Artifact Registry, OIDC, SLSA provenance, SBOM, Cosign signing | Wave 1 · Release | — | **Done** |
 | **T23** | Digest promotion `main` → `:staging`, `v*` → `:prod` with signature verification | Wave 1 · Release | T22 | **Done** |
-| **T24** | Image vulnerability scan gates the push (Trivy) | Wave 1 · Release | T22 | **Done** |
+| **T24** | Image vulnerability scan — **re-implemented off the push** as `image-scan.yml` (Trivy, warn-only, PR + weekly lanes) | Wave 1 · Release | ~~T22~~ | **Done (local)** |
 | **T25** | `0005a` `silver.metric_stats_1m` + MV + test suite (`03-watcher-models.test.sql`) | Wave 2 · Silver | T16, T20 | **Done** |
 | **T26** | Real-telemetry tripwire (`countIf(NOT is_synthetic)`) | Wave 2 · Silver | T25 | **Done** |
 | **T27** | `0005b` `silver.volume_1m` + 3 MVs (log, trace, metric) | Wave 2 · Silver | T25 | **Done** |
@@ -481,7 +481,7 @@ Every ticket defined in [`plan/core-plan.md`](plan/core-plan.md) with its curren
 | **flow-ui coverage probe** (T35) | `silver_coverage` probe on the 30 s lane | Landed |
 | **Release** (T22) | [`release.yml`](.github/workflows/release.yml): Artifact Registry, GitHub OIDC → Workload Identity Federation, SLSA provenance, SBOM, keyless Cosign signing | **Unverified against real registry** (see below) |
 | **Promotion** (T23) | Digest promotion `main` → `:staging`, `v*` → `:prod`; `cosign verify` runs before any tag moves | **Unverified against real registry** (see below) |
-| **Image scan** (T24) | Trivy scan by digest | **Warn-only** (runs post-push) |
+| **Image scan** (T24) | [`image-scan.yml`](.github/workflows/image-scan.yml) + [`scripts/ci/audit-images.sh`](scripts/ci/audit-images.sh): Trivy over every shipped base image on the PR lane (both platforms), over the `docker save`d images weekly, plus a teeth assertion against a pinned vulnerable base. `make audit-images` runs the same thing locally | **Warn-only**, and it actually runs — the by-digest scan in the gated-off `release.yml` is unchanged |
 
 Also this cycle, commit `d01e4ea` (`7689c16` before the rebase) removed 89 files — the `.claude/`
 agent layer (87) and the `meetings/` archive (2). `3a200ee` reverted the `.claude/` half, so those
@@ -489,7 +489,7 @@ agent layer (87) and the `meetings/` archive (2). `3a200ee` reverted the `.claud
 
 **Unverified: nothing in the release lane has run against a real registry.** No GCP project, Artifact Registry repository or Workload Identity provider exists yet. Signing, attestation verification and `crane tag` on a multi-arch index have therefore not been exercised; [`infra/deploy/README.md`](infra/deploy/README.md) carries the specific "Unverified" notes and what to confirm on the first publish.
 
-**The vulnerability scan does not gate the push.** It runs after `push: true`, so REQ-H-12's wording ("SHOULD gate the registry push") is not met: a multi-arch manifest cannot be loaded into the runner's daemon to be scanned beforehand. It is warn-only (`exit-code: "0"`, a single flag). Making it blocking, and the severity threshold, are policy and belong to T21.
+**The vulnerability scan does not gate the push, and no longer tries to.** The scan step inside `release.yml` runs after `push: true` and inside a workflow nothing triggers, so on its own it met REQ-H-12 in form only. T24 was re-implemented off the push as [`image-scan.yml`](.github/workflows/image-scan.yml): a scan needs bytes, not a push, so it scans every shipped base image on the PR lane and the `docker save`d images weekly — a gate that runs and can fail, without a registry and without authorizing remote deploy. It is warn-only by one default (`IMAGE_SCAN_EXIT_CODE=0`), with the calibration numbers, the lane trade-off and the continuous teeth assertion recorded in [`docs/ci-gates.md`](docs/ci-gates.md). What still needs a registry — provenance, the SBOM attestation, cosign signing — stays deferred to T22/T23/T40 under DEC-A1/A2.
 
 ### Repository Invariants Status
 

@@ -124,6 +124,15 @@ jobs:
       # the single flag to flip once the finding rate is known; promotion and the
       # severity threshold are policy, and go to T21's required-check set.
       #
+      # This step is NOT the T24 gate any more. It cannot be: this workflow is
+      # gated to `workflow_dispatch` because the registry does not exist, so a
+      # scan living only here never runs. REQ-H-12 is carried by
+      # .github/workflows/image-scan.yml, which scans the same images without a
+      # push (base images on the PR lane, `docker save` tarballs weekly). This
+      # step stays because scanning the published digest is still the right thing
+      # to do at this point once a registry exists — it is the by-digest half,
+      # not a duplicate.
+      #
       # Job-level `continue-on-error` would be wrong here, unlike in python-ci.yml:
       # this job also pushes and signs, and those failures must stay loud. Leaving
       # the step's own failures un-swallowed is deliberate too — it keeps a scan

@@ -36,6 +36,8 @@ are weekly* below.
 | `python-ci` | `test (python <version>)` | **PR** | pytest across the `PYTHON_IMAGE` matrix — 178 generator + 83 flow-ui | no | with the first required set |
 | `python-ci` | `supply-chain (pip-audit · bandit)` | **PR** | advisories + static security scan. `continue-on-error` at job level: it does not fail the **run**, but the **check** still reports failure (measured — see below) | no | after a lockfile exists (REQ-B-07) |
 | `repo-invariants` | `invariants (scripts/ci/invariants.d)` | **PR** | the ten cross-cutting properties below | no | **ready now** — all ten pass in CI as of 2026-10-08, and locally under Compose v2.27.0 / v2.39.4 / v5.1.4 |
+| `image-scan` | `image-scan (shipped base images)` | **PR** | every shipped base image in `services/*/Dockerfile`, for both platforms the repo ships, at `HIGH,CRITICAL` with `--ignore-unfixed`, **warn-only** — plus a teeth assertion that fails the job if the policy stops finding anything (T24 / REQ-H-12) | no | when a severity threshold is ruled on; see *The image scan, and why it is not in `release.yml`* below |
+| `image-scan` | `image-scan (images as built)` | **weekly** | the same policy against `docker save` tarballs of all three images as actually built — adds the pip-installed packages inside generator and flow-ui, which a base-image scan cannot see | no | needs a full Rust musl build; promote only with the rest of the weekly lane |
 | `e2e-silver` | `e2e-silver (live ClickHouse)` | **weekly + push to `main`** + `workflow_dispatch` | the real pipeline, the 18 silver assertions, the generator integration suite, and the role grants | no | after a week of real runs (`SPEC §16`) — it is the heaviest job here at 30 min, and the one most likely to flake |
 | `pr-linked-issue` | `linked-issue` | **PR** | the PR closes an issue, or carries `no-issue` | no | with the first required set |
 | `release` | `publish (<image>)` | **gated off** | build, push, provenance, SBOM, cosign signing | n/a | `workflow_dispatch` only — see *`release` is gated off* below |
@@ -65,7 +67,7 @@ DEC-A1/A2 settled.
 ## Why the heavy jobs are weekly
 
 PR #59 set the shape and it is kept here: cheap checks on the pull request, heavy jobs weekly
-plus `workflow_dispatch`. Four jobs sit in the weekly lane, each for a named reason.
+plus `workflow_dispatch`. Five jobs sit in the weekly lane, each for a named reason.
 
 | Job | Why not per-PR |
 |---|---|
@@ -73,6 +75,7 @@ plus `workflow_dispatch`. Four jobs sit in the weekly lane, each for a named rea
 | `e2e-silver` | the same, at 30 minutes — the largest single budget in the repo. It is the one weekly job that also runs on `push` to `main` |
 | `docker-build` | builds `linux/arm64` under QEMU emulation, which is several times slower than the native leg |
 | `musl TLS spike` | two musl cross-compiles with no warm target cache, and it is evidence for DEC-A4 rather than a gate |
+| `image-scan (images as built)` | builds all three images, including the full Rust musl compile, only to scan the result. The base-image half of the same policy runs on every PR instead |
 
 **The SIGTERM proof for issue #45 lands in the weekly lane, deliberately.** The test sends
 `SIGTERM` to a collector holding a non-empty export buffer and asserts the buffered rows reach
@@ -101,6 +104,90 @@ wide. It is accepted because the alternative — a 30-minute ClickHouse job on e
 was judged worse, and because the weekly run plus `workflow_dispatch` means any author who
 suspects they touched those paths can trigger the heavy lane on demand before asking for
 review. Whoever configures the first required set should revisit this with real flake data.
+
+## The image scan, and why it is not in `release.yml`
+
+T24 asked for an image vulnerability scan that **gates the push**, proven "on a real push",
+in `release.yml`. That proof is unreachable and will stay unreachable for as long as the
+local scope holds: no container registry exists, `release.yml` is gated to
+`workflow_dispatch` precisely because of that, and `DEC-A1`/`DEC-A2` leave remote deployment
+unauthorized. A scan step that only ever runs inside a workflow nothing triggers is not a
+gate, whatever its configuration says.
+
+**A scan does not need a push — it needs bytes.** `image-scan.yml` scans bytes that exist
+without a registry, so REQ-H-12's intent (extend the Rust path's crate-level discipline from
+`cargo deny` to container images) lands now rather than after a platform decision. The scan
+step already written into `release.yml` is left alone: once a registry exists, scanning a
+published digest is the right thing to do there, and this workflow does not replace it.
+
+**Two lanes, for one measured reason.** The PR lane scans the *shipped base image* of every
+service — the last `FROM` in each `services/*/Dockerfile`, pulled from its registry, for both
+`linux/amd64` and `linux/arm64`. Measured 2026-10-08 on a cold cache: **~80 s**, no service
+container, no build. For a distroless + static-musl image that is very nearly the whole
+surface: the collector's own layer is one static binary and `gcr.io/distroless/static-debian12`
+carries **zero** HIGH or CRITICAL findings. The weekly lane builds all three images and scans
+the `docker save` tarballs, which is the only way to see our own layers — the pip-installed
+packages inside generator and flow-ui. It pays a full Rust musl build, which is why it sits
+beside `docker-build` rather than on the PR path.
+
+Neither job is path-filtered, unlike `rust-ci` and `python-ci`. The finding source here is the
+vulnerability database, which moves without this repository changing; a path filter would mean
+the gate reports only on the PRs that could not have introduced the finding.
+
+**The threshold, and the calibration behind it.** T24 rules the blocking threshold a policy
+call rather than a test, so the gate ships **warn-only**: `IMAGE_SCAN_EXIT_CODE=0` in
+`scripts/ci/audit-images.sh`, and flipping that one default to `1` is the whole change.
+What calibration exists, measured 2026-10-08 against `python:3.12-slim`, the real base of two
+of the three images:
+
+| Policy | Findings |
+|---|---|
+| `--severity HIGH,CRITICAL` | **44 HIGH**, 0 CRITICAL |
+| `--severity HIGH,CRITICAL --ignore-unfixed` | 0 HIGH, 0 CRITICAL |
+
+All 44 carry no patched upstream version (`fix_deferred` / `affected`). A blocking gate
+counting those would have been red from the first run with nothing any author could do about
+it, which is how a gate gets switched off — so `--ignore-unfixed` is on, and the full
+unfiltered set is one environment variable away (`IMAGE_SCAN_IGNORE_UNFIXED=false`).
+
+One more number worth recording before anyone flips the flag: the fixable count on
+`python:3.12-slim` moved from 0 to 1 and back within fifteen minutes of each other on
+2026-10-08, as `CVE-2026-103111` (libpcre2) gained and lost a published fix across two
+registry snapshots of the same tag. That is the volatility a blocking gate inherits, and it is
+the reason to read a few weeks of warn-only runs before promoting this check.
+
+**Warn-only is not toothless, and that is asserted rather than claimed.** Every invocation —
+PR lane, weekly lane and local `make audit-images` alike — ends by scanning a digest-pinned
+deliberately vulnerable base image (`python:3.9-slim`, one token away from the real base) under
+*the current policy*, and **fails the job** if that fixture produces no CRITICAL finding. A
+scanner loosened to the point where nothing can fail it therefore breaks the build on the
+loosening, not silently years later. Measured locally with the policy flipped to blocking:
+`72 HIGH, 6 CRITICAL`, exit 1; the same tree warn-only prints the same 78 findings and exits 0.
+
+**The verdict comes from the report, not from the exit status.** Found while building this: a
+transient `docker pull` failure against Docker Hub (`TLS handshake timeout`, exit 125 — the
+same flakiness the Makefile's `DOCKER_BUILD_RETRIES` comment documents for gcr.io) was
+indistinguishable from "findings found" when the exit code was the only signal, and trivy
+itself overloads exit 1 for an internal error and a policy hit. So the scanner image is pulled
+up front with retries, every scan writes JSON, a missing report is a hard failure that says the
+scan could not run, and the counts are read from the file. A gate that cannot tell *clean* from
+*never ran* is worse than no gate.
+
+**Why Trivy.** `release.yml` already uses `aquasecurity/trivy-action`, so no second vendor is
+introduced; Trivy scans a registry reference, a local daemon image and a `docker save`/OCI
+tarball with the same CLI, needs no Docker socket mounted into it, and exposes the exact two
+knobs this policy is made of (`--severity`, `--ignore-unfixed`) plus `--exit-code` as the
+single warn-to-block switch. Grype (`anchore/scan-action`) would do the same job and was
+rejected only to avoid a second scanner in the repo. Docker Scout authenticates to Docker Hub
+for its advisory data, an external account this repo does not have and DEC-A1/A2 would not
+sanction. GitHub-native scanning does not cover OS packages in an image we build and never
+push.
+
+**Residue, explicitly deferred.** T24's own words are "gates the **push**". What image scanning
+can prove without a registry is proven here; what genuinely cannot is everything that needs a
+published digest — provenance (`provenance: mode=max`), the SBOM attestation, cosign signing
+and verify-before-admit. Those stay in `release.yml`, gated off, and remain T22/T23/T40's
+business under DEC-A1/A2.
 
 ## `release` is gated off
 
