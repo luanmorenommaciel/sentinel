@@ -18,8 +18,15 @@
 # you nothing about its own flake rate.
 name: e2e-silver
 
+# Lean default (PR #59): this job brings up ClickHouse, runs the real pipeline
+# and 18 silver assertions, and is budgeted at 30 minutes. That is the heaviest
+# thing in the repo, so it runs weekly + on demand instead of on every PR.
+# Promotion to a per-PR required check is a decision for the first required set
+# (docs/ci-gates.md), after a week of real runs has measured its flake rate.
 on:
-  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, alongside rust-ci's heavy jobs
   push:
     branches: [main]
 

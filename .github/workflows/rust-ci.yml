@@ -80,7 +80,12 @@ jobs:
   # ── temporary evidence for DEC-A4; it must not select a TLS design ───────
   musl-tls-spike:
     name: musl TLS spike (${{ matrix.target }})
+    # Two musl cross-compiles with no cache hit on a cold target. It is DEC-A4
+    # evidence, not a gate, so it follows the lean default and runs weekly + on
+    # demand rather than on every PR.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     continue-on-error: true
     strategy:
       fail-fast: false
@@ -245,8 +250,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      # arm64 is built by emulation on an amd64 runner. buildx alone reports
+      # `exec format error` the moment the Dockerfile RUNs anything for the
+      # non-native platform, so the binfmt handlers have to be registered first.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
       - uses: docker/setup-buildx-action@v3
-      - name: Build the collector image
+      - name: Build the collector image (amd64 + arm64)
         uses: docker/build-push-action@v6
         with:
           context: services/collector-rust
@@ -255,3 +266,25 @@ jobs:
           tags: sentinel-collector:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # A multi-arch result is a manifest list, which cannot be loaded into the
+      # runner's daemon — so the stop check gets a second, native-only build.
+      # It is a cache hit on the amd64 layers the step above just produced, so
+      # it costs little, and it is the only way to get a runnable image.
+      - name: Load the native image for the stop check
+        uses: docker/build-push-action@v6
+        with:
+          context: services/collector-rust
+          platforms: linux/amd64
+          load: true
+          tags: sentinel-collector:ci
+          cache-from: type=gha
+
+      # Issue #45: `docker stop` must exit 0 well inside the grace period. The
+      # cargo test proves the bare binary acts on SIGTERM; this proves it when
+      # it is PID 1 in the distroless image, which is how it is actually run.
+      # REQUIRE_DOCKER=1 turns the local "no daemon" skip into a failure here.
+      - name: docker stop exits 0 (issue #45)
+        env:
+          REQUIRE_DOCKER: "1"
+        run: bash services/collector-rust/tests/docker-stop.test.sh

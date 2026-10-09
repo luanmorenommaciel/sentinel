@@ -6,12 +6,31 @@
 # thing REQ-A-03 deletes. `release.yml` is the only caller. The PR-time build
 # check stays in rust-ci.yml's `docker-build` job with `push: false`, so a fork
 # PR can never publish.
+# ─────────────────────────────────────────────────────────────────────────────
+# GATED OFF. `workflow_dispatch` only — nothing triggers this automatically.
+#
+# Why: every job here pushes to a container registry that does not exist. No GCP
+# project, no Artifact Registry repository and no Workload Identity provider has
+# been created, so `publish` and `promote` would fail at authentication, and
+# DEC-2026-10-06 (DEC-A1/A2) leaves remote deployment unauthorized — there is no
+# selected platform or ClickHouse owner to deploy to. A workflow that cannot
+# succeed must not sit on `main`'s push trigger pretending to be a release path.
+#
+# To re-enable, in one PR: create the registry and the WIF provider, set the
+# repository variables the jobs read, restore
+#
+#   push:
+#     branches: [main]
+#     tags: ["v*"]
+#
+# and record the required-check decision in docs/ci-gates.md. Until then a human
+# can still exercise it by hand from the Actions tab, which is the only way it
+# can be run against a real registry for the first time.
+# ─────────────────────────────────────────────────────────────────────────────
 name: release
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
+  workflow_dispatch:
 
 # The SHA tag is immutable, so two runs for the same commit would push identical
 # bytes — but the channel tag is mutable, and a superseded run must not win the

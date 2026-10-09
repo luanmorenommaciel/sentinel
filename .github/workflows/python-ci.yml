@@ -53,6 +53,7 @@ jobs:
   lint:
     name: lint (ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -66,6 +67,7 @@ jobs:
   test:
     name: test (python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -104,6 +106,7 @@ jobs:
   supply-chain:
     name: supply-chain (pip-audit · bandit)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4

@@ -15,21 +15,28 @@ compared instead of assumed (`SPEC §12.4`, REQ-B-10).
 
 ## The checks
 
-| Workflow | Job | Covers | Required today | Promote when |
-|---|---|---|---|---|
-| `rust-ci` | `gates (fmt · clippy · test · build)` | `cargo fmt --check`, `clippy -D warnings`, unit + golden + gRPC + doc tests, release build | no | with the first required set |
-| `rust-ci` | `integration (every #[ignore]d test)` | the live-ClickHouse round-trip and every `#[ignore]`d test (T09) | no | with the first required set |
-| `rust-ci` | `supply-chain (cargo deny)` | licences, advisories, bans, `yanked = "deny"` | no | with the first required set |
-| `rust-ci` | `docker-build (distroless image)` | the image builds, `push: false` so a fork PR cannot publish | no | with the first required set |
-| `rust-ci` | `musl TLS spike (<target>)` | T04's evidence for DEC-A4 — **not a gate**, and `continue-on-error` | no | never; delete with T42 |
-| `python-ci` | `lint (ruff)` | ruff over both Python packages | no | with the first required set |
-| `python-ci` | `test (python <version>)` | pytest across the `PYTHON_IMAGE` matrix — 178 generator + 83 flow-ui | no | with the first required set |
-| `python-ci` | `supply-chain (pip-audit · bandit)` | advisories + static security scan, `continue-on-error` | no | after a lockfile exists (REQ-B-07) |
-| `repo-invariants` | `invariants (scripts/ci/invariants.d)` | the ten cross-cutting properties below | no | **ready now** — all six pass as of T19 |
-| `e2e-silver` | `e2e-silver (live ClickHouse)` | the real pipeline, the 18 silver assertions, the generator integration suite, and the role grants | no | after a week of real PRs (`SPEC §16`) |
-| `pr-linked-issue` | `linked-issue` | the PR closes an issue, or carries `no-issue` | no | with the first required set |
-| `release` | `publish (<image>)` | build, push, provenance, SBOM, cosign signing | n/a | runs on `main`/tags, not on PRs |
-| `release` | `promote (<image>)` | digest promotion with verify-before-tag | n/a | runs on `main`/tags, not on PRs |
+**Two lanes, after PR #59's lean default.** A *PR lane* runs on every pull request: cheap,
+cached, no service containers. A *weekly lane* runs Mondays 06:00 UTC and on
+`workflow_dispatch`: anything that needs a live ClickHouse, an emulated architecture, or a
+cold cross-compile. The split is a cost and latency decision, not a statement that the weekly
+jobs matter less — see *Why the heavy jobs are weekly* below.
+
+| Workflow | Job | Lane | Covers | Required today | Promote when |
+|---|---|---|---|---|---|
+| `rust-ci` | `gates (fmt · clippy · test)` | **PR** | `cargo fmt --check`, `clippy -D warnings`, unit + golden + gRPC + doc tests | no | with the first required set |
+| `rust-ci` | `integration (every #[ignore]d test)` | **weekly** | every `#[ignore]`d test against a live ClickHouse (T09) — the round-trip, the gRPC export path, and **the SIGTERM flush proof for issue #45** — plus the orphan check that fails if an `#[ignore]`d test did not run | no | needs a ClickHouse service container; promote only if the PR lane gains one |
+| `rust-ci` | `supply-chain (cargo deny)` | **PR** | licences, advisories, bans, `yanked = "deny"` | no | with the first required set |
+| `rust-ci` | `release build` | **weekly** | `cargo build --release --locked` | no | with the first required set |
+| `rust-ci` | `docker-build (distroless image)` | **weekly** | the image builds for `linux/amd64` **and `linux/arm64`**, `push: false` so a fork PR cannot publish. arm64 is emulated, so `docker/setup-qemu-action@v3` registers the binfmt handlers before buildx — without it the first non-native `RUN` fails with `exec format error` | no | with the first required set |
+| `rust-ci` | `musl TLS spike (<target>)` | **weekly** | T04's evidence for DEC-A4 — **not a gate**, and `continue-on-error` | no | never; delete with T42 |
+| `python-ci` | `lint (ruff)` | **PR** | ruff over both Python packages | no | with the first required set |
+| `python-ci` | `test (python <version>)` | **PR** | pytest across the `PYTHON_IMAGE` matrix — 178 generator + 83 flow-ui | no | with the first required set |
+| `python-ci` | `supply-chain (pip-audit · bandit)` | **PR** | advisories + static security scan, `continue-on-error` | no | after a lockfile exists (REQ-B-07) |
+| `repo-invariants` | `invariants (scripts/ci/invariants.d)` | **PR** | the ten cross-cutting properties below | no | **ready now** — all ten pass locally |
+| `e2e-silver` | `e2e-silver (live ClickHouse)` | **weekly** | the real pipeline, the 18 silver assertions, the generator integration suite, and the role grants | no | after a week of real runs (`SPEC §16`) — it is the heaviest job here at 30 min, and the one most likely to flake |
+| `pr-linked-issue` | `linked-issue` | **PR** | the PR closes an issue, or carries `no-issue` | no | with the first required set |
+| `release` | `publish (<image>)` | **gated off** | build, push, provenance, SBOM, cosign signing | n/a | `workflow_dispatch` only — see *`release` is gated off* below |
+| `release` | `promote (<image>)` | **gated off** | digest promotion with verify-before-tag | n/a | `workflow_dispatch` only — see below |
 
 ## What `repo-invariants` gates on
 
@@ -52,6 +59,64 @@ DEC-A1/A2 settled.
 | `09-local-compose-boundary` | host ports bind loopback-only, and `make` supplies the collector's OTLP port default (DEC-A1/A2 local scope) |
 | `10-hyperdx-is-read-only` | HyperDX connects as `sentinel_hyperdx_u`, takes its password as a file path, publishes loopback only, keeps Mongo unpublished, pins both images, and no bundled ClickStack image adds a second ClickHouse or collector (ADR-0011) |
 
+## Why the heavy jobs are weekly
+
+PR #59 set the shape and it is kept here: cheap checks on the pull request, heavy jobs weekly
+plus `workflow_dispatch`. Four jobs sit in the weekly lane, each for a named reason.
+
+| Job | Why not per-PR |
+|---|---|
+| `integration (every #[ignore]d test)` | needs a live ClickHouse brought up with `docker compose … --wait`. Moving ClickHouse off the PR path is precisely what #59 did |
+| `e2e-silver` | the same, at 30 minutes — the largest single budget in the repo |
+| `docker-build` | builds `linux/arm64` under QEMU emulation, which is several times slower than the native leg |
+| `musl TLS spike` | two musl cross-compiles with no warm target cache, and it is evidence for DEC-A4 rather than a gate |
+
+**The SIGTERM proof for issue #45 lands in the weekly lane, deliberately.** The test sends
+`SIGTERM` to a collector holding a non-empty export buffer and asserts the buffered rows reach
+ClickHouse — so it is `#[ignore]`d and needs the same ClickHouse service container as the rest
+of the `integration` job. Putting it on every PR would re-import the exact cost #59 removed.
+What keeps it from rotting is the orphan check in that job: it fails if any `#[ignore]`d test
+in `tests/*.rs` did not appear in the run, so the test cannot be silently skipped by a
+reintroduced `--test` filter. The signal-handling change it covers is **not** left to the weekly lane
+alone. `tests/shutdown_signals.rs` holds two non-`#[ignore]`d tests —
+`sigterm_stops_collector_cleanly` and `sigint_stops_collector_cleanly` — which spawn the real
+collector binary, send it the real signal and assert it exits 0 within 3 s, with no database
+at all. Those run in the **PR lane** inside `gates`. Only the *flush to ClickHouse* half needs
+the weekly lane.
+
+The image is covered separately by `services/collector-rust/tests/docker-stop.test.sh`
+(`make test-collector-shutdown`), a step in the weekly `docker-build` job. The cargo test
+proves the bare binary acts on SIGTERM; the script proves it when it is PID 1 in the
+distroless image, stopped the way Docker, Kubernetes and systemd stop it — which is the
+configuration issue #45 actually observed failing (`docker stop -t 12` → exit 137). Locally it
+**skips** with exit 0 when no Docker daemon is reachable; CI sets `REQUIRE_DOCKER=1`, which
+turns that skip into a failure, so the check cannot quietly no-op on a runner.
+
+**The trade-off this accepts:** a PR can break the live round-trip, the silver assertions or
+the arm64 image and still show a green PR lane. That is a real regression window, up to a week
+wide. It is accepted because the alternative — a 30-minute ClickHouse job on every push —
+was judged worse, and because the weekly run plus `workflow_dispatch` means any author who
+suspects they touched those paths can trigger the heavy lane on demand before asking for
+review. Whoever configures the first required set should revisit this with real flake data.
+
+## `release` is gated off
+
+`release.yml` triggers on `workflow_dispatch` **only**. Its `push: branches: [main]` and
+`tags: ["v*"]` triggers are removed, and the reason is written at the top of the file.
+
+Every job in it pushes to a container registry that **does not exist**: no GCP project, no
+Artifact Registry repository, no Workload Identity provider. `publish` would fail at
+authentication and `promote` could never find a digest to move. Separately,
+`plan/decisions/DEC-2026-10-06-local-scope.md` (DEC-A1/A2) leaves remote deployment
+unauthorized — no platform and no ClickHouse operational owner is selected, so there is
+nothing to release *to*. A workflow that cannot succeed must not sit on `main`'s push trigger
+looking like a release path; a reader would reasonably conclude images are being published.
+
+Re-enabling is one PR: create the registry and the WIF provider, set the repository variables
+the jobs read, restore the two triggers, and record the required-check decision here.
+`workflow_dispatch` is kept rather than deleting the workflow, because a human running it by
+hand is the only way it can be exercised against a real registry the first time.
+
 ## Two things this table is deliberately honest about
 
 **`e2e-silver` is the only check that can fail for reasons unrelated to the change.**
@@ -61,8 +126,9 @@ rather than measured. It lands reporting truthfully — **not** wrapped in
 its own flake rate. Read a week of real runs before promoting it.
 
 **Nothing has run since 2026-10-05.** GitHub Actions has been failing account-wide:
-jobs complete in 1–3 seconds with `runner_name: ""` and zero steps, across all four
+jobs complete in 1–3 seconds with `runner_name: ""` and zero steps, across all six
 workflows here and other repositories under the same account, `windows-latest`
-included. So every "no" in the Required column is also, right now, a check that has
+included. **No lane in this document has executed** — the PR/weekly split above describes
+intended behaviour that no run has yet demonstrated. So every "no" in the Required column is also, right now, a check that has
 never executed. Configuring a required set is pointless until that is fixed — which is
 a billing or account-settings matter, not a repository one.
