@@ -122,8 +122,8 @@ published digest is the right thing to do there, and this workflow does not repl
 
 **Two lanes, for one measured reason.** The PR lane scans the *shipped base image* of every
 service — the last `FROM` in each `services/*/Dockerfile`, pulled from its registry, for both
-`linux/amd64` and `linux/arm64`. Measured 2026-10-08 on a cold cache: **~80 s**, no service
-container, no build. For a distroless + static-musl image that is very nearly the whole
+`linux/amd64` and `linux/arm64`. Measured on a cold cache: **~80 s** on a laptop and **18 s on
+the runner** (run `37876581847`), no service container, no build. For a distroless + static-musl image that is very nearly the whole
 surface: the collector's own layer is one static binary and `gcr.io/distroless/static-debian12`
 carries **zero** HIGH or CRITICAL findings. The weekly lane builds all three images and scans
 the `docker save` tarballs, which is the only way to see our own layers — the pip-installed
@@ -163,6 +163,15 @@ deliberately vulnerable base image (`python:3.9-slim`, one token away from the r
 scanner loosened to the point where nothing can fail it therefore breaks the build on the
 loosening, not silently years later. Measured locally with the policy flipped to blocking:
 `72 HIGH, 6 CRITICAL`, exit 1; the same tree warn-only prints the same 78 findings and exits 0.
+
+**And the job itself was shown to go red, in CI, not only on a laptop.** Commit `8cfff6e` flipped
+the PR-lane step to `IMAGE_SCAN_EXIT_CODE=1` with `IMAGE_SCAN_IGNORE_UNFIXED=false` for one run,
+which is enough to make `python:3.12-slim`'s unfixed set count. Run `37876696811` concluded
+**failure**: `44 HIGH` on each of the two platforms, `image scan: 88 finding(s) … and
+IMAGE_SCAN_EXIT_CODE=1 makes them blocking`, `Process completed with exit code 2`. The flag was
+reverted in the next commit, the same way issue #45's SIGTERM fix was proven by reverting it. That
+run is also the measurement behind scanning both platforms: amd64 and arm64 produced 44 unfixed
+HIGHs **independently**, which is the per-arch package snapshot the base loop exists to cover.
 
 **The verdict comes from the report, not from the exit status.** Found while building this: a
 transient `docker pull` failure against Docker Hub (`TLS handshake timeout`, exit 125 — the
@@ -274,6 +283,15 @@ concluded `failure`, so the check shows red in the PR while not failing the work
 Job-level `continue-on-error` buys "does not fail the run", never "shows green" — the
 only way a check shows green is for its step to exit 0. Those three checks are green now
 because the findings are fixed, not because a flag hides them.
+
+**`image-scan` landed green on its first real run.** Run `37876581847`, 18 s, both platforms of
+both shipped base images at `0 HIGH / 0 CRITICAL`, the teeth fixture at `6 fixable CRITICAL`, and
+`image-scan (images as built)` correctly **skipped on the PR** as the lean default intends. What
+that green covers: the two base images as they stood on 2026-10-08, for amd64 and arm64, at
+`HIGH,CRITICAL` with unfixed findings excluded, plus the assertion that the policy still bites.
+What it does **not** cover: the images as built (weekly lane, never yet run — its first run is the
+Monday schedule or a `workflow_dispatch`), anything below HIGH, unfixed findings, and every
+registry-side property T24 also named.
 
 Branch protection remains unset (issue #35), so every "no" in the Required column still
 stands — but it is now a policy gap, not a platform one. Configuring a required set is

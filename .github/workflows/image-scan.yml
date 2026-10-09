@@ -19,8 +19,9 @@
 #
 #   PR lane (base images)   every shipped base image, pulled from its registry
 #                           and scanned for both platforms the repo ships.
-#                           Measured 2026-10-08 on a cold cache: ~80 s, no
-#                           service container, no build. For a distroless +
+#                           Measured on a cold cache: ~80 s on a laptop and
+#                           **18 s on the runner** (run 37876581847), no service
+#                           container, no build. For a distroless +
 #                           static-Rust image this IS the attack surface — the
 #                           collector's own layer is one static binary with no
 #                           OS packages at all.
@@ -71,11 +72,6 @@ jobs:
       # here. The teeth assertion inside the script runs on every invocation, so
       # "warn-only" never decays into "cannot fail".
       - name: Scan shipped base images
-        # TEMPORARY — live negative proof for T24, reverted in the next commit.
-        # Blocking + counting unfixed findings, which python:3.12-slim has 44 of.
-        env:
-          IMAGE_SCAN_EXIT_CODE: "1"
-          IMAGE_SCAN_IGNORE_UNFIXED: "false"
         run: make audit-images
 
   built-scan:
