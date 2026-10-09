@@ -4,7 +4,8 @@ CI that actually runs, on a single pinned ClickHouse, with the delivery path's
 documentation consolidated into one page. The pipeline itself — generator → collector →
 `bronze.*` — is untouched.
 
-**67 commits, 128 files changed as of `408be12`**, rebased onto `main` at `1aa8d92`, which
+**72 commits, 131 files changed** — 71 and 131 measured at `3405b68`, the commit before this
+body; the body itself adds one commit and no new file. Rebased onto `main` at `1aa8d92`, which
 carries PR #59. Every figure below names the commit it was measured at, because this branch is
 still receiving commits: re-run the commands in the block for the current head.
 
@@ -16,24 +17,24 @@ PR's own diff shows — commits since the merge-base with `main`, and files in
 `git diff origin/main...HEAD`:
 
 ```
-$ git rev-list --count origin/main..408be12                    #  commits in the PR
-67
-$ git diff --name-only origin/main...408be12 | wc -l           #  files in the PR diff
-128
+$ git rev-list --count origin/main..3405b68                    #  commits in the PR
+71
+$ git diff --name-only origin/main...3405b68 | wc -l           #  files in the PR diff
+131
 $ git rev-list --count origin/origin/sdlc-e2e-review..HEAD      #  counted against the
 54                                                              #  PRE-REBASE remote head
-$ git log --format='' --name-only origin/main..408be12 \
+$ git log --format='' --name-only origin/main..3405b68 \
     | sed '/^$/d' | sort -u | wc -l                             #  files touched across all
-215                                                             #  commits, union
+218                                                             #  commits, union
 ```
 
-**54** was counted against the pre-rebase remote head `ac0b633`, so it also included
+**218** and **54**: the first is the union, the second was counted against the pre-rebase remote head `ac0b633`, so it also included
 `main`'s own two commits that the old head predates. That head has since been replaced by
 this branch, so the figure is historical. **215** is the union across every commit,
 including files a later commit reverted — which is where the "~200 files" figure came from.
 
-The PR diff fell from **207** files to **128** for one reason: restoring `.claude/` removed 87
-deletion entries from it. The arithmetic closes exactly — the eight additions are everything in
+The PR diff fell from **207** files to **131** for one reason: restoring `.claude/` removed 87
+deletion entries from it. The arithmetic closes exactly — the eleven additions are everything in
 `comm -13` between the two file lists, and nothing else left the diff:
 
 ```
@@ -43,20 +44,23 @@ $ git diff --name-only origin/main...93141c4 | grep -c '^\.claude/'
 87
 
 $ git diff --name-only origin/main...93141c4 | sort > old
-$ git diff --name-only origin/main...408be12 | sort > new
+$ git diff --name-only origin/main...3405b68 | sort > new
 $ comm -13 old new                                              #  in the diff now, not before
 .github/workflows/image-scan.yml
 docs/pr-body-sdlc-e2e-review.md
 docs/sdlc.md
+infra/clickhouse/migrations/0008_migrator_truncate.sql
 scripts/ci/audit-images.sh
 services/collector-rust/deny.toml
+services/collector-rust/tests/clickhouse_roundtrip.rs
 services/collector-rust/tests/docker-stop.test.sh
+services/collector-rust/tests/support/mod.rs
 services/generator-python/src/otelgen/exporters/otlp.py
 services/generator-python/src/otelgen/seeding.py
 $ comm -23 old new | grep -vc '^\.claude/'                      #  left the diff, excluding .claude/
 0
 
-207 − 87 restored + 8 new files = 128
+207 − 87 restored + 11 new files = 131
 ```
 
 The earlier "44 commits" was measured before the rebase, against the old merge-base
@@ -225,6 +229,105 @@ never "shows green". Those checks are green now because the findings are fixed.
 so neither is introduced here; and the Rust clippy/test runs quoted above were on host
 cargo 1.99.0, not the 1.96.0 `rust-toolchain.toml` pins — though CI's own `gates` job has
 now passed on the pinned toolchain.
+
+## The heavy lane ran too, and it was red
+
+The weekly lane had **never executed** — zero `schedule` or `workflow_dispatch` events across
+143 runs. Run `37875017554` is the first, and it found three real defects plus one design flaw.
+All four are fixed here; none of them was findable without an actual run.
+
+```
+release build                      success   ← had never executed; compiles clean
+gates · supply-chain (cargo deny)  success
+integration                        FAILURE   → fixed
+musl TLS spike (both targets)      FAILURE   → fixed
+docker-build                       cancelled at timeout-minutes: 20  → raised to 45
+```
+
+**1. `integration`: the branch's own security work broke its own test, invisibly.** Every live
+test connected as `default` and got
+
+```
+Code: 194. DB::Exception: default: Authentication failed: password is incorrect,
+or there is no user with such name. (REQUIRED_PASSWORD)
+```
+
+**It is not a password**, and that matters because "add a password" would not have fixed it.
+`clickhouse/clickhouse-server` ships `users.d/default-user.xml` restricting `default` to `::1`
+and `127.0.0.1` *inside the container*; `cargo test` runs on the host and arrives through the
+published port from the Docker bridge, matching no `<networks>` entry, and ClickHouse answers
+with the generic 194. Verified locally against 25.4.13.22: `clickhouse-client` inside the
+container answers `SELECT 1`, the identical query from the host returns 194. Until T19 the repo
+mounted a `users.d` override opening `::/0` for `default`; T19 deleted it (REQ-B-14) and nothing
+noticed, because these tests had never run.
+
+Fixed with the repo's own least-privilege identity, not a hole in the ACL. The job provisions the
+roles with `migrate.sh` — so it is now also the first CI exercise of the migration runner — and
+authenticates as `sentinel_migrator_u` with a per-run random password written to a file under
+`RUNNER_TEMP`: a path, never a value (SPEC §14.2), never in an argv, and not in `infra/secrets/`
+where `04-no-plaintext-secrets` would police it. `tests/support/mod.rs` holds the wiring once and
+also builds the `clickhouse:` block the SIGTERM test writes for the collector it spawns, so the
+writer and the verifier authenticate identically — a mismatch would not fail loudly, the flush
+would just write nothing. No new `std::env::var` in `src/` (clippy.toml bans it; the URL still
+comes through `url_from_env`, the collector's credential still through `password_file`).
+
+A second, smaller finding came with it: **`TRUNCATE` is its own privilege in ClickHouse and
+`DROP` does not imply it**, so the migrator could not clear a table
+(`Code: 497 … necessary to have the grant TRUNCATE ON bronze.otel_logs`). Migration `0008` grants
+it — a new file, because `0002` has been applied and the runner protects its checksum with exit 3.
+The role already holds `CREATE TABLE` + `DROP` on both databases, so it could already drop and
+rebuild; `TRUNCATE` is strictly weaker and widens nothing. Not granted to `sentinel_collector`,
+which stays at INSERT + SELECT.
+
+All four live tests now pass against the CI-shaped stack — the first time any of them has passed
+anywhere:
+
+```
+golden_fixture_round_trip                         ... ok
+otlp_grpc_payload_lands_in_clickhouse             ... ok
+sigterm_flushes_acknowledged_buffer_to_clickhouse ... ok
+sigint_flushes_acknowledged_buffer_to_clickhouse  ... ok
+```
+
+**2. `musl TLS spike`: no C compiler for either target.** Both legs died identically in
+`ring 0.17.14`'s build script — `ToolNotFound: failed to find tool "x86_64-linux-musl-gcc"`.
+`ring` compiles C and assembly, so `cc-rs` needs a compiler *for the target*, which a bare runner
+has for neither musl triple; DEC-A4's `[M2]` measurement was taken inside a `rust:1.96` container
+that had `musl-tools`, which is exactly the difference. `musl-tools` alone is **not** the fix — it
+installs `musl-gcc` for the host architecture only, leaving the aarch64 leg with no compiler and
+no linker — so the job now installs `cargo-zigbuild`, which covers both triples with one install.
+Verified before committing, inside `rust:1.96` on an arm64 host so one leg is a genuine
+cross-compile with `ring` in the graph both times:
+
+```
+x86_64-unknown-linux-musl:  ELF 64-bit LSB executable, x86-64, statically linked, stripped
+aarch64-unknown-linux-musl: ELF 64-bit LSB executable, ARM aarch64, statically linked, stripped
+```
+
+which is what the job's existing `file` assertion looks for. The job's entire purpose is
+DEC-A4/T42 evidence and it had never produced any.
+
+**3. `docker-build`: twenty minutes was eighteen seconds short.** Started 02:32:00, cancelled
+02:52:18 — 20m18s against a 20-minute budget. The arm64 leg is a full Rust musl compile under
+QEMU with a cold `type=gha` cache. Raised to 45, set for the cold case because a weekly run after
+a dependency bump gets the cold case. **This is what has kept the `docker stop` assertion for
+issue #45 from ever executing by any path**, and it is why #45 stays open.
+
+**4. A design flaw, found by reading rather than by running.** The concurrency group was
+`rust-ci-${{ github.ref }}` with `cancel-in-progress: true` for every event, so a manual or
+scheduled run on a branch someone is working on was cancellable by the next push to that branch.
+The heavy lane takes 20-45 minutes, so on an active branch it could essentially never finish — and
+the job that proves #45 lives in it. The group is now keyed on the event name: successive pushes
+to one PR still supersede each other, a manual or scheduled run gets its own group. To be clear,
+this is *not* what killed `docker-build` in that run; it died on its own timeout.
+
+## Every ticket is `Done (local)`, by this PR's own rule
+
+`docs/sdlc.md` step 11 — added by this PR — defines Done as green **in CI** *and* on `main`.
+Neither half holds: this branch is 72 commits ahead of `main` with nothing merged, and the heavy
+lane is red. The README carried 36 bare `Done` rows and a `| **Done** | 43 | 89.6% |` summary;
+all 43 ticket rows now read `Done (local)`, with a paragraph under the table saying why. The two
+`Done` rows left are in the *decisions* table, where it means a ruling was taken.
 
 ## Why
 
