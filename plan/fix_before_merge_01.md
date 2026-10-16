@@ -21,6 +21,25 @@
 
 ---
 
+## Outcome — 2026-10-16
+
+All eight executed. The tickets below are left as written: they are the work order, and the
+stale claims they quote are the evidence of the defects, not assertions about the present.
+This section is the amendment (`plan/` is live, G4).
+
+| ID | Outcome |
+|---|---|
+| **F01** | **Done, and the inference in the ticket was wrong in a useful way.** The dispatch was *not* refused with a 422 — `gh workflow run e2e-silver.yml --ref origin/sdlc-e2e-review` was accepted even though `e2e-silver.yml` is absent from `main`. Option (b) was therefore never needed. The first dispatch, `38831986773`, **failed** inside `make up` at 2 m 37 s on a CI-only defect: the step chmodded `infra/secrets/ch_password` to `0400` under the runner's uid, and a bind mount makes that unreadable to every container's non-root user — `hyperdx/hyperdx:2.40.0` runs as `node` and its entrypoint's `[ -r ... ]` guard exited 1 after 0.55 s. Fixed to `0444` with the reason inline, the `if: failure()` dump widened to all services, and re-dispatched: `38833172124`, **green on all ten steps in 3 m 35 s** — 233,100 signals ingested and persisted, 18 base + 16 watcher silver assertions, 6 generator integration tests. Step 5 (**drop `push: branches: [main]`**) was therefore **not** taken: that instruction was conditional on the failure being unfixable |
+| **F02** | Done — all five `docs/sdlc.md` edits, plus the §2 state line moved to 2026-10-16 |
+| **F03** | Done — `prompts/03`; the Done-in-CI rule and "read the run, not the lane" both kept, the latter now carrying `38266048240` as its example |
+| **F04** | Done — `README.md` §7 now says seven workflows with the PR/weekly split and rust-ci's six jobs; §8's red-lane reason replaced, `Done (local)` conclusion kept |
+| **F05** | Done — PR body leads with red `main` (`38266048240` / RUSTSEC-2025-0134), records both `e2e-silver` dispatches, and `Closes #34` is now supportable because both halves have run (`37926101611` Python, `38833172124` Silver). Counts re-measured against `origin/main` |
+| **F06** | Done, with one correction to the ticket: `claude plugin install` takes **no version flag** (verified against `claude plugin --help`), so `1.2.3` is *recorded*, not pinned. The `/plugin` spellings in step 1 were unverified; the page gives the verified `claude plugin ...` CLI form instead |
+| **F07** | **The premise expired between writing and execution.** `prompts/04-feature-before-pr.md` is no longer 0 bytes — it is 5.8 kB of the Commander's own stage-7 prompt, the one this batch was generated from. It is **committed**, not deleted, and `docs/sdlc.md` §3 gains a stage-7 row pointing at it. `prompts/00`'s uncommitted `/grill-with-docs` edit is **kept** — the skill is real in 1.2.3 and calls `grilling` + `domain-modeling` — and `docs/sdlc.md` lines for stage 0 now name it instead of `/grilling` (DEC-I2). The two other untracked files, `docs/questions_answered_before_pr.md` and this one, are committed too |
+| **F08** | `scripts/ci/run-invariants.sh` → **10 run, 0 failed** under Compose v5.1.4. `make test` / `make lint` **could not run**: no Docker daemon on this machine (`make lint-generator` fails at `dial unix .../docker.sock`). That is a **skip, not a pass**. The batch changed only Markdown and one workflow YAML — no Rust, Python or SQL — so the PR lane is the real check |
+
+---
+
 ## 0. How to read a ticket
 
 Fields, in order: **Blocked by** · **Why** · **Files** (`~`edited / `+`created / `-`deleted,

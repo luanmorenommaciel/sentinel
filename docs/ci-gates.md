@@ -374,6 +374,17 @@ That is the first measurement of the budget this row was written against: **3 m 
 30 minutes**. It is also one data point, not a flake rate — the promotion criterion in the
 Required column is unchanged and still asks for a week of real runs.
 
+**A green lane is not a green branch, and a scheduled run proved it.** Run
+[`38266048240`](https://github.com/luanmorenommaciel/sentinel/actions/runs/38266048240)
+(`schedule`, 2026-10-12, `main` at `1aa8d92`) ran `main`'s own older copy of `rust-ci.yml` —
+note the job is still named `integration (ClickHouse round-trip)` and there is no
+`musl TLS spike` leg — and failed on `supply-chain (cargo deny)`, advisory
+`RUSTSEC-2025-0134`. Four jobs green, that one red. The branch this table describes already
+carries the scoped, dated ignore in `services/collector-rust/deny.toml` that fixes it. Two
+things follow: `main` is red today and the merge is the fix, and a lane that is green on a
+branch says nothing about the default branch three days later. Confirm the next scheduled
+run on `main` goes green after the merge rather than assuming it.
+
 Branch protection remains unset (issue #35), so every "no" in the Required column still
 stands — but it is now a policy gap, not a platform one. Configuring a required set is
 finally possible.
