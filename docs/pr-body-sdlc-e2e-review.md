@@ -1,13 +1,26 @@
 ## Summary
 
+> **`main` is red today, and this PR is the fix.** The scheduled `rust-ci` run on `main`,
+> [`38266048240`](https://github.com/luanmorenommaciel/sentinel/actions/runs/38266048240)
+> (2026-10-12, `main` at `1aa8d92`), failed on `supply-chain (cargo deny)` — advisory
+> `RUSTSEC-2025-0134`. Four jobs green, that one red. This branch already carries the fix:
+> a scoped, dated ignore in `services/collector-rust/deny.toml`. Nothing else on the board
+> closes it.
+
 CI that actually runs, on a single pinned ClickHouse, with the delivery path's
 documentation consolidated into one page. The pipeline itself — generator → collector →
 `bronze.*` — is untouched.
 
-**72 commits, 131 files changed** — 71 and 131 measured at `3405b68`, the commit before this
-body; the body itself adds one commit and no new file. Rebased onto `main` at `1aa8d92`, which
-carries PR #59. Every figure below names the commit it was measured at, because this branch is
-still receiving commits: re-run the commands in the block for the current head.
+**Every check in [`docs/ci-gates.md`](docs/ci-gates.md) has now executed at least once, and
+all of them are green.** The last one that never had — `e2e-silver` — went green on run
+[`38833172124`](https://github.com/luanmorenommaciel/sentinel/actions/runs/38833172124) on
+2026-10-16, after its first dispatch exposed a CI-only defect that is fixed here. Details
+below under *The last check that had never run*.
+
+**77 commits, 134 files changed** — measured at `4855057` against `origin/main` at `1aa8d92`,
+which carries PR #59. (Measure against `origin/main`: a stale local `main` ref gives a
+different, wrong answer.) Every figure below names the commit it was measured at, because this
+branch is still receiving commits: re-run the commands in the block for the current head.
 
 <details>
 <summary>Why you may have seen 44 commits / 200 files quoted earlier</summary>
@@ -169,9 +182,11 @@ cargo deny --all-features check          → advisories/bans/licenses/sources ok
 invariants under Compose v2.27.0 / v2.39.4 / v5.1.4 → 10 run, 0 failed (each)
 ```
 
-**Still not run:** `make test-silver` and `make test-hyperdx` (Docker), and the
-`docker stop` assertion itself, which has only been exercised down its skip and
-`REQUIRE_DOCKER=1` paths — its first real run is the weekly `docker-build` job. Two
+**Not run on this laptop, run in CI:** `make test-silver` executed for real in `e2e-silver`
+run `38833172124`, and the `docker stop` assertion in weekly run `37923509295`; locally both
+had only been exercised down their skip and `REQUIRE_DOCKER=1` paths. **`make test-hyperdx`
+is still run nowhere** — not here and not in CI (`python-ci`'s `test` job runs
+`test-generator` and `test-flow-ui` only). Wiring it is on the post-merge list. Two
 pre-existing ruff errors sit in `services/generator-python/tests/` (E501, I001); they are
 outside `make lint-generator`'s scope, which checks `src` only, and are not touched here.
 
@@ -258,9 +273,54 @@ PASS  the image handles SIGTERM and exits cleanly inside the grace period
 The issue stays **open** pending sign-off; this PR records the evidence rather than claiming it.
 
 `docker-build`'s 22m05s also settles the timeout as a measurement, not a guess: the old 20-minute
-budget was genuinely too small. And **`e2e-silver` is the one job in `docs/ci-gates.md` that has
-still never run** — it is a separate workflow, a `rust-ci` dispatch does not reach it, and nothing
-has triggered it. Its row remains a claim about a job, not a report from one.
+budget was genuinely too small. And **`e2e-silver` has now run too** — the next section. With that, every check in
+`docs/ci-gates.md` has executed at least once.
+
+## The last check that had never run: `e2e-silver`, and the defect only CI could show
+
+`e2e-silver` is a separate workflow, so no `rust-ci` dispatch ever reached it, and its six
+recorded runs were all `pull_request` events from inside the outage window — zero steps, 2–3
+seconds, under a per-PR shape that has since been superseded. On the trajectory this PR was
+on, **its first real run would have been the merge itself**.
+
+It was dispatched twice on 2026-10-16. The first,
+[`38831986773`](https://github.com/luanmorenommaciel/sentinel/actions/runs/38831986773),
+**failed** inside `make up` at 2 m 37 s, 4 steps into 10 — a defect no local run could ever
+produce. The step wrote `infra/secrets/ch_password` as `0400`, owned by the runner's uid; a
+bind mount carries that mode and owner into the container verbatim, so all three consumers,
+each running as its own non-root uid, were locked out. `hyperdx/hyperdx:2.40.0` runs as
+`node`, and `infra/hyperdx/entrypoint.sh`'s `[ -r ... ] || exit 1` guard killed it 0.55 s in.
+On a laptop the file is `0644` from the developer's umask, which is exactly why it had always
+passed by hand.
+
+Two changes, both in `.github/workflows/e2e-silver.yml`. The mode is `0444`, with the reason
+written inline so it is not "tightened" back into the same failure — the value is a per-run
+throwaway on an ephemeral single-tenant runner. And the `if: failure()` dump widened from
+`collector-rust` alone to `docker compose ps -a` plus a per-service tail, because the
+container that died was one that step never printed: the cause had to be inferred from the
+Compose file instead of read out of a log.
+
+[`38833172124`](https://github.com/luanmorenommaciel/sentinel/actions/runs/38833172124) is
+the fix, **green on all ten steps in 3 m 35 s** against the 30-minute budget:
+
+```
+Up (ClickHouse + collector)            success   2m35s
+Migrate                                success   0s     0 applied, 8 already applied
+Refreshable MV availability (T29 #49)  success   1s     ungated and registered on 25.4.x
+Generate                               success   19s
+Wait for quiescence                    success   2s     quiescent at 233100 signals
+Silver assertions (make test-silver)   success   1s     18 base + 16 watcher throwIf, all 0
+Generator integration suite            success   17s    6 passed in 0.58s
+Down (make reset)                      success   15s
+```
+
+`ingested=233100 persisted=233100` — the collector's counter and the four `bronze.*` tables
+agree exactly. That 3 m 35 s is also the first measurement of a budget that was written at
+30 minutes by reasoning alone; it is the baseline for promoting `e2e-silver` to a required
+check, and it is one data point, not a flake rate.
+
+The `push: branches: [main]` trigger is **kept**. The standing instruction to drop it was
+conditional on the failure being unfixable, and it was fixed.
 
 What follows is what the first heavy-lane run found, and how each was fixed.
 
@@ -358,8 +418,9 @@ this is *not* what killed `docker-build` in that run; it died on its own timeout
 ## Every ticket is `Done (local)`, by this PR's own rule
 
 `docs/sdlc.md` step 11 — added by this PR — defines Done as green **in CI** *and* on `main`.
-Neither half holds: this branch is 72 commits ahead of `main` with nothing merged, and the heavy
-lane is red. The README carried 36 bare `Done` rows and a `| **Done** | 43 | 89.6% |` summary;
+The CI half now holds — the PR lane, the weekly lane (`37923509295`) and `e2e-silver`
+(`38833172124`) are all green. The second half does not: this branch is 77 commits ahead of
+`main` with nothing merged, and that alone is decisive. The README carried 36 bare `Done` rows and a `| **Done** | 43 | 89.6% |` summary;
 all 43 ticket rows now read `Done (local)`, with a paragraph under the table saying why. The two
 `Done` rows left are in the *decisions* table, where it means a ruling was taken.
 
@@ -368,24 +429,30 @@ all 43 ticket rows now read `Done (local)`, with a paragraph under the table say
 Closes #34
 
 `#34` is the issue this branch answers: `.github/workflows/` contained only `rust-ci.yml`,
-so 235 tests and 60 SQL asserts existed, were green, and gated nothing. They are wired now.
+so 235 tests and 60 SQL asserts existed, were green, and gated nothing. They are wired now,
+and — as of 2026-10-16 — **both halves have been seen to run**, which is what makes this a
+`Closes` rather than a `Refs`. The Python half: `python-ci` run `37926101611`, success in
+1 m 12 s. The Silver half: `e2e-silver` run `38833172124`, success in 3 m 35 s, with
+`make test-silver` and `make test-generator-integration` executing against a live pipeline
+rather than skipping.
 
 Refs #45 · Refs #56 · Refs #35
 
 **Deliberately `Refs`, not `Closes`, for those three.** They were reopened as part of this
 work, and the PR lane going green does not finish any of them:
 
-- **#45** — SIGTERM handling is proven by a PR-lane test, but the `docker stop` half is
-  covered by `docker-build`, which **skips on PRs** (verified: bucket `skipping`). Its
-  first real execution is a weekly run that has not happened yet.
-- **#56** — the PR-lane gates now run and pass, but four gates sit in the weekly lane and
-  have never executed, and the cycle's own blockers (DEC-A3, DEC-D1) are untouched here.
+- **#45** — SIGTERM handling is proven by a PR-lane test, and the `docker stop` half has
+  now executed too, in weekly run `37923509295`. What is missing is no longer a run but a
+  **human reading it**. `docker-build` still skips on PRs (verified: bucket `skipping`), so
+  the proof arrives only on a dispatch or the Monday schedule.
+- **#56** — the PR-lane gates run and pass and the weekly lane is green, but the cycle's own
+  blockers (DEC-A3, DEC-D1) are untouched here and the tracker body still describes a plan
+  rather than an outcome.
 - **#35** — a GitHub repository setting, not a file. No rule exists on `main` today, and
   only the Commander can create one. Nothing in a PR can close it.
 
-Marking any of them Done on merge would record a green nobody has seen for the part that
-still has no evidence. They close when the weekly lane has run and, for #35, when the rule
-is configured.
+Marking any of them Done on merge would record a conclusion nobody has signed off. They
+close when a reviewer has read the proof and, for #35, when the rule is configured.
 
 ## Merge Danger
 
