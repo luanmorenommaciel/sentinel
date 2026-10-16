@@ -12,6 +12,37 @@ repository's own gates. The skills carry the method; `.claude/` carries the Sent
 agents, slash commands, KB and rules the method runs against. Neither is optional and neither
 is a substitute for the other.
 
+**Getting the chain on a clean laptop**, which is what stage 0 needs before it can start:
+
+```sh
+# once per machine — verified against this repo's Claude Code build via `claude plugin --help`
+claude plugin marketplace add anthropics/claude-plugins-official
+claude plugin install mattpocock-skills@claude-plugins-official
+
+# once per repository — writes CLAUDE.md § Agent skills and docs/agents/*
+/setup-matt-pocock-skills
+```
+
+(The same two steps are reachable in-session through the interactive `/plugin` command.)
+
+`claude plugin install` takes **no version flag**, so it resolves whatever the marketplace
+head carries. The version this cycle ran at is therefore recorded rather than pinned —
+`1.2.3`, marketplace `anthropics/claude-plugins-official`, commit
+`c55ee46073ed923f86ce59a5eb3b6d895095d1b7` — and re-read with:
+
+```sh
+jq -r '.plugins["mattpocock-skills@claude-plugins-official"][0].version' \
+  ~/.claude/plugins/installed_plugins.json      # → 1.2.3
+```
+
+Two crew members can therefore run `/to-tickets` at different versions and get different
+output. That is a real gap and it is a decision, not a doc fix: vendor the chain into
+`.claude/`, pin it in a committed manifest, or document-and-accept. It is on the post-merge
+issue list in `plan/fix_before_merge_01.md` §5.
+
+**The install is user-scope, so several of these skills are invisible to an agent** — see the
+note at the end of §3. Not finding `/to-spec` in a skill list is not evidence it is missing.
+
 > **The one thing to read before claiming anything is finished.** Actions was dead from
 > 2026-10-05 to 2026-10-08 — jobs ending in 1–3 s with `runner_name: ""` and zero steps — so
 > for three days no gate below had ever run. It works again, and the **PR lane is green**. Two
@@ -39,7 +70,7 @@ decisions marked `type:commander-attention` and change GitHub repository setting
 
 | # | Stage | Artifact | Gate — what must be true to leave the stage | Owner |
 |---|---|---|---|---|
-| 0 | **Grill → Intent**<br>reverse-engineer the verified As-Is | `intent/core-intent.md` | Every claim about the current system is read out of the tree, not inferred. Unknowns are left as `[TBD]` rather than guessed. Driven by `prompts/00-grill-to-intent.md` + `/grilling`. | Captain |
+| 0 | **Grill → Intent**<br>reverse-engineer the verified As-Is | `intent/core-intent.md` | Every claim about the current system is read out of the tree, not inferred. Unknowns are left as `[TBD]` rather than guessed. Driven by `prompts/00-grill-to-intent.md` + `/grill-with-docs`. | Captain |
 | 1 | **Intent → Spec**<br>formalise the To-Be | `spec/core-spec.md` (`SPEC §n`, numbered `REQ-<area>-<n>`)<br>+ `intent/design-spec.md` (`DSP §n`, the rationale) | Every requirement is numbered and citable. Contradicting policies are named as concerns, not silently resolved. Scope stays inside DEC-2026-10-06. `prompts/01-intent-to-spec.md` + `/to-spec`. | Captain, Pod consulted |
 | 2 | **Spec → Plan**<br>break into tracer-bullet tickets | `plan/core-plan.md` — tickets `T01…`, each with Leg · Blocked by · REQ · Seam · Files · Does · **Proof** · Judgement | Every ticket has a *runnable* proof command and declared disjoint paths (ADR-0009 R1). Anything needing a human answer becomes a `DEC-*` brief, not a ticket. `prompts/02-spec-to-plan.md` + `/to-tickets`. | Captain |
 | 2a | **Decision** (runs beside 2, blocks tickets) | `plan/decisions/DEC-*.md` — six sections: question · why open · options · established facts · what it unblocks · what it cannot settle | A brief is closed only by a named owner's ruling, recorded as a dated ruling file (e.g. `DEC-2026-10-06-local-scope.md`). A brief carries evidence tags `[M]/[S]/[D]/[R]`; no invented cost, SLA or capacity figures. | per brief — Commander for `A2`/`I1`/`I2`, Pod for `A3`/`A4`/`D1` |
@@ -97,18 +128,21 @@ as a smoke test only.
 
 | Stage | Prompt | Skill | Repo rule |
 |---|---|---|---|
-| 0 | `prompts/00-grill-to-intent.md` | `/grilling` | — |
+| 0 | `prompts/00-grill-to-intent.md` | `/grill-with-docs` | — |
 | 1 | `prompts/01-intent-to-spec.md` | `/to-spec` | `plan/decisions/DEC-2026-10-06-local-scope.md` (scope guard) |
 | 2 | `prompts/02-spec-to-plan.md` | `/to-tickets` | ADR-0009 R1 (disjoint paths) |
 | 2a | — | — | `plan/decisions/README.md` (brief shape + evidence tags) |
 | 2b | — | `/adr` (`.claude/skills/adr/`) | `docs/adr/` |
 | 3 | — | `/using-git-worktrees` | ADR-0009 · `.claude/docs/AGENTIC_GITFLOW.md` |
 | 4–6 | `prompts/03-plan-to-tdd.md` | `/implement` → `/tdd` | `/verification-before-completion` |
-| 7 | — | — | `.claude/rules/pre-pr-discipline.md` · `.github/PULL_REQUEST_TEMPLATE.md` |
+| 7 | `prompts/04-feature-before-pr.md` | `/grill-me` → `/to-tickets` | `.claude/rules/pre-pr-discipline.md` · `.github/PULL_REQUEST_TEMPLATE.md` |
 | 8 | — | `/code-review` | `.claude/agents/code-quality/code-reviewer.md` |
 | 9 | — | — | `docs/ci-gates.md` |
 | 10–11 | — | — | `README.md` §8 · `CLAUDE.md` *Known doc drift* |
 
-The `/to-spec`, `/to-tickets` and `/implement` skills ship with
-`disable-model-invocation: true` — they are **slash commands a human types**, not skills a
-model may reach for on its own. That is deliberate: stages 1, 2 and 4 start on a human's word.
+The `/grill-with-docs`, `/to-spec`, `/to-tickets`, `/implement` and `/grill-me` skills ship
+with `disable-model-invocation: true` — they are **slash commands a human types**, not skills
+a model may reach for on its own, and they do not appear in an agent's skill list at all.
+That is deliberate: stages 0, 1, 2, 4 and 7 start on a human's word. Their absence from a
+skill list is therefore not evidence that the plugin is missing or mis-installed; verify the
+install with the `jq` one-liner at the top of this page instead.

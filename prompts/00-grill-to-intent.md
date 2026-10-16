@@ -1,4 +1,4 @@
-Act as a Senior Cloud Architect and DevSecOps Engineer. I have an existing repository containing code and infrastructure configurations that are already built and deployed in production. 
+Use `/grill-with-docs` and `taskspec init`, then act as a Senior Cloud Architect and DevSecOps Engineer. I have an existing repository containing code and infrastructure configurations that are already built and deployed in production. 
 
 I need to reverse-engineer and document the current state to establish a baseline, and then generate a comprehensive `/intent/core-intent.md` document for my next SDLC phase.
 
