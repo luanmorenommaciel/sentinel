@@ -69,7 +69,7 @@ def _auth_headers(user: str, password_file: str) -> dict[str, str]:
     `password_file` is a path. An unreadable one is not fatal here and must not be:
     flow-ui is an observer, and nothing in the pipeline depends on it being up (NFR-05),
     so a missing secret degrades its boards rather than taking the service down. The
-    collector makes the opposite choice for the same reason \u2014 it is in the data path, so
+    collector makes the opposite choice for the same reason — it is in the data path, so
     an unreadable file is a startup failure there.
 
     Returns an empty mapping when no user is set, which is the passwordless local-dev
