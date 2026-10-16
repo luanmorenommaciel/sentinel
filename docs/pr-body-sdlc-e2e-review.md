@@ -17,7 +17,7 @@ all of them are green.** The last one that never had — `e2e-silver` — went g
 2026-10-16, after its first dispatch exposed a CI-only defect that is fixed here. Details
 below under *The last check that had never run*.
 
-**77 commits, 134 files changed** — measured at `4855057` against `origin/main` at `1aa8d92`,
+**80 commits, 134 files changed** — measured at `2d439ba` against `origin/main` at `1aa8d92`, plus the one commit that writes this figure,
 which carries PR #59. (Measure against `origin/main`: a stale local `main` ref gives a
 different, wrong answer.) Every figure below names the commit it was measured at, because this
 branch is still receiving commits: re-run the commands in the block for the current head.
@@ -419,7 +419,7 @@ this is *not* what killed `docker-build` in that run; it died on its own timeout
 
 `docs/sdlc.md` step 11 — added by this PR — defines Done as green **in CI** *and* on `main`.
 The CI half now holds — the PR lane, the weekly lane (`37923509295`) and `e2e-silver`
-(`38833172124`) are all green. The second half does not: this branch is 77 commits ahead of
+(`38833172124`) are all green. The second half does not: this branch is 80 commits ahead of
 `main` with nothing merged, and that alone is decisive. The README carried 36 bare `Done` rows and a `| **Done** | 43 | 89.6% |` summary;
 all 43 ticket rows now read `Done (local)`, with a paragraph under the table saying why. The two
 `Done` rows left are in the *decisions* table, where it means a ruling was taken.
