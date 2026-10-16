@@ -10,29 +10,37 @@
 # so a missing grant fails here instead of in staging. That already happened once —
 # `0002_roles.sql` records the SELECT the `clickhouse` crate turned out to need.
 #
-# NOT a required check yet, deliberately. SPEC §16 names this the job most likely
-# to flake and the quiescence loop below is reasoned rather than measured, so it
-# lands reporting honestly and gets promoted in T21 after a week of real PRs.
-# Note that "non-required" is a branch-protection setting, not `continue-on-error`:
+# A PR-lane check, NOT a required one yet — that distinction is the point. The
+# job gates every PR (issue #34: "a PR can break the Silver read models and merge
+# clean"), but SPEC §16 names it the job most likely to flake and the quiescence
+# loop below is reasoned rather than measured, so making it *required* waits on
+# real PR runs. "Required" is a branch-protection setting, not `continue-on-error`:
 # the flag is deliberately absent, because a job that always reports green tells
 # you nothing about its own flake rate.
 name: e2e-silver
 
-# Lean default (PR #59): this job brings up ClickHouse, runs the real pipeline
-# and 18 silver assertions, and is budgeted at 30 minutes. That is the heaviest
-# thing in the repo, so it runs weekly + on demand instead of on every PR.
-# Promotion to a per-PR required check is a decision for the first required set
-# (docs/ci-gates.md), after a week of real runs has measured its flake rate.
+# Runs on every PR, deliberately with no `paths:` filter. Silver depends on
+# migrations/, infra/, the collector and the generator at once, so any path list
+# would be a second thing to keep in sync with the dependency graph, and a path
+# filter makes the check skip on unrelated PRs — a required check that skips is
+# a merge-queue footgun. The cost is ~4 minutes per push; `timeout-minutes: 30`
+# is ~8x the measured 3m35s-3m52s and stays as is. Weekly + main push remain, so
+# drift on main is still caught between PRs.
 on:
+  pull_request:
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * 1" # weekly, alongside rust-ci's heavy jobs
   push:
     branches: [main]
 
+# Keyed on the event as well as the ref, the same shape as rust-ci.yml: a plain
+# per-ref group let one trigger cancel another (run 37875017554). Successive
+# pushes to one PR still supersede each other, but a scheduled or dispatched run
+# is never cancelled by someone else's push.
 concurrency:
-  group: e2e-silver-${{ github.ref }}
-  cancel-in-progress: true
+  group: e2e-silver-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 permissions:
   contents: read
