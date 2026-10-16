@@ -371,8 +371,9 @@ Compose file rather than read out of a log.
 | `Down` (`make reset`) | success | 15 s |
 
 That is the first measurement of the budget this row was written against: **3 m 35 s against
-30 minutes**. It is also one data point, not a flake rate — the promotion criterion in the
-Required column is unchanged and still asks for a week of real runs.
+30 minutes**. A second dispatch, `38834675607`, re-ran it on the final head after the `Cargo.lock` bump and was green in **3 m 52 s** — two consecutive greens, 3 m 35 s and 3 m 52 s, is the first thing resembling a reproducibility signal for this job.
+Two data points are still not a flake rate — the promotion criterion in the Required column is
+unchanged and still asks for a week of real runs.
 
 **A green lane is not a green branch, and a scheduled run proved it.** Run
 [`38266048240`](https://github.com/luanmorenommaciel/sentinel/actions/runs/38266048240)

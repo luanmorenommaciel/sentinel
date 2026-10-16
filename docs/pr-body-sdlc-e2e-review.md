@@ -324,8 +324,8 @@ Down (make reset)                      success   15s
 
 `ingested=233100 persisted=233100` — the collector's counter and the four `bronze.*` tables
 agree exactly. That 3 m 35 s is also the first measurement of a budget that was written at
-30 minutes by reasoning alone; it is the baseline for promoting `e2e-silver` to a required
-check, and it is one data point, not a flake rate.
+30 minutes by reasoning alone, and it is the baseline for promoting `e2e-silver` to a required
+check. A second dispatch, `38834675607`, re-ran it on the final head after the `Cargo.lock` bump and was green in **3 m 52 s** — two consecutive greens, 3 m 35 s and 3 m 52 s, is the first thing resembling a reproducibility signal for this job. Two is still not a flake rate.
 
 The `push: branches: [main]` trigger is **kept**. The standing instruction to drop it was
 conditional on the failure being unfixable, and it was fixed.
