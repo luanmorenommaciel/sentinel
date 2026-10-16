@@ -68,8 +68,15 @@ note at the end of §3. Not finding `/to-spec` in a skill list is not evidence i
 ## 1. The stage table
 
 **Owner vocabulary.** *Pod* = the unit that owns a feature end-to-end (ADR-0009 §Decision).
-*Captain* = Crew B's engineering lead. *Commander* = Luan Moreno, who alone can take the
-decisions marked `type:commander-attention` and change GitHub repository settings.
+*Captain* = Crew B's engineering lead, a rotating hat rather than a permanent role.
+*Commander* = Luan Moreno, who alone can take the decisions marked `type:commander-attention`
+and change GitHub repository settings.
+
+**Captain (as of 2026-10-16): Adilson Cesar**, named by the Commander, leading all SDLC brownfield
+work on this project. Every stage this table assigns to *Captain* is Adilson's until the hat
+moves; when it does, this line is the one edit that changes. **Pod owners are still open:** the
+Commander named the Captain only, so *Pod* in the table remains a role, and `.claude/CLAUDE.md` §
+Crew B layout is the only place Pod membership is recorded (B1, B3, B4 `TBD`).
 
 | # | Stage | Artifact | Gate — what must be true to leave the stage | Owner |
 |---|---|---|---|---|

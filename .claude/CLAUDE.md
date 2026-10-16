@@ -84,6 +84,8 @@ Crew B has 8 Astronautas in 4 Pods. The Pod is the unit of work — owns a featu
 
 Pods are confirmed at Sync 02 each sprint; the assignment above is from the latest sync.
 
+**Captain (as of 2026-10-16): Adilson Cesar** — the Commander's ruling on leading all SDLC brownfield work, which is separate from the Pod table above: it names the Captain hat only and assigns no Pod membership, so B1, B3 and B4 stay `TBD`.
+
 ## Directory layout
 
 ```text
@@ -241,7 +243,7 @@ Full WoW: `kb/process/crew-b-wow/index.md`.
 ## Terminology guardrails
 
 - The component at `:4317` is the **OTel Collector** — never "Hotel" (that's the AI mishearing the Portuguese pronunciation of "OTel"; the meeting summaries preserved the artifact).
-- **Astronaut(a)** = team member. **Captain** = sprint facilitator (a *hat*, not a permanent role — rotates each sprint). **Commander** = Luan Moreno.
+- **Astronaut(a)** = team member. **Captain** = sprint facilitator (a *hat*, not a permanent role — rotates each sprint). **Captain (as of 2026-10-16): Adilson Cesar**, named by the Commander to lead all SDLC brownfield work on this project; the next rotation is an edit to this line. **Commander** = Luan Moreno.
 - **Crew B** = the 8 of us. **Pod** = unit of work within a crew, owns a feature.
 - **Watcher** = a detection feature (Arrival, Parse, Volume, Schema, Latency, Storage).
 - **good-first-issue** = the sacred tag — Captain pre-tags 5-10 per sprint.

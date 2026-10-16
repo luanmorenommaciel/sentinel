@@ -7,7 +7,8 @@
 > one sentence that could be adopted and then pointed at.
 >
 > **Where the repo genuinely does not answer, it says so.** Three of the eight (Q3, Q6, Q7)
-> have no answer in the tree. Each of those proposes the *smallest* decision that would close
+> had no answer in the tree. (Q3's Captain half was then answered by the Commander on
+> 2026-10-16; its Pod half and Q6 and Q7 remain open.) Each of those proposes the *smallest* decision that would close
 > it rather than inventing a figure, because a made-up SLA in a process document is worse than
 > an admitted gap — `plan/decisions/README.md`'s evidence tags exist for exactly this reason.
 >
@@ -149,13 +150,19 @@ agent to auto-invoke `/to-tickets` will wait forever.
 
 ## Q3 — Who is Captain today, and which Pod owns which area?
 
-### The repo does not answer this, and that is the finding
+### The repo did not answer this; the Commander has answered half of it
 
-**Captain is defined as a rotating hat with no current holder.** `.claude/CLAUDE.md`
-§ Terminology guardrails: "**Captain** = sprint facilitator (a *hat*, not a permanent role —
-rotates each sprint)." No file names who wears it this sprint.
+**Captain is defined as a rotating hat.** `.claude/CLAUDE.md` § Terminology guardrails:
+"**Captain** = sprint facilitator (a *hat*, not a permanent role — rotates each sprint)." When
+this question was written, no file named who wore it.
 
-**Three of the four Pods have no members.** `.claude/CLAUDE.md` § Crew B layout:
+> **Resolved 2026-10-16 (Captain half only).** The Commander ruled: **Captain is Adilson Cesar,
+> leading all SDLC brownfield work on this project.** Recorded as a dated fact in
+> `docs/sdlc.md` (Owner vocabulary) and `.claude/CLAUDE.md` (Crew B layout and Terminology
+> guardrails). The rotating-hat definition stays; the next rotation edits those lines.
+
+**Three of the four Pods still have no members.** `.claude/CLAUDE.md` § Crew B layout, unchanged
+by the ruling, which named the Captain and no Pod owner:
 
 | Pod | Owns | Astronautas |
 |---|---|---|
@@ -167,12 +174,13 @@ rotates each sprint)." No file names who wears it this sprint.
 **And the Pod↔layer mapping itself is unratified.** `CLAUDE.md` § *Known doc drift* lists it
 as live drift: README's POD3 = storage/read-layer versus `.claude/CLAUDE.md`'s B3 = four
 Watcher crews. `.claude/CLAUDE.md` carries its own do-not-propagate warning on that table.
-Resolution owner: "Captain / Commander" — which is circular, since naming the Captain is the
-thing that is missing.
+Resolution owner: "Captain / Commander". That was circular while no Captain was named; it now
+has a holder on the Captain side, but the ratification itself is still not made.
 
 ### Why it matters more than it looks
 
-`docs/sdlc.md:40-56` assigns an owner to all twelve stages. Count them: **Captain owns stages
+*(Written before the 2026-10-16 ruling; the Captain stages below now have a holder, the Pod
+stages do not.)* `docs/sdlc.md` assigns an owner to all twelve stages. Count them: **Captain owns stages
 0, 1, 2, 10 and 11** and co-owns 2b and 8; **Pod** owns 2a and 3; **Commander** owns 9's
 setting and co-owns 2b. Of the twelve, only stage 4–7 (leg agent, author) have an owner who
 exists today. Stage 11 — "a ticket moves to Done only when…" — is Captain-owned, which is why
@@ -182,16 +190,20 @@ PR #57 has **zero reviews** after nine days open.
 
 ### Proposed norm — the smallest decision that closes it
 
-Not an org chart. Two lines in `docs/sdlc.md`, under the existing *Owner vocabulary* block at
-line 36:
+Not an org chart. A dated line in `docs/sdlc.md`, under the existing *Owner vocabulary* block.
+**The Captain line is done:** "Captain (as of 2026-10-16): Adilson Cesar", written so that the
+next rotation is an edit, not a contradiction of the hat definition. **The Pod-owners line is
+not**, because the Commander named no Pod owner and none is invented here:
 
-> **Captain this sprint:** `<name>`, from `<date>` to `<date>`. **Pod owners:** B1 `<name>` ·
-> B2 Alex Botelho · B3 `<name>` · B4 `<name>`. Changed at Sync 02 each sprint; a stale name
-> here is a bug.
+> **Pod owners (as of `<date>`):** B1 `<name>` · B2 Alex Botelho · Victor Urquiola · Ruan
+> Pomponet · B3 `<name>` · B4 `<name>`. Changed at Sync 02 each sprint; a stale name here is a
+> bug.
 
-And one rule: **a stage whose owner is `TBD` falls to the Commander by default**, so no gate
-is unowned. Ratifying the Pod↔layer mapping is a *separate*, larger decision and should not
-block naming a Captain — the drift table can keep carrying it.
+And one rule, still proposed and now narrower: **a stage whose owner is a Pod with no named
+member (`TBD`) falls to the Commander by default**, so no gate is unowned. Before the ruling this
+rule also covered the Captain stages; it no longer needs to, because those have a holder.
+Ratifying the Pod↔layer mapping is a *separate*, larger decision and should not block naming Pod
+owners — the drift table can keep carrying it.
 
 ---
 
@@ -322,8 +334,8 @@ The observed distribution, which is the only evidence available:
 Two readings, and they do not agree: turnaround is same-day when someone is actively working
 the queue, and a fortnight when nobody is. That is not a process, it is availability. #29 and
 #30 took 15 days at 15 and 7 files, so **size is not what predicts the wait** — attention is.
-Which puts this question back on Q3: there is no SLA because there is no named Captain to
-carry one.
+Which put this question back on Q3: there was no SLA because there was no named Captain to
+carry one. **That dependency is now cleared** (Q3, 2026-10-16): the queue has an owner.
 
 ### Proposed norm — deliberately modest
 
@@ -333,11 +345,18 @@ weekly contact, not a full-time team. So the norm is tied to the cadence that al
 > **First response within two working days; both approvals by the next weekly sync.** "First
 > response" means a review posted — including "I can't get to this, reassign" — not a merge.
 > A PR that misses the sync goes on that sync's agenda by default. The Captain of the sprint
-> owns the queue; if no Captain is named, it falls to the Commander (Q3's default rule).
+> owns the queue (Adilson Cesar as of 2026-10-16); if the hat is ever unfilled, it falls to the
+> Commander.
 >
 > Measure it from the next cycle: `gh pr list --state merged --json createdAt,mergedAt`.
 > Three cycles of data, then set a real number. Until then this is a target, and
 > `docs/ci-gates.md`'s own distinction applies — **a target, not a description**.
+
+**Status after the Captain ruling.** Q6 is *unblocked*, not *settled*: the Captain who would
+carry the SLA now exists, but the two-working-days figure is still this page's proposal and
+becomes a norm only when the Captain and Commander accept it. One consequence to state plainly:
+stage 8's second approval is "Captain", and the Captain is also the author of PR #57, so that
+approval cannot be self-given on this PR; it needs another reviewer, in practice the Commander.
 
 ---
 
@@ -477,9 +496,10 @@ produce a page describing gates that do not exist — which is precisely what
 
 ## What this file does not settle
 
-- **Q3 and Q6 are genuinely blocked on a person, not on evidence.** No amount of reading the
-  tree names a Captain or sets a review SLA. Both proposals are the smallest possible
-  decision, and Q6's depends on Q3's.
+- **Q3's Pod half and Q6's acceptance are blocked on a person, not on evidence.** The Captain
+  was named by the Commander on 2026-10-16 (Adilson Cesar), which closes Q3's Captain half and
+  unblocks Q6. No amount of reading the tree names Pod owners for B1, B3 and B4, or ratifies a
+  review SLA; both proposals remain the smallest possible decision.
 - **Q7's "faster" cannot be answered at all yet** — there is no baseline, and the three days
   of Actions outage poison any lead-time figure spanning this cycle. The proposal replaces the
   question with one the repo can answer.
