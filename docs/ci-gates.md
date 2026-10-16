@@ -38,7 +38,7 @@ are weekly* below.
 | `repo-invariants` | `invariants (scripts/ci/invariants.d)` | **PR** | the ten cross-cutting properties below | no | **ready now** — all ten pass in CI as of 2026-10-08, and locally under Compose v2.27.0 / v2.39.4 / v5.1.4 |
 | `image-scan` | `image-scan (shipped base images)` | **PR** | every shipped base image in `services/*/Dockerfile`, for both platforms the repo ships, at `HIGH,CRITICAL` with `--ignore-unfixed`, **warn-only** — plus a teeth assertion that fails the job if the policy stops finding anything (T24 / REQ-H-12) | no | when a severity threshold is ruled on; see *The image scan, and why it is not in `release.yml`* below |
 | `image-scan` | `image-scan (images as built)` | **weekly** | the same policy against `docker save` tarballs of all three images as actually built — adds the pip-installed packages inside generator and flow-ui, which a base-image scan cannot see | no | needs a full Rust musl build; promote only with the rest of the weekly lane |
-| `e2e-silver` | `e2e-silver (live ClickHouse)` | **weekly + push to `main`** + `workflow_dispatch` | the real pipeline, the 18 silver assertions, the generator integration suite, and the role grants | no | after a week of real runs (`SPEC §16`) — it is the heaviest job here at 30 min, and the one most likely to flake |
+| `e2e-silver` | `e2e-silver (live ClickHouse)` | **weekly + push to `main`** + `workflow_dispatch` | the real pipeline, the 18 silver assertions, the generator integration suite, and the role grants | no | after a week of real runs (`SPEC §16`) — budgeted at 30 min as the heaviest job here, and the one most likely to flake. First real run `38833172124`, green in **3 m 35 s** |
 | `pr-linked-issue` | `linked-issue` | **PR** | the PR closes an issue, or carries `no-issue` | no | with the first required set |
 | `release` | `publish (<image>)` | **gated off** | build, push, provenance, SBOM, cosign signing | n/a | `workflow_dispatch` only — see *`release` is gated off* below |
 | `release` | `promote (<image>)` | **gated off** | digest promotion with verify-before-tag | n/a | `workflow_dispatch` only — see below |
@@ -293,8 +293,9 @@ What it does **not** cover: the images as built (weekly lane, never yet run — 
 Monday schedule or a `workflow_dispatch`), anything below HIGH, unfixed findings, and every
 registry-side property T24 also named.
 
-**The weekly lane is green, and every claim in this table has now been executed at least once —
-except `e2e-silver`.** The heavy lane had never run at all until 2026-10-09. Its first run
+**The weekly lane is green, and every claim in this table has now been executed at least
+once** — `e2e-silver` included, as of 2026-10-16; see the end of this section. The heavy
+lane had never run at all until 2026-10-09. Its first run
 (`37875017554`) was red; `37923509295` is the second and it is **success on all seven jobs**:
 
 | Job | Result | Duration |
@@ -341,10 +342,37 @@ failing in `ring`'s build script for want of a target C compiler; both now compi
 the `statically linked | static-pie linked` assertion. The job still carries
 `continue-on-error`, so it is evidence and not a gate — but it is finally evidence.
 
-**`e2e-silver` is the one job in this document that has still never run.** It is a separate
-workflow, so a `rust-ci` dispatch does not reach it, and its triggers are `schedule`,
-`workflow_dispatch` and `push: branches: [main]` — none of which has fired for it. Everything in
-its row remains a claim about a job, not a report from one.
+**`e2e-silver` has now run, and it is green.** It is a separate workflow, so a `rust-ci`
+dispatch never reached it; its first two `workflow_dispatch` events both fired on 2026-10-16.
+
+`38831986773` **failed** inside `make up` at 2 m 37 s, 4 steps into 10, on a defect only CI
+could show. The step wrote `infra/secrets/ch_password` `0400`, owned by the runner's uid; a
+bind mount carries that mode and owner into the container verbatim, so every one of the three
+consumers — each running as its own non-root uid — was locked out. `hyperdx/hyperdx:2.40.0`
+runs as `node`, and `infra/hyperdx/entrypoint.sh`'s `[ -r ... ] || exit 1` guard killed it
+0.55 s in. Locally the file is `0644` from a developer's umask, which is why it had always
+passed by hand. The mode is now `0444` with the reason inline, and the `if: failure()` step was
+widened from `collector-rust` alone to `docker compose ps -a` plus a per-service tail — the
+container that died was one that step never printed, so the cause had to be inferred from the
+Compose file rather than read out of a log.
+
+`38833172124` is the fix, and it is **success on all ten steps in 3 m 35 s** against the
+30-minute budget:
+
+| Step | Result | Duration |
+|---|---|---|
+| `Up (ClickHouse + collector)` | success | 2 m 35 s |
+| `Migrate` | success | 0 s — `0 applied, 8 already applied` (the `init.d/` symlinks ran at boot) |
+| Refreshable MV availability (T29, #49) | success | 1 s — ungated and registered on 25.4.x |
+| `Generate` | success | 19 s |
+| `Wait for quiescence` | success | 2 s — `quiescent at 233100 signals`, ingested == persisted |
+| `Silver assertions` (`make test-silver`) | **success** | 1 s — 18 base + 16 watcher `throwIf`, every one `0` |
+| `Generator integration suite` | **success** | 17 s — `6 passed in 0.58s` |
+| `Down` (`make reset`) | success | 15 s |
+
+That is the first measurement of the budget this row was written against: **3 m 35 s against
+30 minutes**. It is also one data point, not a flake rate — the promotion criterion in the
+Required column is unchanged and still asks for a week of real runs.
 
 Branch protection remains unset (issue #35), so every "no" in the Required column still
 stands — but it is now a policy gap, not a platform one. Configuring a required set is

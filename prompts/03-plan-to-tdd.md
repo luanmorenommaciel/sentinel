@@ -32,8 +32,13 @@ about a laptop, not about CI: during the 2026-10-05–10-08 Actions outage `run-
 passed 10/10 here while failing 2/10 on the runner, purely on a Compose version difference.
 Actions runs again as of 2026-10-08 and the **PR lane** (`gates`, `lint`, the pytest matrix,
 both supply-chain jobs, `invariants`, `linked-issue`) now proves something. The **weekly lane**
-proves much less: it was dispatched by hand for the first time on 2026-10-09 (run
-`37875017554`) and came back red — only `release build` passed, `integration` and both
-`musl TLS spike` legs failed, `docker-build` hit its 20-minute timeout, and `e2e-silver`
-has still never executed. Treat a weekly job as unproven until you have read its run. A ticket is Done
+proves it too, as of run `37923509295` (`workflow_dispatch`, 2026-10-09): all seven jobs green,
+including the first-ever pass of `integration` and issue #45's `docker stop` proof. `e2e-silver`
+is green on run `38833172124` (2026-10-16) — ten steps, 3 m 35 s, the real pipeline and 34
+silver SQL assertions — its first real run after six zero-step outage stubs.
+
+Neither lane runs on a PR, and both reached green only after a red run exposed a real defect
+(`37875017554`; `38831986773`, which died inside `make up`). A *later* scheduled run on `main`,
+`38266048240`, then went red on `cargo deny`. Treat a weekly job as unproven until you have read
+its run. A ticket is Done
 when its checks are green **in CI** and the code is on `main`; until then it is *Done (local)*.
