@@ -50,12 +50,24 @@ jobs:
       # `make up` — Docker would otherwise create a directory at the mount path.
       # Generated per run and never printed: this is a throwaway credential for a
       # container that lives for one job.
+      #
+      # 0444, NOT 0400 — do not "tighten" this back. The file is bind-mounted into
+      # three containers (collector-rust, flow-ui, hyperdx) that each run as their
+      # own non-root uid, which never matches the runner's uid that owns this file.
+      # A bind mount carries the host's mode and owner verbatim, so 0400 is
+      # unreadable inside every one of them: `hyperdx/hyperdx:2.40.0` runs as `node`
+      # and infra/hyperdx/entrypoint.sh's `[ -r ... ] || exit 1` guard killed the
+      # container 0.55s into `make up` (run 38831986773). Locally the file is 0644
+      # from the developer's umask, which is why this only ever failed in CI.
+      # The value is a per-run throwaway on an ephemeral single-tenant runner, so
+      # world-readable costs nothing here; the gitignored local file and the
+      # deployed projected-volume case are unaffected.
       - name: Create the CI role password
         run: |
           set -euo pipefail
           mkdir -p infra/secrets
           openssl rand -hex 24 > infra/secrets/ch_password
-          chmod 0400 infra/secrets/ch_password
+          chmod 0444 infra/secrets/ch_password
 
       - name: Up (ClickHouse + collector)
         run: make up
@@ -192,9 +204,24 @@ jobs:
             echo "ClickHouse: $(docker compose exec -T clickhouse clickhouse-client -q 'SELECT version()' 2>/dev/null | tr -d '[:space:]')"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Collector logs on failure
+      # Every service, not just the collector. Run 38831986773 failed inside
+      # `make up` on a container this step did not dump, so the cause had to be
+      # inferred from the compose file instead of read. Per-service tails keep a
+      # noisy container from burying the one that died; `ps -a` names the exit
+      # code even for a container that produced no output at all.
+      # The only credential in reach is the per-run throwaway generated above.
+      - name: Compose state and logs on failure
         if: failure()
-        run: docker compose logs collector-rust | tail -100
+        run: |
+          set -uo pipefail
+          echo "::group::docker compose ps -a"
+          docker compose ps -a || true
+          echo "::endgroup::"
+          for svc in $(docker compose config --services); do
+            echo "::group::logs $svc"
+            docker compose logs --no-color --timestamps "$svc" 2>&1 | tail -200 || true
+            echo "::endgroup::"
+          done
 
       - name: Down
         if: always()
