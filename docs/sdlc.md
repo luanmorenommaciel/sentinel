@@ -54,9 +54,10 @@ note at the end of §3. Not finding `/to-spec` in a skill list is not evidence i
 > defects are fixed here, and both are the reason the rule below is phrased as it is.
 >
 > Two things still make "finished" a claim about the future rather than the past. The weekly
-> lane and `e2e-silver` **do not run on a PR**, so a green PR lane tells you nothing about
-> either; their green comes from hand-fired dispatches, and a scheduled run on `main` four
-> days later (`38266048240`) went red on `cargo deny` — read the run, never the lane. And **no
+> lane **does not run on a PR**, so a green PR lane tells you nothing about it; its green comes
+> from hand-fired dispatches, and a scheduled run on `main` four days later (`38266048240`)
+> went red on `cargo deny` — read the run, never the lane. (`e2e-silver` is on the PR lane
+> since 2026-10-16: run `38843684967`, event `pull_request`, green.) And **no
 > branch-protection rule exists** (issue #35), so nothing below is actually *required*. A green
 > local run is still evidence about a laptop — and the outage proved that sharply: the invariant
 > harness passed 10/10 locally while failing 2/10 on the runner, purely on a Compose version
@@ -91,7 +92,7 @@ Crew B layout is the only place Pod membership is recorded (B1, B3, B4 `TBD`).
 | 6 | **Three green checks** | quoted command output | `make test` (+ `make test-silver` when `migrations/` or `silver.*` is touched) · `make lint` · `make build` — all three, output quoted, not summarised. Then `scripts/ci/run-invariants.sh`: all **ten** invariants pass, because they are properties of the whole tree and any ticket can break one. | leg agent |
 | 7 | **Pre-PR discipline** | the issue number, and the doc fixes | (i) An issue covers the work, or the `no-issue` label records who decided it did not — `pr-linked-issue.yml` fails a PR that closes neither. Issues are **proposed, never created unprompted** (`docs/agents/issue-tracker.md`). (ii) `git ls-files '*.md' \| xargs grep -ln "<what you touched>"`, and every **live** doc that no longer holds is fixed **in the same PR** (DEC-I2). `docs/adr/`, `intent/`, `spec/`, `docs/proposals/` are records — left alone. `plan/` is live — amended. | author |
 | 8 | **Code review** | the PR | `/code-review` on two axes — Standards (repo conventions) and Spec (does it do what the ticket's REQ asked). WoW asks for two approvals: peer, then Captain. | reviewer + Captain |
-| 9 | **CI gates** | the status checks in `docs/ci-gates.md` | **Every check in `docs/ci-gates.md` has now executed at least once, and all of them are green.** Actions resumed on 2026-10-08 and the PR lane is green — on `392da82`, 10 checks pass and 5 skip by design (the tenth arrived with T24's `image-scan`). The **weekly lane** went red on its first hand-fired run (`37875017554`) and green on the second, `37923509295`, all seven jobs, `docker-build` at 22 m 05 s — which is where issue #45's `docker stop` proof finally ran. **`e2e-silver`**, the last check that had never executed at all, is green on run `38833172124` (2026-10-16): ten steps, 3 m 35 s, 233,100 signals through the real pipeline and 34 silver SQL assertions. One gap remains and it is not a test: **no branch-protection rule exists** on `main` (issue #35, the API returns 404), so nothing here is actually *required* — the green is advisory. `docs/ci-gates.md` is the table to configure the required set *from*. | Commander (setting) · Captain (table) |
+| 9 | **CI gates** | the status checks in `docs/ci-gates.md` | **Every check in `docs/ci-gates.md` has now executed at least once, and all of them are green.** Actions resumed on 2026-10-08 and the PR lane is green — on `392da82`, 10 checks pass and 5 skip by design (the tenth arrived with T24's `image-scan`). The **weekly lane** went red on its first hand-fired run (`37875017554`) and green on the second, `37923509295`, all seven jobs, `docker-build` at 22 m 05 s — which is where issue #45's `docker stop` proof finally ran. **`e2e-silver`**, the last check that had never executed at all, is green on run `38833172124` (2026-10-16): ten steps, 3 m 35 s, 233,100 signals through the real pipeline and 34 silver SQL assertions — and since it now triggers on `pull_request`, it also gates every PR (first PR-event run `38843684967`, green in 3 m 45 s). One gap remains and it is not a test: **no branch-protection rule exists** on `main` (issue #35, the API returns 404), so nothing here is actually *required* — the green is advisory. `docs/ci-gates.md` is the table to configure the required set *from*. | Commander (setting) · Captain (table) |
 | 10 | **Merge to `main`** | the squash commit | Conventional Commits · signed (`git commit -S`) · `Co-Authored-By:` for every human and LLM contributor. ADR-0009 amends the WoW's blanket "squash-merge to main" for legs. | Captain |
 | 11 | **Status record** | [README §8](../README.md#8-current-status) per-ticket registry | A ticket moves to **Done** only when its checks are green **in CI** and the code is on `main`. Otherwise it is ***Done (local)*** — done within DEC-2026-10-06's local scope and unverified against any deployed target. Drift between a record and reality goes in `CLAUDE.md` → *Known doc drift* with a named resolution owner. | Captain |
 
@@ -100,7 +101,7 @@ Crew B layout is the only place Pod membership is recorded (B1, B3, B4 `TBD`).
 ## 2. Gate inventory, by what it can actually prove
 
 State as of **2026-10-16**: Actions resumed on 2026-10-08 after a three-day account-wide
-outage; the weekly lane was dispatched by hand on 2026-10-09 and `e2e-silver` on 2026-10-16.
+outage; the weekly lane was dispatched by hand on 2026-10-09 and `e2e-silver` on 2026-10-16, when it also moved onto the PR lane.
 "Executed" below means a real run with real durations, not a 1–3 s no-runner stub.
 
 | Gate | Lane | Proves | State |
@@ -112,7 +113,7 @@ outage; the weekly lane was dispatched by hand on 2026-10-09 and `e2e-silver` on
 | `pr-linked-issue` | **PR** | the PR closes an issue or carries `no-issue` | **executed, green** |
 | `make build` | **weekly** — `rust-ci` `release build` | `cargo build --release` | skipped on PRs by design; **executed, green** — once, on the 2026-10-09 dispatch |
 | `docker stop` (#45) | **weekly** — `rust-ci` `docker-build` | the image handles SIGTERM as PID 1 | skipped on PRs by design; **executed, green** — run `37923509295` prints `docker stop -t 10: exit 0 after 0s (budget 5s)` / `PASS the image handles SIGTERM and exits cleanly inside the grace period`. The earlier dispatch reached the job and was cut off by `timeout-minutes: 20`; the budget is now 45 minutes, set from the measured 22 m 05 s. #45 stays open pending a human reading the proof |
-| `make test-silver` / `e2e-silver` | **weekly + push to `main`** + `workflow_dispatch` | the real pipeline + the silver SQL assertions | skipped on PRs by design; **executed, green** — run `38833172124` (2026-10-16), the first real run this workflow has ever had. Its six `pull_request` runs remain outage stubs (zero steps, under the superseded per-PR shape) and prove nothing. All ten steps in **3 m 35 s** against the 30-minute budget: 233,100 signals ingested and persisted, 18 base + 16 watcher SQL assertions, 6 generator integration tests. Re-run green at 3 m 52 s on the final head (`38834675607`). Unlike the three `rust-ci` jobs above it is **not** gated to `schedule`/`workflow_dispatch`, so it also runs on every merge to `main`. Two runs are not a flake rate — read a week before promoting it |
+| `make test-silver` / `e2e-silver` | **PR** + push to `main` + weekly + `workflow_dispatch` | the real pipeline + the silver SQL assertions | **executed, green, and gating PRs** — unfiltered `pull_request` trigger added 2026-10-16; first PR-event run `38843684967`: 3 m 45 s, both Silver steps executed. Before that, run `38833172124` (2026-10-16) was the first real run this workflow had ever had; the six `pull_request` runs from the outage remain stubs (zero steps) and prove nothing. All ten steps in **3 m 35 s** against the 30-minute budget: 233,100 signals ingested and persisted, 18 base + 16 watcher SQL assertions, 6 generator integration tests. Re-run green at 3 m 52 s on the final head (`38834675607`). Unlike the three `rust-ci` jobs above it is **not** gated to `schedule`/`workflow_dispatch`. Three runs are not a flake rate — read a week before making it *required* |
 | `release` | **gated off** | build · push · provenance · SBOM · cosign signing | `workflow_dispatch` only: no registry exists, and remote deploy is unauthorized (DEC-A1/A2) |
 | branch protection | — | that any of the above is *required* | **does not exist** — issue #35 |
 
@@ -120,10 +121,11 @@ outage; the weekly lane was dispatched by hand on 2026-10-09 and `e2e-silver` on
 satisfied by a human or an agent in this repository today, and stage 9 finally can too:
 the PR lane executes and is green. What stands between that and stage 10–11 is no longer
 the platform but a repository setting only the Commander can make. Two caveats keep
-"Done" honest. First, the weekly lane and `e2e-silver` are green but they are **not on the
-PR lane**, so a PR can be green and still have broken them; their evidence is three
-hand-fired dispatches (`37923509295`, `38833172124`) and one regression that only a
+"Done" honest. First, the weekly lane is green but it is **not on the
+PR lane**, so a PR can be green and still have broken it; its evidence is hand-fired
+dispatches (`37923509295`, `38835877392`) and one regression that only a
 scheduled run caught (`38266048240` on `main`) — read the run, do not assume the lane.
+`e2e-silver` was in that position until 2026-10-16 and no longer is: it runs on the PR.
 Second, ***Done (local)*** remains the right status for anything whose only evidence is a
 laptop, and for everything in this cycle, because nothing is on `main` yet.
 

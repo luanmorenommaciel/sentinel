@@ -18,10 +18,12 @@ compared instead of assumed (`SPEC §12.4`, REQ-B-10).
 **Two lanes, after PR #59's lean default.** A *PR lane* runs on every pull request: cheap,
 cached, no service containers. A *weekly lane* runs Mondays 06:00 UTC and on
 `workflow_dispatch`: anything that needs a live ClickHouse, an emulated architecture, or a
-cold cross-compile. One weekly job is wider than that: `e2e-silver` is **not** gated on
-`github.event_name`, and its workflow also triggers on `push: branches: [main]`, so it runs
-on every merge to `main` as well — after review, not before it. The split is a cost and
-latency decision, not a statement that the weekly jobs matter less — see *Why the heavy jobs
+cold cross-compile. One live-ClickHouse job straddles the split: `e2e-silver` is **not**
+gated on `github.event_name`, and its workflow triggers on `pull_request` (unfiltered, no
+`paths:`), `push: branches: [main]`, the Monday schedule and `workflow_dispatch` — so it is a
+**PR-lane check** that also runs on every merge and every week. It is the one heavy job that
+gates a PR, because issue #34's complaint was precisely that a PR could break the Silver read
+models and merge clean. The split is a cost and latency decision, not a statement that the weekly jobs matter less — see *Why the heavy jobs
 are weekly* below.
 
 | Workflow | Job | Lane | Covers | Required today | Promote when |
@@ -38,7 +40,7 @@ are weekly* below.
 | `repo-invariants` | `invariants (scripts/ci/invariants.d)` | **PR** | the ten cross-cutting properties below | no | **ready now** — all ten pass in CI as of 2026-10-08, and locally under Compose v2.27.0 / v2.39.4 / v5.1.4 |
 | `image-scan` | `image-scan (shipped base images)` | **PR** | every shipped base image in `services/*/Dockerfile`, for both platforms the repo ships, at `HIGH,CRITICAL` with `--ignore-unfixed`, **warn-only** — plus a teeth assertion that fails the job if the policy stops finding anything (T24 / REQ-H-12) | no | when a severity threshold is ruled on; see *The image scan, and why it is not in `release.yml`* below |
 | `image-scan` | `image-scan (images as built)` | **weekly** | the same policy against `docker save` tarballs of all three images as actually built — adds the pip-installed packages inside generator and flow-ui, which a base-image scan cannot see | no | needs a full Rust musl build; promote only with the rest of the weekly lane |
-| `e2e-silver` | `e2e-silver (live ClickHouse)` | **weekly + push to `main`** + `workflow_dispatch` | the real pipeline, the 18 silver assertions, the generator integration suite, and the role grants | no | after a week of real runs (`SPEC §16`) — budgeted at 30 min as the heaviest job here, and the one most likely to flake. First real run `38833172124`, green in **3 m 35 s** |
+| `e2e-silver` | `e2e-silver (live ClickHouse)` | **PR** + push to `main` + weekly + `workflow_dispatch` | the real pipeline, the 18 silver assertions, the generator integration suite, and the role grants | no | **making it required is the open decision** — it already runs on every PR, so the check name `e2e-silver (live ClickHouse)` exists to select in branch protection. Wait for flake data first (`SPEC §16`): budgeted at 30 min, the heaviest job here, the one most likely to flake. First `pull_request` run `38843684967`, green in **3 m 45 s** |
 | `pr-linked-issue` | `linked-issue` | **PR** | the PR closes an issue, or carries `no-issue` | no | with the first required set |
 | `release` | `publish (<image>)` | **gated off** | build, push, provenance, SBOM, cosign signing | n/a | `workflow_dispatch` only — see *`release` is gated off* below |
 | `release` | `promote (<image>)` | **gated off** | digest promotion with verify-before-tag | n/a | `workflow_dispatch` only — see below |
@@ -67,12 +69,11 @@ DEC-A1/A2 settled.
 ## Why the heavy jobs are weekly
 
 PR #59 set the shape and it is kept here: cheap checks on the pull request, heavy jobs weekly
-plus `workflow_dispatch`. Five jobs sit in the weekly lane, each for a named reason.
+plus `workflow_dispatch`. Four jobs sit in the weekly-only lane, each for a named reason. (`e2e-silver` is not one of them any more: it runs on every PR, see its row above.)
 
 | Job | Why not per-PR |
 |---|---|
 | `integration (every #[ignore]d test)` | needs a live ClickHouse brought up with `docker compose … --wait`. Moving ClickHouse off the PR path is precisely what #59 did |
-| `e2e-silver` | the same, at 30 minutes — the largest single budget in the repo. It is the one weekly job that also runs on `push` to `main` |
 | `docker-build` | builds `linux/arm64` under QEMU emulation, which is several times slower than the native leg |
 | `musl TLS spike` | two musl cross-compiles with no warm target cache, and it is evidence for DEC-A4 rather than a gate |
 | `image-scan (images as built)` | builds all three images, including the full Rust musl compile, only to scan the result. The base-image half of the same policy runs on every PR instead |
@@ -98,9 +99,9 @@ configuration issue #45 actually observed failing (`docker stop -t 12` → exit 
 **skips** with exit 0 when no Docker daemon is reachable; CI sets `REQUIRE_DOCKER=1`, which
 turns that skip into a failure, so the check cannot quietly no-op on a runner.
 
-**The trade-off this accepts:** a PR can break the live round-trip, the silver assertions or
-the arm64 image and still show a green PR lane. That is a real regression window, up to a week
-wide. It is accepted because the alternative — a 30-minute ClickHouse job on every push —
+**The trade-off this accepts:** a PR can break the live collector round-trip or the arm64
+image and still show a green PR lane. That is a real regression window, up to a week wide.
+(The silver assertions are no longer in it: `e2e-silver` runs on every PR.) It is accepted because the alternative — a 30-minute ClickHouse job on every push —
 was judged worse, and because the weekly run plus `workflow_dispatch` means any author who
 suspects they touched those paths can trigger the heavy lane on demand before asking for
 review. Whoever configures the first required set should revisit this with real flake data.
@@ -220,9 +221,10 @@ hand is the only way it can be exercised against a real registry the first time.
 
 **`e2e-silver` is the only check that can fail for reasons unrelated to the change.**
 `SPEC §16` names it the job most likely to flake, and its quiescence loop is reasoned
-rather than measured. It lands reporting truthfully — **not** wrapped in
+rather than measured. It runs on every PR and lands reporting truthfully — **not** wrapped in
 `continue-on-error`, because a job that always reports green tells you nothing about
-its own flake rate. Read a week of real runs before promoting it.
+its own flake rate. Read a week of real runs before making it *required*: a flaky required
+check blocks every merge.
 
 **Actions resumed on 2026-10-08, and the lane split is confirmed by a real run.**
 
@@ -385,6 +387,27 @@ That is the first measurement of the budget this row was written against: **3 m 
 30 minutes**. A second dispatch, `38834675607`, re-ran it on the final head after the `Cargo.lock` bump and was green in **3 m 52 s** — two consecutive greens, 3 m 35 s and 3 m 52 s, is the first thing resembling a reproducibility signal for this job.
 Two data points are still not a flake rate — the promotion criterion in the Required column is
 unchanged and still asks for a week of real runs.
+
+**And then it was moved onto the PR lane, which is what finally supports `Closes #34`.** Both
+dispatches above were hand-fired, so until now a PR could break the Silver read models and
+merge clean — the exact sentence in issue #34. The workflow gained an unfiltered
+`pull_request` trigger (no `paths:`, because a path filter makes the check skip on unrelated
+PRs and a required check that skips can block a merge queue; no `branches:`, so it also
+covers PRs into any base). Its concurrency group is now keyed on the event as well as the ref,
+the same shape as `rust-ci.yml`, so a PR push supersedes the previous PR run but never cancels
+a scheduled or dispatched one. `timeout-minutes: 30` is unchanged: it is eight times the
+measured duration.
+
+Run `38843684967` is the proof: `event: pull_request`, head `5b2dcce`, **success in 3 m 45 s**
+(03:04:38Z to 03:08:23Z), all ten job steps green, with `Silver assertions` (`make test-silver`)
+and `Generator integration suite` (`make test-generator-integration`, `6 passed in 0.51s`)
+executing against `quiescent at 233100 signals` rather than skipping. Three consecutive greens
+now (3 m 35 s, 3 m 52 s, 3 m 45 s) — still not a flake rate.
+
+**What this changes for the required set (issue #35).** `e2e-silver (live ClickHouse)` is now
+selectable in branch protection alongside the other PR-lane checks, and it is the only check
+in the list that spins up Docker and can fail for reasons unrelated to the diff. Whether to
+mark it required is the Commander's call; the check exists on every PR either way.
 
 **A green lane is not a green branch, and a scheduled run proved it.** Run
 [`38266048240`](https://github.com/luanmorenommaciel/sentinel/actions/runs/38266048240)

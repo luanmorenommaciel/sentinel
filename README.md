@@ -335,7 +335,7 @@ Run `make help` for all targets and the active `SCENARIO / SEED / WINDOW`. Per-c
   required-check set are documented in [`docs/ci-gates.md`](docs/ci-gates.md) (T21), and configuring the
   rules on GitHub is tracked separately in issue #35.
 - **Agent-assisted work follows [ADR-0009](docs/adr/0009-agentic-gitflow.md)** — *seam → swimlane → leg → task*: one git worktree per agent, legs declaring **disjoint paths**, squash into the swimlane and a merge commit into `main` so per-leg attribution survives. The ADR is the record; [`.claude/docs/AGENTIC_GITFLOW.md`](.claude/docs/AGENTIC_GITFLOW.md) is the practical companion, restored with the rest of `.claude/` (agents, skills, KB, rules) after it was briefly deleted on this branch.
-- **CI is seven workflows** in [`.github/workflows/`](.github/workflows/), split across two lanes. On the **PR lane**: [`rust-ci.yml`](.github/workflows/rust-ci.yml) (six jobs — `gates`, `supply-chain`, `integration`, `release build`, `musl TLS spike`, `docker-build`; the last four are weekly-only and skip on a PR), [`python-ci.yml`](.github/workflows/python-ci.yml) (ruff · pytest · supply-chain), [`repo-invariants.yml`](.github/workflows/repo-invariants.yml), [`image-scan.yml`](.github/workflows/image-scan.yml) and [`pr-linked-issue.yml`](.github/workflows/pr-linked-issue.yml). On the **weekly + on-demand lane**: `rust-ci.yml`'s four heavy jobs and [`e2e-silver.yml`](.github/workflows/e2e-silver.yml) (the live-ClickHouse pipeline and the silver SQL assertions). [`release.yml`](.github/workflows/release.yml) is gated off — `workflow_dispatch` only, under DEC-A1/A2. Component gates are path-filtered; several jobs are deliberately non-blocking today. Per-check state, and which lane each runs in, live in one place: [`docs/ci-gates.md`](docs/ci-gates.md).
+- **CI is seven workflows** in [`.github/workflows/`](.github/workflows/), split across two lanes. On the **PR lane**: [`rust-ci.yml`](.github/workflows/rust-ci.yml) (six jobs — `gates`, `supply-chain`, `integration`, `release build`, `musl TLS spike`, `docker-build`; the last four are weekly-only and skip on a PR), [`python-ci.yml`](.github/workflows/python-ci.yml) (ruff · pytest · supply-chain), [`repo-invariants.yml`](.github/workflows/repo-invariants.yml), [`image-scan.yml`](.github/workflows/image-scan.yml), [`pr-linked-issue.yml`](.github/workflows/pr-linked-issue.yml) and [`e2e-silver.yml`](.github/workflows/e2e-silver.yml) (the live-ClickHouse pipeline and the silver SQL assertions — unfiltered, so it runs on every PR, and also on merge and weekly). On the **weekly + on-demand lane**: `rust-ci.yml`'s four heavy jobs. [`release.yml`](.github/workflows/release.yml) is gated off — `workflow_dispatch` only, under DEC-A1/A2. Component gates are path-filtered; several jobs are deliberately non-blocking today. Per-check state, and which lane each runs in, live in one place: [`docs/ci-gates.md`](docs/ci-gates.md).
 - **Contracts are jointly owned** by the Pods on both sides of a boundary (input = Pod 1 + Pod 2; the bronze read schema = Pod 2 + Pod 3). **Components are singly owned.**
 - The **bronze DDL is Pod-3-owned** (`create_schema:false`); collectors only `INSERT`.
 
@@ -392,7 +392,7 @@ This cycle hardened how the pipeline is built, checked and published rather than
 **No ticket is bare `Done`, and that is the honest reading of this repo's own rule.**
 [`docs/sdlc.md`](docs/sdlc.md) step 11 — added by this very PR — says a ticket moves to **Done**
 only when its checks are green **in CI** *and* the code is on `main`. The CI half now holds —
-the PR lane, the weekly lane (`37923509295`) and `e2e-silver` (`38833172124`) are all green.
+the PR lane (`e2e-silver` included, run `38843684967`), and the weekly lane (`37923509295`) are all green.
 The second half does not: this branch is tens of commits ahead of `main` with nothing merged,
 and that alone is decisive. Every one of the 43 is therefore
 ***Done (local)*** — done within `DEC-2026-10-06`'s local scope and unverified against any
@@ -511,7 +511,10 @@ pending sign-off; the proof is on the record.
 18 base + 16 watcher silver SQL assertions, and the 6-test generator integration suite. Its
 first dispatch, `38831986773`, failed inside `make up` on a CI-only defect — the password file
 was written `0400` under the runner's uid, which a bind mount makes unreadable to every
-container's non-root user — fixed in this PR. Detail in
+container's non-root user — fixed in this PR. It now also triggers on `pull_request`,
+unfiltered, so the Silver suites gate a PR: run
+[`38843684967`](https://github.com/luanmorenommaciel/sentinel/actions/runs/38843684967)
+(event `pull_request`, 3 m 45 s, green) is the first. Detail in
 [`docs/ci-gates.md`](docs/ci-gates.md).
 
 **Unverified: nothing in the release lane has run against a real registry.** No GCP project, Artifact Registry repository or Workload Identity provider exists yet. Signing, attestation verification and `crane tag` on a multi-arch index have therefore not been exercised; [`infra/deploy/README.md`](infra/deploy/README.md) carries the specific "Unverified" notes and what to confirm on the first publish.
