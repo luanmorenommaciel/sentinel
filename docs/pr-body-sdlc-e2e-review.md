@@ -193,8 +193,8 @@ invariants under Compose v2.27.0 / v2.39.4 / v5.1.4 → 10 run, 0 failed (each)
 **Not run on this laptop, run in CI:** `make test-silver` executed for real in `e2e-silver`
 run `38833172124`, and the `docker stop` assertion in weekly run `37923509295`; locally both
 had only been exercised down their skip and `REQUIRE_DOCKER=1` paths. **`make test-hyperdx`
-is still run nowhere** — not here and not in CI (`python-ci`'s `test` job runs
-`test-generator` and `test-flow-ui` only). Wiring it is on the post-merge list. Two
+runs in no CI workflow** (`python-ci`'s `test` job runs `test-generator` and
+`test-flow-ui` only); it did pass locally on 2026-10-16 (10 tests, via `make test`). Wiring it is on the post-merge list. Two
 pre-existing ruff errors sit in `services/generator-python/tests/` (E501, I001); they are
 outside `make lint-generator`'s scope, which checks `src` only, and are not touched here.
 
@@ -267,6 +267,11 @@ musl TLS spike (x86_64-unknown-linux-musl)    success   2m03s   ← never passed
 musl TLS spike (aarch64-unknown-linux-musl)   success   1m45s   ← never passed before
 docker-build (distroless image)               success   22m05s  ← never completed before
 ```
+
+**Re-run on the final lockfile:** `37923509295` predates the `rustls` 0.23.46 bump and the dated
+`RUSTSEC-2024-0449` ignore, and the heavy jobs skip on PRs, so it was dispatched again on head
+`24316e5` -- run **`38835877392`**, success on all seven jobs in 28 m 15 s, including
+`integration`, both musl spikes, and `docker-build` with its `docker stop` step.
 
 **Issue #45's proof has executed, in both halves, for the first time.** The two flush tests
 (`sigterm_/sigint_flushes_acknowledged_buffer_to_clickhouse`) pass inside `integration`, and the
@@ -426,7 +431,7 @@ this is *not* what killed `docker-build` in that run; it died on its own timeout
 ## Every ticket is `Done (local)`, by this PR's own rule
 
 `docs/sdlc.md` step 11 — added by this PR — defines Done as green **in CI** *and* on `main`.
-The CI half now holds — the PR lane, the weekly lane (`37923509295`) and `e2e-silver`
+The CI half now holds — the PR lane, the weekly lane (`37923509295`, re-run on the final lockfile as `38835877392`) and `e2e-silver`
 (`38833172124`) are all green. The second half does not: this branch is 84 commits ahead of
 `main` with nothing merged, and that alone is decisive. The README carried 36 bare `Done` rows and a `| **Done** | 43 | 89.6% |` summary;
 all 43 ticket rows now read `Done (local)`, with a paragraph under the table saying why. The two

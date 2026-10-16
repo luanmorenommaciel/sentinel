@@ -308,6 +308,17 @@ lane had never run at all until 2026-10-09. Its first run
 | `musl TLS spike (aarch64-unknown-linux-musl)` | **success** | 1 m 45 s |
 | `docker-build (distroless image)` | **success** | **22 m 05 s** |
 
+**Re-run against the bumped lockfile, 2026-10-16.** `37923509295` predates the
+`rustls` 0.23.45 -> 0.23.46 bump and the dated `RUSTSEC-2024-0449` ignore in `deny.toml`
+(`04b8a8e`), and the heavy jobs skip on every PR, so nothing had compiled the new
+`Cargo.lock` on them. Run **`38835877392`** (`workflow_dispatch`, head `24316e5`, 28 m 15 s
+wall) is **success on all seven jobs**, and the formerly skipping ones really ran: `release
+build` 52 s, `integration` 1 m 04 s (live tests step), both musl spikes (2 m 07 s, 1 m 47 s),
+`docker-build` 28 m 12 s including the `docker stop exits 0` step. `supply-chain` 47 s,
+`gates` 44 s. `docker-build` finished 17 minutes inside its 45-minute ceiling. That is the
+current evidence for the lockfile; `37923509295` remains the evidence for the first-ever
+green and the #45 proof.
+
 Four things that run tells us that nothing else could:
 
 **The `integration` job has never once passed before.** It now provisions the least-privilege
