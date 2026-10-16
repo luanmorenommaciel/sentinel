@@ -25,7 +25,7 @@ all of them are green.** The last one that never had — `e2e-silver` — went g
 2026-10-16, after its first dispatch exposed a CI-only defect that is fixed here. Details
 below under *The last check that had never run*.
 
-**85 commits, 134 files changed** — measured at `4f9ca7a` against `origin/main` at `1aa8d92`, plus the one commit that writes this figure,
+**91 commits, 135 files changed** — measured at `4cdb6e6` against `origin/main` at `1aa8d92`, plus the one commit that writes this figure,
 which carries PR #59. (Measure against `origin/main`: a stale local `main` ref gives a
 different, wrong answer.) Every figure below names the commit it was measured at, because this
 branch is still receiving commits: re-run the commands in the block for the current head.
@@ -96,7 +96,7 @@ The earlier "44 commits" was measured before the rebase, against the old merge-b
 +│                          # weekly: integration · release-build · docker-build · musl spike
 +├── python-ci.yml          # PR: ruff · pytest matrix · supply-chain*
 +├── repo-invariants.yml    # PR: 10 whole-tree asserts
-+├── e2e-silver.yml         # weekly + push to main + dispatch:
++├── e2e-silver.yml         # PR + push to main + weekly + dispatch:
 +│                          # real pipeline + 18 silver asserts
 +├── pr-linked-issue.yml    # PR: requires Closes #n
 +└── release.yml            # GATED OFF — workflow_dispatch only, no registry exists
@@ -335,6 +335,18 @@ check. A second dispatch, `38834675607`, re-ran it on the final head after the `
 The `push: branches: [main]` trigger is **kept**. The standing instruction to drop it was
 conditional on the failure being unfixable, and it was fixed.
 
+**It now also runs on `pull_request`, and that is the evidence for `Closes #34`.** The two
+dispatches above were hand-fired, so the Silver half of #34 ("a PR can break … the Silver read
+models and merge clean") was still true. The trigger is unfiltered on purpose — no `paths:`,
+because a skipped check can block a merge queue, and Silver depends on migrations, infra, the
+collector and the generator at once. Concurrency is keyed on the event as well as the ref,
+the shape `rust-ci.yml` already uses. Run
+[`38843684967`](https://github.com/luanmorenommaciel/sentinel/actions/runs/38843684967) is the
+proof: `event: pull_request`, head `5b2dcce`, **success in 3 m 45 s**, all ten steps green,
+`make test-silver` and `make test-generator-integration` (`6 passed in 0.51s`) executed against
+`quiescent at 233100 signals`. Making it a *required* check stays a branch-protection setting
+(#35), post-merge.
+
 What follows is what the first heavy-lane run found, and how each was fixed.
 
 ## The first heavy-lane run, and why it was red
@@ -432,8 +444,8 @@ this is *not* what killed `docker-build` in that run; it died on its own timeout
 
 `docs/sdlc.md` step 11 — added by this PR — defines Done as green **in CI** *and* on `main`.
 The CI half now holds — the PR lane, the weekly lane (`37923509295`, re-run on the final lockfile as `38835877392`) and `e2e-silver`
-(`38833172124`) are all green. The second half does not: this branch is 85 commits ahead of
-`main` with nothing merged, and that alone is decisive. The README carried 36 bare `Done` rows and a `| **Done** | 43 | 89.6% |` summary;
+(`38833172124` by dispatch, `38843684967` on this PR) are all green. The second half does not: this branch is 91 commits ahead of
+`main` (measured at `4cdb6e6`) with nothing merged, and that alone is decisive. The README carried 36 bare `Done` rows and a `| **Done** | 43 | 89.6% |` summary;
 all 43 ticket rows now read `Done (local)`, with a paragraph under the table saying why. The two
 `Done` rows left are in the *decisions* table, where it means a ruling was taken.
 
@@ -445,9 +457,10 @@ Closes #34
 so 235 tests and 60 SQL asserts existed, were green, and gated nothing. They are wired now,
 and — as of 2026-10-16 — **both halves have been seen to run**, which is what makes this a
 `Closes` rather than a `Refs`. The Python half: `python-ci` run `37926101611`, success in
-1 m 12 s. The Silver half: `e2e-silver` run `38833172124`, success in 3 m 35 s, with
-`make test-silver` and `make test-generator-integration` executing against a live pipeline
-rather than skipping.
+1 m 12 s. The Silver half: `e2e-silver` run `38833172124` by dispatch, success in 3 m 35 s,
+and — what turns "seen to run" into "gates a PR" — run `38843684967` on the `pull_request`
+event (head `5b2dcce`), success in 3 m 45 s, with `make test-silver` and
+`make test-generator-integration` executing against a live pipeline rather than skipping.
 
 Refs #45 · Refs #56 · Refs #35
 
@@ -482,13 +495,12 @@ alone.
 **Blast Radius:** repo-wide.
 
 - **CI behaviour changes for every PR, in both directions.** Four PR-lane checks appear
-  where there was one. Four jobs *leave* the PR lane for a weekly schedule, so a PR can
-  break the live ClickHouse round-trip, the 18 silver assertions or the `linux/arm64`
-  image and still show a green PR lane. For the three `rust-ci` jobs that window is up to a
-  week wide, because they are gated to `schedule`/`workflow_dispatch`. `e2e-silver` is
-  narrower and worth knowing: its workflow carries `push: branches: [main]` and the job has
-  no `event_name` guard, so the silver assertions do run on the merge itself — after review
-  rather than before it. Either way it is the deliberate cost of PR #59's shape, and it is
+  where there was one. `rust-ci`'s heavy jobs *leave* the PR lane for a weekly schedule, so a PR can
+  break the live ClickHouse round-trip or the `linux/arm64` image and still show a green PR
+  lane. For the three `rust-ci` jobs that window is up to a week wide, because they are gated
+  to `schedule`/`workflow_dispatch`. The silver assertions are **not** in that window:
+  `e2e-silver` has an unfiltered `pull_request` trigger and runs on every PR (about 4 minutes
+  of live ClickHouse per push), as well as on merge to `main` and weekly. Either way it is the deliberate cost of PR #59's shape, and it is
   written down in `docs/ci-gates.md`. Any author who suspects they touched those paths can trigger the
   heavy lane with `workflow_dispatch` before asking for review.
 - **A single ClickHouse pin at 25.4** replaces three coexisting pins. Anyone holding a
