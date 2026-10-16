@@ -57,14 +57,14 @@ async fn main() -> ExitCode {
     }
 
     // Server mode (gRPC section present) and file mode are mutually exclusive
-    // lifecycles: the server runs until Ctrl-C; file mode runs once and exits.
+    // lifecycles: the server runs until SIGINT/SIGTERM; file mode runs once and exits.
     match config.grpc {
         Some(_) => serve_grpc(&config).await,
         None => run(&config).await,
     }
 }
 
-/// Run the OTLP gRPC server until Ctrl-C.
+/// Run the OTLP gRPC server until SIGINT or SIGTERM.
 ///
 /// When `config.clickhouse` is present the server operates in **export mode**:
 /// each received OTLP request is transformed to [`sentinel_collector::Signal`]
@@ -94,16 +94,20 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
         sentinel_collector::buffer::BufferConfig::default,
         sentinel_collector::config::ClickHouseConfig::buffer_config,
     );
-    let client: Option<clickhouse::Client> = config.clickhouse.as_ref().map(|ch| {
-        info!(
-            url = %ch.url,
-            database = %ch.database,
-            batch_size = ch.batch_size,
-            flush_interval_ms = ch.flush_interval_ms,
-            "export mode: ClickHouse target configured (EP2.2 buffered exporter)"
-        );
-        clickhouse_exporter::build_client_with_database(&ch.url, &ch.database)
-    });
+    let client: Option<clickhouse::Client> = match config.clickhouse.as_ref() {
+        Some(ch) => {
+            info!(
+                batch_size = ch.batch_size,
+                flush_interval_ms = ch.flush_interval_ms,
+                "export mode: ClickHouse target configured (EP2.2 buffered exporter)"
+            );
+            match connect(ch) {
+                Some(client) => Some(client),
+                None => return ExitCode::FAILURE,
+            }
+        }
+        None => None,
+    };
 
     if client.is_none() {
         info!("log-only mode: no clickhouse section configured");
@@ -129,7 +133,9 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
     };
 
     let metrics_shutdown = async {
-        let _ = tokio::signal::ctrl_c().await;
+        if let Err(err) = shutdown_signal().await {
+            error!(error = %err, "metrics shutdown signal handler failed");
+        }
     };
     let metrics_task = tokio::spawn(sentinel_collector::metrics_server::serve(
         metrics_addr,
@@ -138,8 +144,9 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
     ));
 
     let shutdown = async {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            info!("shutdown signal received");
+        match shutdown_signal().await {
+            Ok(()) => info!("shutdown signal received"),
+            Err(err) => error!(error = %err, "shutdown signal handler failed"),
         }
     };
 
@@ -175,11 +182,53 @@ async fn serve_grpc(config: &sentinel_collector::config::Config) -> ExitCode {
     }
 }
 
+/// Normal container stops send SIGTERM; interactive stops send SIGINT.
+/// Both must enter the server's existing graceful buffer-drain path.
+async fn shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
+    }
+}
+
 /// Parse `config.metrics.listen` into a [`SocketAddr`].
 fn cfg_metrics_addr(
     config: &sentinel_collector::config::Config,
 ) -> Result<SocketAddr, std::net::AddrParseError> {
     config.metrics.listen.parse()
+}
+
+/// Log the ClickHouse target and build its client, resolving `password_file`.
+///
+/// `None` means the credential could not be read — a startup failure, not a
+/// silently passwordless connection (REQ-H-05) — and the caller returns
+/// `ExitCode::FAILURE`. Both modes enter ClickHouse through here, so the target
+/// is logged once and identically whichever mode the config selected, and the
+/// failure is reported in one place.
+fn connect(ch: &sentinel_collector::config::ClickHouseConfig) -> Option<clickhouse::Client> {
+    info!(
+        url = %ch.url,
+        database = %ch.database,
+        user = ch.user.as_deref().unwrap_or("<client default>"),
+        password_file = ?ch.password_file,
+        "ClickHouse target"
+    );
+    match clickhouse_exporter::build_client_from_config(ch) {
+        Ok(client) => Some(client),
+        Err(err) => {
+            error!(error = %err, "clickhouse credential unavailable");
+            None
+        }
+    }
 }
 
 /// Load config from an optional path argument, applying env overrides.
@@ -233,8 +282,10 @@ async fn run(config: &Config) -> ExitCode {
 
     let counts = match &config.clickhouse {
         Some(ch) => {
-            info!(url = %ch.url, database = %ch.database, "export mode");
-            let client = clickhouse_exporter::build_client_with_database(&ch.url, &ch.database);
+            info!("export mode");
+            let Some(client) = connect(ch) else {
+                return ExitCode::FAILURE;
+            };
             match clickhouse_exporter::export(&client, signals).await {
                 Ok(export_counts) => export_counts,
                 Err(err) => {

@@ -9,6 +9,11 @@ repository = "https://github.com/luanmorenommaciel/sentinel"
 readme = "README.md"
 publish = false
 
+[features]
+# T04's temporary compile-only TLS experiment. It deliberately remains out of
+# `default`: DEC-A4 decides whether accepting a TLS provider is justified.
+tls-spike = ["tonic/tls"]
+
 # Pinned at scaffold time. Re-resolve on first build with `cargo update`.
 # See docs/adr/0004-collector-implementation-language.md for the rationale
 # behind each dependency choice.

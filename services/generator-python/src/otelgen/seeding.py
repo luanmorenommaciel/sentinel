@@ -5,7 +5,10 @@ import random
 
 def make_rng(seed: int) -> random.Random:
     """Return a seeded, isolated Random instance for deterministic runs."""
-    return random.Random(seed)
+    # Reproducibility IS the contract here: SEED=42 must replay the golden
+    # fixture byte for byte. A CSPRNG would make the generator unseedable, so
+    # bandit's B311 does not apply to synthetic telemetry.
+    return random.Random(seed)  # nosec B311
 
 
 def new_trace_id(rng: random.Random) -> str:

@@ -2,29 +2,18 @@
 #
 #   generator (otelgen) ──OTLP gRPC :4317──▶ collector-rust ──HTTP──▶ ClickHouse :8123
 
-services:
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.3
-    # The Rust collector uses the passwordless `default` user over HTTP :8123.
-    # The init script creates the bronze database without changing that dev-only auth.
-    ports:
-      - "8123:8123"   # HTTP interface (+ /play UI) — Rust exporter
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse
-      - ./infra/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-      - ./infra/clickhouse-users.d/zz-default-network.xml:/etc/clickhouse-server/users.d/zz-default-network.xml:ro
-      # POD 3 canonical bronze schema (bronze.* contrib-style) — auto-applied on first boot.
-      # The collector writes this split schema directly (ADR-0007); the tables must
-      # exist before it connects, so they are created here on boot.
-      - ./infra/clickhouse/init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/02-bronze-otel.sql:ro
-      # POD 3 typed Silver models and Watcher read models (ADR-0010).
-      - ./infra/clickhouse/init.d/02-silver-layer.sql:/docker-entrypoint-initdb.d/03-silver-layer.sql:ro
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/?query=SELECT+1"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
+# ClickHouse comes from the one definition in the repository (REQ-I-02, REQ-I-08);
+# `make up` is still a single step. Relative mounts inside the included file resolve
+# against its own directory, so the DDL paths do not need restating here.
+#
+# The `infra/clickhouse-init.sql` and `infra/clickhouse-users.d/` mounts went with
+# the inline service. **That reverts `default` to localhost-only**, so the
+# collector's export stays broken until T18 moves consumers onto roles; this ticket
+# is green as a Compose-config change and runtime green is T19's.
+include:
+  - infra/clickhouse/compose.clickhouse.yml
 
+services:
   collector-rust:
     build:
       context: ./services/collector-rust
@@ -37,15 +26,29 @@ services:
     volumes:
       - ./contracts:/contracts:ro
       - ./services/collector-rust/config.docker.yaml:/etc/sentinel/config.yaml:ro
+      # The role password (T18). Gitignored, created from
+      # infra/secrets/ch_password.example, and mounted read-only at the path
+      # config.docker.yaml names. The config carries the PATH; the value lives only
+      # here and in the container's memory.
+      - ./infra/secrets/ch_password:/etc/sentinel/secrets/ch_password:ro
     ports:
-      - "4317:4317"
-      - "9090:9090"   # Prometheus collector metrics
+      # Local host access only. Generator and flow-ui use the private Compose network.
+      - "127.0.0.1:${COLLECTOR_OTLP_HOST_PORT:-4317}:4317"
+      - "127.0.0.1:${COLLECTOR_METRICS_HOST_PORT:-9090}:9090"   # Prometheus collector metrics
     networks:
       default:
         aliases: ["collector"]
     depends_on:
       clickhouse:
         condition: service_healthy
+    # No `healthcheck:` here, and that is a constraint rather than an omission.
+    # The runtime stage is gcr.io/distroless/static-debian12 — no shell, no wget,
+    # no curl — so there is no in-container command for Docker to run. Readiness is
+    # therefore asserted from the host: `make up` polls
+    # http://127.0.0.1:$COLLECTOR_METRICS_HOST_PORT/metrics and fails with the
+    # collector's logs if it never answers. Consequence: nothing can depend on this
+    # service with `condition: service_healthy`, which is fine — flow-ui and HyperDX
+    # must not (invariant 09), and the generator is driven after `make up` returns.
 
   flow-ui:
     build:
@@ -58,7 +61,13 @@ services:
       COLLECTOR_METRICS_URL: "http://collector:9090/metrics"
       CLICKHOUSE_URL: "http://clickhouse:8123"
       CLICKHOUSE_DATABASE: bronze
+      # Reader credentials (T18). `sentinel_reader` is SELECT-only, and its
+      # `system.tables`/`system.columns` grants are what the Flow board's Silver box
+      # is drawn from. The password is a PATH; the value is only in the mount below.
+      CLICKHOUSE_USER: sentinel_reader_u
+      CLICKHOUSE_PASSWORD_FILE: /etc/sentinel/secrets/ch_password
     volumes:
+      - ./infra/secrets/ch_password:/etc/sentinel/secrets/ch_password:ro
       # Pod 1's declared topology, read-only. The graph is drawn from the producer's
       # own config rather than redrawn here, so the picture cannot drift from it.
       - ./services/generator-python/config:/app/generator-config:ro
@@ -67,12 +76,79 @@ services:
       # it — and the contract board's headline is that policy.
       - ./services/collector-rust/config.docker.yaml:/app/collector-config.yaml:ro
     ports:
-      - "8080:8080"
+      - "127.0.0.1:${FLOW_UI_HOST_PORT:-8080}:8080"
+    # python:3.12-slim ships no curl and no wget, so the probe is the interpreter
+    # that is already here. /healthz always answers 200 and reports `collector` and
+    # `clickhouse` as fields (NFR-05: it degrades rather than crashing), so this is
+    # a liveness check for the UI process — not an assertion that its upstreams are
+    # up. That distinction is deliberate: a red ClickHouse box is something to look
+    # at in the UI, not a reason for Compose to call the UI unhealthy.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 5s
     depends_on:
       clickhouse:
         condition: service_healthy
-      collector-rust:
-        condition: service_started
+
+  # HyperDX (ADR-0011): a second read-layer UI beside flow-ui, wired straight to
+  # ClickHouse. Only the UI+API image runs here. ClickStack's all-in-one and local
+  # images bundle their own ClickHouse and OTel collector; either would be a second
+  # database and a second ingestion path, so neither is used. Ingestion stays with
+  # collector-rust, and nothing else depends on this service being up.
+  hyperdx-mongo:
+    image: mongo:5.0.32-focal
+    # HyperDX keeps users, saved searches, dashboards and alerts here. It is its own
+    # metadata, never telemetry, and it has no host port: private network only.
+    volumes:
+      - hyperdx_mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongo", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  hyperdx:
+    image: hyperdx/hyperdx:2.40.0
+    # Our wrapper builds DEFAULT_CONNECTIONS from the password file, then hands off
+    # to the image's own entrypoint (/etc/local/entry.sh).
+    entrypoint: ["sh", "/etc/hyperdx/entrypoint.sh"]
+    environment:
+      MONGO_URI: "mongodb://hyperdx-mongo:27017/hyperdx"
+      # Must equal the URL typed into the browser, or login redirects break.
+      FRONTEND_URL: "http://127.0.0.1:${HYPERDX_HOST_PORT:-8082}"
+      HYPERDX_LOG_LEVEL: info
+      USAGE_STATS_ENABLED: "false"
+      # Reader credentials. `sentinel_hyperdx_u` is SELECT-only (migration 0007).
+      # The password is a PATH; the value is only in the mount below.
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_USER: sentinel_hyperdx_u
+      CLICKHOUSE_PASSWORD_FILE: /etc/sentinel/secrets/ch_password
+    volumes:
+      - ./infra/secrets/ch_password:/etc/sentinel/secrets/ch_password:ro
+      # The sources HyperDX opens with, mapped onto the bronze tables. Read once to
+      # bootstrap an EMPTY Mongo; after that HyperDX owns them (see ADR-0011).
+      - ./infra/hyperdx/sources.json:/etc/hyperdx/sources.json:ro
+      - ./infra/hyperdx/entrypoint.sh:/etc/hyperdx/entrypoint.sh:ro
+    ports:
+      # Local host access only. 8080 is flow-ui's default; HyperDX takes 8082 and
+      # leaves 8081 free, because 8081 is the port a crowded machine reaches for
+      # first when 8080 is gone — including to move flow-ui itself
+      # (FLOW_UI_HOST_PORT=8081). Both are overridable; invariant 03 forbids a clash.
+      - "127.0.0.1:${HYPERDX_HOST_PORT:-8082}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      hyperdx-mongo:
+        condition: service_healthy
 
   generator:
     build:
@@ -82,8 +158,12 @@ services:
       CONTRACTS_DIR: /contracts/generator/v1
     volumes:
       - ./contracts:/contracts:ro
-    # No long-running command — driven on demand by `make generate`
-    # (docker compose run --rm generator run --scenario ... --otlp-endpoint http://collector:4317).
+    # No long-running command — driven on demand by `make generate` /
+    # `make generate-stream` (docker compose run --rm generator --scenario ...
+    # --otlp-endpoint http://collector:4317), which is why `make up` BUILDS this
+    # image but does not `up` it: a one-shot CLI brought up as a service would run
+    # `otelgen --help` and exit, and show in `docker compose ps` as Exited — a
+    # healthy stack that reads as a broken one.
 
 volumes:
-  clickhouse_data: {}
+  hyperdx_mongo_data: {}

@@ -10,26 +10,263 @@ WINDOW    ?= 5m
 DURATION  ?= 60s
 STEP      ?= 1s
 RATE      ?= 200
+# ── host ports ───────────────────────────────────────────────────────────────
+# Every host-published port of the stack, in one place, each loopback-bound by the
+# Compose files and each overridable when something local already owns it:
+#
+#   make up FLOW_UI_HOST_PORT=8081 HYPERDX_HOST_PORT=8083
+#
+# These are HOST-side only. Service-to-service traffic always uses the canonical
+# container ports over the private Compose network (clickhouse:8123,
+# collector:4317, collector:9090), so moving one changes the URL you type and
+# nothing about the pipeline. They are exported because the Compose files read
+# them as `${VAR:-default}` AND because every readiness probe below derives its URL
+# from the same variable — the committed Makefile has to work on an overridden port,
+# which hard-coded `:9090` and `:8080` literals did not.
+#
+# Defaults: 8123 ClickHouse · 4317 collector OTLP · 9090 collector metrics ·
+# 8080 flow-ui · 8082 HyperDX. HyperDX sits on 8082, not 8081, so that 8081 stays
+# free as the obvious second choice when 8080 is taken (`FLOW_UI_HOST_PORT=8081`).
+# Keep them distinct: invariant 03 fails the build on a duplicate host port.
+CLICKHOUSE_HOST_PORT       ?= 8123
+COLLECTOR_OTLP_HOST_PORT   ?= 4317
+COLLECTOR_METRICS_HOST_PORT?= 9090
+FLOW_UI_HOST_PORT          ?= 8080
+HYPERDX_HOST_PORT          ?= 8082
+export CLICKHOUSE_HOST_PORT COLLECTOR_OTLP_HOST_PORT COLLECTOR_METRICS_HOST_PORT
+export FLOW_UI_HOST_PORT HYPERDX_HOST_PORT
 
-.PHONY: help up init generate generate-stream ui e2e down reset logs ps \
-        build test test-generator test-collector-rust test-flow-ui \
+CH_URL      := http://127.0.0.1:$(CLICKHOUSE_HOST_PORT)
+METRICS_URL := http://127.0.0.1:$(COLLECTOR_METRICS_HOST_PORT)/metrics
+FLOW_UI_URL := http://127.0.0.1:$(FLOW_UI_HOST_PORT)
+HYPERDX_URL := http://127.0.0.1:$(HYPERDX_HOST_PORT)
+
+.PHONY: help up status init migrate generate generate-stream ui down-ui hyperdx down-hyperdx reset-hyperdx \
+        e2e down reset logs ps \
+        build test test-generator test-collector-rust test-flow-ui test-hyperdx \
+        test-generator-integration test-backfill audit-python audit-images audit-images-built \
         test-silver sample-silver lint lint-generator lint-collector-rust lint-flow-ui
+
+# Image builds that pull a base from an external registry can fail on a transient
+# TLS handshake rather than on anything in the repo. Measured on this machine
+# 2026-10-06: 1 of 5 probes to `gcr.io/v2/distroless/static-debian12/manifests/
+# nonroot` died with `SSL_ERROR_SYSCALL` after ~10s, while the other four returned
+# 200 in under 1.4s. The collector's runtime stage is
+# `gcr.io/distroless/static-debian12:nonroot`, so that roughly 1-in-5 chance lands
+# on `make up`, `make e2e` and `make build` whenever the image is not cached.
+#
+# Retried rather than pinned by digest: a digest fixes *which* bytes, not whether
+# the registry answers. Three attempts with a widening pause, and the final failure
+# says what to suspect instead of leaving a TLS error to be read as a code defect.
+DOCKER_BUILD_RETRIES ?= 3
+
+# Named once because `up` both builds it and, when the registry will not answer,
+# falls back to whatever copy of it is already on the machine. Measured here
+# 2026-10-07: two of three probes to gcr.io died with SSL_ERROR_SYSCALL after
+# ~10s, and all three build retries failed — with a perfectly good image sitting
+# in the local store. `--build` resolves the base-image manifest on EVERY run,
+# even when nothing needs rebuilding, so before this fallback a 30-second network
+# hiccup took the whole stack down and `make up` could not deliver what it
+# promises. The fallback is loud, names the staleness risk and says how to
+# rebuild; silently starting an old image would be the worse failure.
+COLLECTOR_IMAGE ?= sentinel-collector-rust:dev
+
+# Two things the retry in `up` has to get right, both learned by testing it:
+#   * It classifies before retrying. A port already in use is not transient, so it
+#     is reported with the port to inspect rather than retried three times and then
+#     blamed on the registry.
+#   * It does not pipe. Make runs recipes under /bin/sh, which has no `pipefail`,
+#     so `docker compose ... | tee log` would report tee's status and every attempt
+#     would look like a success. Output goes to a log and is always printed.
+# A `#` comment cannot go inside that recipe: the whole thing is one backslash-
+# continued `sh -c` line, and a comment would swallow the continuation.
+
+define build_with_retry
+	@attempt=1; \
+	while :; do \
+		if docker compose build $(1); then break; fi; \
+		if [ "$$attempt" -ge $(DOCKER_BUILD_RETRIES) ]; then \
+			echo ""; \
+			echo "build of '$(1)' failed $(DOCKER_BUILD_RETRIES) times." >&2; \
+			echo "  If the error mentions a TLS handshake timeout or SSL_ERROR_SYSCALL" >&2; \
+			echo "  against gcr.io, it is the base-image pull and not this repository." >&2; \
+			echo "  Check with:  curl -sS -o /dev/null -w '%{http_code}' \\" >&2; \
+			echo "    https://gcr.io/v2/distroless/static-debian12/manifests/nonroot" >&2; \
+			exit 1; \
+		fi; \
+		echo "build of '$(1)' failed (attempt $$attempt/$(DOCKER_BUILD_RETRIES)); retrying in $$((attempt * 5))s" >&2; \
+		sleep $$((attempt * 5)); \
+		attempt=$$((attempt + 1)); \
+	done
+endef
+
+# ── readiness ────────────────────────────────────────────────────────────────
+# One probe used by every target, so "ready" means the same thing everywhere: the
+# HOST-published port answers. That is stricter than a container healthcheck and
+# catches the failure a healthcheck cannot see — a published port that never bound,
+# or bound somewhere the operator is not looking. Arguments:
+#   $(1) label  $(2) URL  $(3) attempts (x2s)  $(4) compose service for the logs
+#
+# `curl -o /dev/null` without -f on purpose for the UIs: HyperDX answers `/` with a
+# redirect to the login page and flow-ui's /healthz with 200, so the assertion is
+# "it spoke HTTP", and the per-service checks below add the semantic part.
+define wait_http
+	@printf '  %-16s' '$(1)'; attempt=0; \
+	while [ "$$attempt" -lt $(3) ]; do \
+		if curl -fsS -o /dev/null --max-time 5 '$(2)' 2>/dev/null; then \
+			echo 'ready   $(2)'; exit 0; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	echo 'FAILED  $(2)'; \
+	echo "" >&2; \
+	echo "$(1) did not become ready at $(2) after $$(($(3) * 2))s." >&2; \
+	echo "  Last 60 log lines from '$(4)' follow. If the port is the problem," >&2; \
+	echo "  find the holder:  lsof -nP -iTCP:$(5) -sTCP:LISTEN" >&2; \
+	echo "  or move it:       make up $(6)=<other port>" >&2; \
+	echo "" >&2; \
+	docker compose logs --tail 60 $(4) >&2; \
+	exit 1
+endef
 
 # Docker runner for per-service build/test/lint — no host toolchains required.
 DK_RUN := docker run --rm --user $(shell id -u):$(shell id -g) -v "$(CURDIR)":/w
 
+# The Python image the test targets run in. Overridable so CI can sweep the
+# supported interpreters against one Make target rather than re-declaring the
+# command per version (REQ-B-03): `PYTHON_IMAGE=python:3.10-slim make test-generator`.
+# The generator declares >=3.10 and flow-ui >=3.11, so 3.10 is expected to FAIL
+# for flow-ui — that floor is only testable because the image is a variable.
+PYTHON_IMAGE ?= python:3.12-slim
+
 help:                ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
-		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "  SCENARIO=$(SCENARIO)  SEED=$(SEED)  WINDOW=$(WINDOW)"
-	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)   (generate-stream)"
+	@echo "  SCENARIO=$(SCENARIO)  SEED=$(SEED)  WINDOW=$(WINDOW)  PYTHON_IMAGE=$(PYTHON_IMAGE)"
+	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)"
+	@echo ""
+	@echo "  host ports (all loopback-only; override any of them on the make line):"
+	@echo "    CLICKHOUSE_HOST_PORT=$(CLICKHOUSE_HOST_PORT)  COLLECTOR_OTLP_HOST_PORT=$(COLLECTOR_OTLP_HOST_PORT)  COLLECTOR_METRICS_HOST_PORT=$(COLLECTOR_METRICS_HOST_PORT)"
+	@echo "    FLOW_UI_HOST_PORT=$(FLOW_UI_HOST_PORT)  HYPERDX_HOST_PORT=$(HYPERDX_HOST_PORT)"
 
-up:                  ## Start ClickHouse + the Rust collector
-	docker compose up -d --build clickhouse collector-rust
+up:                  ## Start the WHOLE stack: ClickHouse → migrations → collector → flow-ui + HyperDX
+	@echo "── starting the Sentinel stack ──────────────────────────────────────"
+	docker compose up -d --wait clickhouse
+	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
+		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
+			echo "ClickHouse ready"; break; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; docker compose logs --tail 60 clickhouse >&2; exit 1; }
+	$(MAKE) migrate
+	@log="$$(mktemp)"; attempt=1; \
+	while :; do \
+		if docker compose up -d --build collector-rust >"$$log" 2>&1; then cat "$$log"; rm -f "$$log"; break; fi; \
+		cat "$$log" >&2; \
+		if grep -qiE 'ports are not available|address already in use' "$$log"; then \
+			echo "" >&2; \
+			echo "a host port the collector needs is already taken - not a transient failure, so not retried." >&2; \
+			echo "  Find the holder:  lsof -nP -iTCP:$(COLLECTOR_OTLP_HOST_PORT) -sTCP:LISTEN" >&2; \
+			echo "                    lsof -nP -iTCP:$(COLLECTOR_METRICS_HOST_PORT) -sTCP:LISTEN" >&2; \
+			echo "  Or move the port:  make up COLLECTOR_OTLP_HOST_PORT=4318" >&2; \
+			echo "                     make up COLLECTOR_METRICS_HOST_PORT=9091" >&2; \
+			rm -f "$$log"; exit 1; \
+		fi; \
+		if ! grep -qiE 'tls handshake|SSL_ERROR_SYSCALL|failed to resolve source metadata|i/o timeout|failed to do request' "$$log"; then \
+			echo "" >&2; \
+			echo "collector-rust failed for a reason that is not a known transient one; not retried." >&2; \
+			echo "  The build output above is the error." >&2; \
+			rm -f "$$log"; exit 1; \
+		fi; \
+		if [ "$$attempt" -ge $(DOCKER_BUILD_RETRIES) ]; then \
+			echo "" >&2; \
+			echo "the distroless base-image pull failed on all $(DOCKER_BUILD_RETRIES) attempt(s) - this is gcr.io, not the repo." >&2; \
+			echo "  Confirm:  curl -sS -o /dev/null -w '%{http_code}' \\" >&2; \
+			echo "              https://gcr.io/v2/distroless/static-debian12/manifests/nonroot" >&2; \
+			if docker image inspect $(COLLECTOR_IMAGE) >/dev/null 2>&1; then \
+				echo "" >&2; \
+				echo "  $(COLLECTOR_IMAGE) IS already built locally, so the stack is started from it" >&2; \
+				echo "  rather than left down for a registry outage. The image may predate your" >&2; \
+				echo "  working tree - rebuild it deliberately once the registry answers:" >&2; \
+				echo "    make build          # or: docker compose build collector-rust" >&2; \
+				echo "" >&2; \
+				rm -f "$$log"; \
+				docker compose up -d --no-build collector-rust || exit 1; \
+				break; \
+			fi; \
+			echo "  No $(COLLECTOR_IMAGE) exists locally either, so there is nothing to start." >&2; \
+			rm -f "$$log"; exit 1; \
+		fi; \
+		echo "registry pull failed (attempt $$attempt/$(DOCKER_BUILD_RETRIES)); retrying in $$((attempt * 5))s" >&2; \
+		sleep $$((attempt * 5)); \
+		attempt=$$((attempt + 1)); \
+	done
+	docker compose up -d --build --wait --wait-timeout 300 flow-ui hyperdx
+	@# The generator is a one-shot CLI, not a service (see docker-compose.yml): it is
+	@# BUILT here so `make generate` and `make e2e` start instantly, and never `up`ed,
+	@# because a service that runs `otelgen --help` and exits would sit in
+	@# `docker compose ps` as Exited and read as a broken stack.
+	docker compose build generator
+	@echo ""
+	@echo "── readiness (host-published ports) ─────────────────────────────────"
+	$(call wait_http,ClickHouse,$(CH_URL)/ping,30,clickhouse,$(CLICKHOUSE_HOST_PORT),CLICKHOUSE_HOST_PORT)
+	$(call wait_http,collector,$(METRICS_URL),30,collector-rust,$(COLLECTOR_METRICS_HOST_PORT),COLLECTOR_METRICS_HOST_PORT)
+	$(call wait_http,flow-ui,$(FLOW_UI_URL)/healthz,30,flow-ui,$(FLOW_UI_HOST_PORT),FLOW_UI_HOST_PORT)
+	$(call wait_http,HyperDX,$(HYPERDX_URL)/,60,hyperdx,$(HYPERDX_HOST_PORT),HYPERDX_HOST_PORT)
+	@$(MAKE) --no-print-directory status
+
+# Printed at the end of `up` and callable on its own. `up` is only finished when
+# every service it started is in `docker compose ps`, so the proof and the summary
+# are the same thing.
+status:              ## Show every container plus the URL of each host-published port
+	@echo ""
+	@echo "── containers ───────────────────────────────────────────────────────"
+	@docker compose ps
+	@echo ""
+	@echo "── where it all is ──────────────────────────────────────────────────"
+	@printf '  %-16s%s\n' 'ClickHouse'   '$(CH_URL)/play'
+	@printf '  %-16s%s\n' 'collector'    'OTLP 127.0.0.1:$(COLLECTOR_OTLP_HOST_PORT) · metrics $(METRICS_URL)'
+	@printf '  %-16s%s\n' 'flow-ui'      '$(FLOW_UI_URL)'
+	@printf '  %-16s%s\n' 'HyperDX'      '$(HYPERDX_URL)   (first visit: create a local account)'
+	@printf '  %-16s%s\n' 'generator'    'one-shot: make generate / make generate-stream / make e2e'
+	@echo ""
 
 init:                ## No-op: the canonical bronze schema auto-applies on ClickHouse boot
 	@echo "Rust → canonical bronze schema (bronze.*) auto-applies on ClickHouse boot via infra/clickhouse/init.d/; nothing to apply"
+
+# One operator interface for the runner (REQ-B-03): CI invokes this target, and
+# never a re-declared `migrate.sh` command line. `CH_CLIENT` is injected rather
+# than guessed because getting it wrong migrates the wrong database — and it
+# carries no `--multiquery` (the script appends that itself) and no credential
+# (`ps` shows an argv to every user on the box; the script reads
+# `CLICKHOUSE_PASSWORD` instead).
+#
+# The service name is literally `clickhouse`, as at `:80` — REQ-I-07 depends on
+# that name surviving the Compose unification in T12–T15.
+# `MIGRATION_PW_FILE` is a PATH to the role password, not the value: migration
+# 0002 creates its users with `IDENTIFIED WITH sha256_password BY {pw:String}` and
+# the runner supplies the parameter on stdin. Copy
+# infra/secrets/ch_password.example to infra/secrets/ch_password (gitignored) once;
+# the root stack mounts the same file into the collector and flow-ui.
+migrate:             ## Apply ClickHouse DDL migrations, recording each in _meta.schema_migrations
+	@test -r infra/secrets/ch_password || { \
+		echo "migrate: infra/secrets/ch_password is missing."; \
+		echo "  cp infra/secrets/ch_password.example infra/secrets/ch_password"; \
+		echo "  then put a password in it (gitignored; SPEC §14.2)."; \
+		exit 1; }
+	MIGRATION_PW_FILE=infra/secrets/ch_password \
+	CH_CLIENT="docker compose exec -T clickhouse clickhouse-client" \
+		bash infra/clickhouse/migrate.sh
+
+backfill-silver:      ## Recompute historical Silver partitions (FROM / TO / PHASE)
+	CH_CLIENT="docker compose exec -T clickhouse clickhouse-client" \
+		bash infra/clickhouse/backfill/backfill.sh $(if $(FROM),FROM=$(FROM)) $(if $(TO),TO=$(TO)) PHASE=$(if $(PHASE),$(PHASE),all)
+
+test-backfill:        ## Verify the backfill runner refuses the live partition
+	bash infra/clickhouse/backfill/tests/runner-refusal.test.sh
+	bash infra/clickhouse/backfill/tests/canonical-sync.test.sh
 
 generate:            ## Run the generator → OTLP :4317 (SCENARIO / SEED / WINDOW configurable)
 	docker compose run --rm generator \
@@ -42,12 +279,63 @@ generate-stream:     ## Generate in real time (paced by wall clock) — DURATION
 		--scenario $(SCENARIO) --seed $(SEED) \
 		--delivery otlp --otlp-endpoint http://collector:4317
 
-ui:                  ## Start the flow visualizer on http://localhost:8080
-	docker compose up -d --build flow-ui
-	@echo "flow-ui → http://localhost:8080"
+# ClickHouse first, then migrate, then flow-ui. The migrate step is not optional
+# here: since T17/T18 flow-ui authenticates as `sentinel_reader_u`, and that user is
+# created by migration 0002. Starting flow-ui against an unmigrated volume brings up
+# a UI whose /healthz reports `"clickhouse": false` and whose ClickHouse-backed
+# boards are empty — it degrades rather than crashing (NFR-05), which makes the
+# cause easy to miss. The collector stays genuinely optional.
+ui:                  ## Start ClickHouse + flow-ui alone (FLOW_UI_HOST_PORT, default 8080)
+	docker compose up -d --wait clickhouse
+	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
+		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
+			echo "ClickHouse ready"; break; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; exit 1; }
+	$(MAKE) migrate
+	docker compose up -d --build --wait --wait-timeout 300 flow-ui
+	$(call wait_http,flow-ui,$(FLOW_UI_URL)/healthz,30,flow-ui,$(FLOW_UI_HOST_PORT),FLOW_UI_HOST_PORT)
+	@echo "flow-ui ready at $(FLOW_UI_URL) (collector is optional)"
 
-e2e: up init generate ## Full configurable pipeline (up + init + generate)
-	@echo "E2E complete with the Rust collector. Inspect at http://localhost:8123/play"
+down-ui:             ## Stop only flow-ui
+	docker compose stop flow-ui
+
+# Same ordering as `ui`, for the same reason: HyperDX authenticates as
+# `sentinel_hyperdx_u`, which migration 0007 creates, so it must not start against an
+# unmigrated volume. The collector stays optional; without it the tables are just empty.
+hyperdx:             ## Start ClickHouse + HyperDX alone (HYPERDX_HOST_PORT, default 8082)
+	docker compose up -d --wait clickhouse
+	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
+		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
+			echo "ClickHouse ready"; break; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; exit 1; }
+	$(MAKE) migrate
+	docker compose up -d --wait --wait-timeout 300 hyperdx
+	$(call wait_http,HyperDX,$(HYPERDX_URL)/,60,hyperdx,$(HYPERDX_HOST_PORT),HYPERDX_HOST_PORT)
+	@echo "HyperDX ready at $(HYPERDX_URL) (create the first account on first visit; collector is optional)"
+
+down-hyperdx:        ## Stop only HyperDX and its Mongo (accounts and saved views are kept)
+	docker compose stop hyperdx hyperdx-mongo
+
+# HyperDX reads sources.json only into an EMPTY Mongo. After editing it, the old
+# sources survive a restart, so this drops the Mongo volume. Accounts, saved
+# searches, dashboards and alerts go with it; ClickHouse is untouched.
+reset-hyperdx:       ## Drop HyperDX's Mongo volume so infra/hyperdx/sources.json is re-read
+	@vol="$$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data/db"}}{{.Name}}{{end}}{{end}}' $$(docker compose ps -aq hyperdx-mongo) 2>/dev/null)"; \
+	docker compose rm -sfv hyperdx hyperdx-mongo; \
+	if [ -n "$$vol" ]; then docker volume rm "$$vol"; fi
+
+e2e: up init generate ## Whole stack (make up) + a generator run into bronze.*
+	@echo ""
+	@echo "E2E complete with the Rust collector."
+	@echo "  rows:    $(CH_URL)/play  →  SELECT count() FROM bronze.otel_traces"
+	@echo "  boards:  $(FLOW_UI_URL)"
+	@echo "  search:  $(HYPERDX_URL)"
 
 ps:                  ## Show running services
 	docker compose ps
@@ -55,38 +343,70 @@ ps:                  ## Show running services
 logs:                ## Tail the Rust collector's logs
 	docker compose logs -f collector-rust
 
-down:                ## Stop all services
-	docker compose down
+# Symmetric with `up` by construction: `down` is service-agnostic, so it stops
+# whatever `up` started without a list to keep in sync. `--remove-orphans` sweeps a
+# container left behind by an earlier revision of the Compose file (the Mongo that
+# arrived with HyperDX is exactly that case for anyone upgrading in place).
+down:                ## Stop every container `make up` starts (data volumes are kept)
+	docker compose down --remove-orphans
 
-reset:               ## Stop all services and drop volumes (fresh ClickHouse)
-	docker compose down -v
+reset:               ## Stop everything and drop volumes (fresh ClickHouse and HyperDX Mongo)
+	docker compose down -v --remove-orphans
 
 # ── build / test / lint (all run in Docker; no host toolchains needed) ──
 
 build:               ## Build all service images (generator + Rust collector)
+	$(call build_with_retry,collector-rust)
 	docker compose build
 
-test: test-generator test-collector-rust test-flow-ui  ## Run all unit test suites
+test: test-generator test-collector-rust test-flow-ui test-hyperdx  ## Run all unit test suites
 
 test-silver:            ## Verify Bronze→Silver load and Silver read-model invariants
 	docker compose exec -T clickhouse clickhouse-client --multiquery < infra/clickhouse/tests/02-silver-layer.test.sql
+	@# call_edges_1m is fed by a REFRESH EVERY 1 MINUTE view, so a freshly migrated
+	@# database has an empty table until the first scheduled run. Refreshing here is
+	@# what makes T29's assertions non-vacuous — the test file asserts non-emptiness
+	@# first for exactly that reason.
+	docker compose exec -T clickhouse clickhouse-client -q "SYSTEM REFRESH VIEW silver.call_edges_1m_rmv"
+	docker compose exec -T clickhouse clickhouse-client -q "SYSTEM WAIT VIEW silver.call_edges_1m_rmv"
+	docker compose exec -T clickhouse clickhouse-client --multiquery < infra/clickhouse/tests/03-watcher-models.test.sql
 
 sample-silver:          ## Print representative rows from the Silver models
-	docker compose exec -T clickhouse clickhouse-client --multiquery --format PrettyCompact < infra/clickhouse/queries/02-silver-sample.sql
+	docker compose exec -T clickhouse clickhouse-client --multiquery --format PrettyCompact < infra/clickhouse/queries/03-watcher-sample.sql
+
+test-generator-integration:  ## Generator integration suite against a LIVE ClickHouse (needs `make up`)
+	@cid=$$(docker compose ps -q clickhouse); \
+	if [ -z "$$cid" ]; then \
+		echo "test-generator-integration: no running 'clickhouse' service."; \
+		echo "  This suite targets the ClickHouse named by CLICKHOUSE_URL and starts none of its"; \
+		echo "  own (REQ-B-11, SPEC §9). Run 'make up' first."; \
+		exit 1; \
+	fi; \
+	docker run --rm --user $$(id -u):$$(id -g) -v "$(CURDIR)":/w \
+		-w /w/services/generator-python -e HOME=/tmp -e CONTRACTS_DIR=/w/contracts/generator/v1 \
+		--network "container:$$cid" -e CLICKHOUSE_URL=http://localhost:8123 \
+		$(PYTHON_IMAGE) bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest && /tmp/v/bin/python -m pytest tests/integration -q"
 
 test-generator:      ## Generator unit tests (pytest)
 	$(DK_RUN) -w /w/services/generator-python -e HOME=/tmp -e CONTRACTS_DIR=/w/contracts/generator/v1 \
-		python:3.12-slim bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest jsonschema && /tmp/v/bin/python -m pytest tests/unit -q"
+		$(PYTHON_IMAGE) bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest jsonschema && /tmp/v/bin/python -m pytest tests/unit -q"
 
 test-collector-rust: ## Rust collector tests (cargo test; live-ClickHouse tests are #[ignore]d)
 	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \
 		rust:1.96 cargo test --locked
 
+test-collector-shutdown: ## `docker stop` on the collector image exits 0 (issue #45)
+	IMAGE=$(COLLECTOR_IMAGE) bash services/collector-rust/tests/docker-stop.test.sh
+
 lint: lint-generator lint-collector-rust lint-flow-ui  ## Lint all services
 
 test-flow-ui:        ## flow-ui unit tests (pytest)
 	$(DK_RUN) -w /w/services/flow-ui -e HOME=/tmp \
-		python:3.12-slim bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest && /tmp/v/bin/python -m pytest tests -q"
+		$(PYTHON_IMAGE) bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install -e . pytest && /tmp/v/bin/python -m pytest tests -q"
+
+test-hyperdx:        ## HyperDX source config vs the bronze DDL (stdlib pytest)
+	$(DK_RUN) -w /w/infra/hyperdx -e HOME=/tmp \
+		$(PYTHON_IMAGE) bash -c "python -m venv /tmp/v && /tmp/v/bin/pip -q install pytest && /tmp/v/bin/python -m pytest tests -q"
 
 lint-flow-ui:        ## flow-ui lint (ruff)
 	$(DK_RUN) -w /w/services/flow-ui ghcr.io/astral-sh/ruff:latest check src tests scripts
@@ -94,6 +414,70 @@ lint-flow-ui:        ## flow-ui lint (ruff)
 lint-generator:      ## Python lint (ruff)
 	$(DK_RUN) -w /w/services/generator-python ghcr.io/astral-sh/ruff:latest check src
 
+audit-python:        ## Python advisories + static security scan (prints findings; non-zero if any)
+	@$(DK_RUN) -w /w -e HOME=/tmp $(PYTHON_IMAGE) bash -c '\
+		python -m venv /tmp/v >/dev/null && \
+		/tmp/v/bin/pip -q install pip-audit bandit && \
+		echo "── pip-audit: generator ──" && \
+		/tmp/v/bin/pip-audit --progress-spinner off --desc on services/generator-python; \
+		echo "── pip-audit: flow-ui ──" && \
+		/tmp/v/bin/pip-audit --progress-spinner off --desc on services/flow-ui; \
+		echo "── bandit: generator (all checks) ──" && \
+		/tmp/v/bin/bandit -q -r services/generator-python/src && \
+		echo "── bandit: flow-ui (B608 scoped off, see below) ──" && \
+		/tmp/v/bin/bandit -q -r services/flow-ui/src --skip B608'
+
+# Why flow-ui skips B608, and only flow-ui, and only B608:
+#
+# `flow_ui/clickhouse.py` builds 17 read queries with f-strings, and bandit
+# flags every one as a possible SQL-injection vector. None is: the only values
+# interpolated are module-level constants — `LIVE_TABLES` (a literal 4-tuple),
+# `REQUIRED_RESOURCE_KEYS`, `SILVER_MODELS`, the configured database name, and
+# `int()`-coerced limits. The module reads no request parameter; `grep` for
+# `request.`/`query_params`/`args.get` over it returns nothing, and invariant
+# `05-flow-ui-is-read-only` asserts the service issues no write statement at all.
+#
+# Per-line `# nosec B608` was tried first and rejected: two of the 17 sites are
+# ternaries between nested triple-quoted f-strings, where every line in bandit's
+# reported range falls *inside* a string literal, so the comment would silently
+# become part of the SQL. Seventeen inline comments to suppress a check that
+# cannot apply is also the "comments-as-noise" this repo rules out.
+#
+# What this gives up: a genuinely new injection site inside flow-ui would not be
+# caught by B608. The generator keeps the check, and B107/B311 are handled
+# per-line where the judgement is per-site.
+
 lint-collector-rust: ## Rust fmt check + clippy
 	$(DK_RUN) -w /w/services/collector-rust -e CARGO_HOME=/tmp/cargo -e HOME=/tmp \
-		rust:1.96 bash -c "cargo fmt --check && cargo clippy --locked"
+		rust:1.96 bash -c "cargo fmt --check && cargo clippy --locked -- -D warnings"
+
+# ── image vulnerability scanning (REQ-H-12 / T24) ────────────────────────────
+#
+# T24 wanted this inside `release.yml`, scanning the digest it had just pushed.
+# No registry exists and DEC-A1/A2 leave remote deployment unauthorized, so that
+# digest is never produced — but a scan needs bytes, not a push. Both targets
+# below scan bytes that exist locally, which is what lets the gate run on every
+# PR instead of waiting for a platform decision. Policy, the warn-only default
+# and the one-flag flip to blocking are all in scripts/ci/audit-images.sh.
+#
+# Derived from `services/*/Dockerfile`, never a hard-coded list: a fourth service
+# is covered the day its Dockerfile lands.
+IMAGE_SCAN_SERVICES := $(notdir $(patsubst %/,%,$(dir $(wildcard services/*/Dockerfile))))
+IMAGE_TAR_DIR       ?= $(CURDIR)/.image-scan
+
+audit-images:        ## Image CVE scan of every shipped base image (warn-only)
+	@bash scripts/ci/audit-images.sh bases
+
+# The weekly half. It builds each image natively and scans the `docker save`
+# tarball, so it sees our own layers — the pip-installed packages a base-image
+# scan cannot reach. Single-arch on purpose: this is the expensive target, and
+# the per-arch base differences are already covered by `audit-images`, which
+# sweeps both platforms the repo ships.
+audit-images-built:  ## Image CVE scan of the images as built (builds them first)
+	@rm -rf "$(IMAGE_TAR_DIR)" && mkdir -p "$(IMAGE_TAR_DIR)"
+	@for svc in $(IMAGE_SCAN_SERVICES); do \
+		echo "── building services/$$svc"; \
+		docker build -t sentinel-imagescan:$$svc "services/$$svc" || exit 1; \
+		docker save -o "$(IMAGE_TAR_DIR)/$$svc.tar" sentinel-imagescan:$$svc || exit 1; \
+	done
+	@bash scripts/ci/audit-images.sh tars "$(IMAGE_TAR_DIR)"

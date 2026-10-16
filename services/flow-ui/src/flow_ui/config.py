@@ -25,6 +25,18 @@ class Settings:
     clickhouse_url: str = os.getenv("CLICKHOUSE_URL", "http://localhost:8123")
     clickhouse_database: str = os.getenv("CLICKHOUSE_DATABASE", "bronze")
 
+    #: Reader credentials (T18). `sentinel_reader` holds SELECT on bronze, silver and
+    #: `system.tables`/`system.columns` — the last two are what the Flow board's Silver
+    #: box is drawn from, so without them it silently disappears.
+    #:
+    #: The password is a **path**, never a value, matching the collector's contract
+    #: (SPEC §14.2): a path can live in a committed file under review while the secret
+    #: never does. Both default to empty so a bare `make ui` against a passwordless
+    #: local ClickHouse still works with no configuration — the credentials are only
+    #: sent when a user is actually set.
+    clickhouse_user: str = os.getenv("CLICKHOUSE_USER", "")
+    clickhouse_password_file: str = os.getenv("CLICKHOUSE_PASSWORD_FILE", "")
+
     #: Poll cadence. 1s matches the collector's own flush cadence in stream mode
     #: (measured: 1.03 flushes/s), so one tick carries roughly one flush event.
     poll_interval_s: float = float(os.getenv("FLOW_UI_POLL_INTERVAL", "1.0"))
