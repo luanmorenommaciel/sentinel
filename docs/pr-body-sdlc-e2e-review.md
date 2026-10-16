@@ -3,9 +3,17 @@
 > **`main` is red today, and this PR is the fix.** The scheduled `rust-ci` run on `main`,
 > [`38266048240`](https://github.com/luanmorenommaciel/sentinel/actions/runs/38266048240)
 > (2026-10-12, `main` at `1aa8d92`), failed on `supply-chain (cargo deny)` — advisory
-> `RUSTSEC-2025-0134`. Four jobs green, that one red. This branch already carries the fix:
-> a scoped, dated ignore in `services/collector-rust/deny.toml`. Nothing else on the board
-> closes it.
+> `RUSTSEC-2025-0134`. Four jobs green, that one red. This branch carries the scoped, dated
+> ignore that fixes it, and nothing else on the board does.
+>
+> **Five more advisories landed on 2026-10-16, and they are fixed here too.** `cargo deny`
+> was green on this branch on `f573efb` (2026-10-09) and red on `9350328` with no dependency
+> change in between — the advisory database moved, not the tree. Four are rustls CVEs
+> (`RUSTSEC-2026-0346/0347/0348/0349`), fixed by `cargo update -p rustls`, 0.23.45 → 0.23.46,
+> two lines of `Cargo.lock`. The fifth, `RUSTSEC-2024-0449` (`unsafe-libyaml` unmaintained,
+> reached through `serde_yaml 0.9`), has no safe upgrade and takes a scoped ignore with the
+> exposure stated. This is the same mechanism that took `main` red: a supply-chain check is
+> a clock, not a property of the diff.
 
 CI that actually runs, on a single pinned ClickHouse, with the delivery path's
 documentation consolidated into one page. The pipeline itself — generator → collector →

@@ -385,6 +385,17 @@ things follow: `main` is red today and the merge is the fix, and a lane that is 
 branch says nothing about the default branch three days later. Confirm the next scheduled
 run on `main` goes green after the merge rather than assuming it.
 
+**And the same thing then happened to this branch, which is the more useful lesson.**
+`cargo deny` was green here on `f573efb` (2026-10-09) and red on `9350328` (2026-10-16) with
+**no dependency change in between**: five advisories had been published — four rustls CVEs
+(`RUSTSEC-2026-0346/0347/0348/0349`) and `RUSTSEC-2024-0449` for `unsafe-libyaml`. A
+supply-chain check is a **clock, not a property of the diff**: it can go red on a branch
+nobody touched, and a green from a week ago is not evidence about today. The rustls four were
+fixed by a lockfile bump (0.23.45 → 0.23.46); the fifth took a scoped, dated ignore because
+`serde_yaml` has no non-deprecated successor. Budget for this when `supply-chain` is promoted
+to a required check: it is the one check in this table whose result can change while the
+repository is idle.
+
 Branch protection remains unset (issue #35), so every "no" in the Required column still
 stands — but it is now a policy gap, not a platform one. Configuring a required set is
 finally possible.
