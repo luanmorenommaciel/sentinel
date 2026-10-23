@@ -263,6 +263,32 @@ reads, so the committed Makefile works on both the defaults and an override. Inv
 fails the build on a hard-coded `127.0.0.1:<port>` anywhere in it, and invariant 03 on two
 services publishing the same host port.
 
+### Local-development login
+
+One generic, published credential for a person to type into the two UIs. **Local
+development only:** the password is public, every port binds to `127.0.0.1`, and TLS is
+deferred ([DEC-2026-10-06](plan/decisions/DEC-2026-10-06-local-scope.md)). It is not a
+deployment credential, and it sits beside the per-service users rather than replacing them.
+
+| | Where | Account | Password |
+|---|---|---|---|
+| ClickHouse | `http://127.0.0.1:8123/play`, `clickhouse-client`, `curl` | `sentinel_dev_u` | `SENTINEL_DEV_PASSWORD` |
+| HyperDX | `http://127.0.0.1:8082` | `SENTINEL_DEV_EMAIL` | `SENTINEL_DEV_PASSWORD` |
+
+Defaults are `dev@sentinel.local` and `Sentinel-Dev-2026!`, listed in [`.env.example`](.env.example)
+and overridable on the make line or in `.env`.
+
+- **ClickHouse:** created by migration `0010` (`make up` or `make migrate`). Read-only:
+  `SELECT` on `bronze.*` and `silver.*` plus `system.tables` and `system.columns`, `readonly = 2`,
+  no DDL, no access management. It exists because `default` is localhost-only inside the
+  container, so the host, which arrives through the Docker port mapping, cannot use it. The password
+  is set once, when the migration first runs; to change it later, `ALTER USER`
+  (see `.env.example`).
+- **HyperDX:** its app login lives in its own Mongo and HyperDX 2.40.0 has no environment
+  seeding for it, so run `make hyperdx-seed` once after the stack is up (or sign up by hand
+  on first visit). The first registration wins; if an account already exists the target says
+  so and changes nothing. HyperDX still queries ClickHouse as `sentinel_hyperdx_u`, not as the account above.
+
 Flow-ui and HyperDX are part of `make up`; these start or stop either one on its own, without the collector:
 
 ```sh
@@ -277,9 +303,11 @@ Search the same rows in HyperDX (ADR-0011), connected straight to ClickHouse:
 make hyperdx                       # ClickHouse + migrations + HyperDX → http://127.0.0.1:8082
 make down-hyperdx                  # stop HyperDX and its Mongo; accounts and saved views are kept
 make reset-hyperdx                 # drop its Mongo volume so infra/hyperdx/sources.json is re-read
+make hyperdx-seed                  # create the local-dev HyperDX login on an empty Mongo
 ```
 
-The first visit asks you to create a local account (HyperDX keeps users, saved searches,
+The first visit asks you to create a local account, or run `make hyperdx-seed` to create the
+[local-development login](#local-development-login) (HyperDX keeps users, saved searches,
 dashboards and alerts in its own Mongo; none of it is telemetry). The Logs, Traces and
 Metrics sources are already mapped onto `bronze.*`. HyperDX reads `sources.json` only into
 an empty Mongo, so after editing it run `make reset-hyperdx`. It connects as

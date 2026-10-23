@@ -135,6 +135,15 @@ if [[ -n "$MIGRATION_PW_FILE" ]]; then
     unset pw
 fi
 
+# The local-development account (`0010_dev_account.sql`) takes `{dev_pw:String}` from
+# `SENTINEL_DEV_PASSWORD`, a value rather than a path: it is a published default, not
+# a secret to keep out of the environment. It rides the same stdin prelude, so it is
+# still never on a command line. Unset is fine until a migration references it; that
+# migration then fails with exit 4. `make migrate` always supplies it.
+if [[ -n "${SENTINEL_DEV_PASSWORD:-}" ]]; then
+    param_prelude="${param_prelude}SET param_dev_pw = '$(sql_quote "$SENTINEL_DEV_PASSWORD")';"
+fi
+
 if [[ ! -d "$MIGRATIONS_DIR" ]]; then
     err "migrate: no migrations directory at $MIGRATIONS_DIR"
     exit 1

@@ -36,12 +36,31 @@ HYPERDX_HOST_PORT          ?= 8082
 export CLICKHOUSE_HOST_PORT COLLECTOR_OTLP_HOST_PORT COLLECTOR_METRICS_HOST_PORT
 export FLOW_UI_HOST_PORT HYPERDX_HOST_PORT
 
+# ── local-development login ──────────────────────────────────────────────────
+# ONE generic, published credential for a person to type into the two UIs:
+#
+#   ClickHouse (Play at $(CH_URL)/play, clickhouse-client)  sentinel_dev_u / password
+#   HyperDX    (the app login at $(HYPERDX_URL))             email / password
+#
+# LOCAL DEVELOPMENT ONLY: the password is public, the ports are loopback-bound and
+# TLS is deferred (DEC-2026-10-06-local-scope). It does not replace the per-service
+# users; those keep their gitignored password file. The ClickHouse user is created by
+# migration 0010 (`make migrate`) and the HyperDX account by `make hyperdx-seed`.
+#
+# Resolution order, first hit wins: the make line / environment, then a line in
+# `.env`, then the default here. `.env` is read for these three keys only: Compose
+# does not consume them, so nothing else would see an edit there.
+dotenv = $(shell sed -n 's/^$(1)=//p' .env 2>/dev/null | tail -n 1)
+SENTINEL_DEV_PASSWORD ?= $(or $(call dotenv,SENTINEL_DEV_PASSWORD),Sentinel-Dev-2026!)
+SENTINEL_DEV_EMAIL    ?= $(or $(call dotenv,SENTINEL_DEV_EMAIL),dev@sentinel.local)
+export SENTINEL_DEV_PASSWORD SENTINEL_DEV_EMAIL
+
 CH_URL      := http://127.0.0.1:$(CLICKHOUSE_HOST_PORT)
 METRICS_URL := http://127.0.0.1:$(COLLECTOR_METRICS_HOST_PORT)/metrics
 FLOW_UI_URL := http://127.0.0.1:$(FLOW_UI_HOST_PORT)
 HYPERDX_URL := http://127.0.0.1:$(HYPERDX_HOST_PORT)
 
-.PHONY: help up status init migrate generate generate-stream ui down-ui hyperdx down-hyperdx reset-hyperdx \
+.PHONY: help up status init migrate generate generate-stream ui down-ui hyperdx down-hyperdx reset-hyperdx hyperdx-seed \
         e2e down reset logs ps \
         build test test-generator test-collector-rust test-flow-ui test-hyperdx \
         test-generator-integration test-backfill audit-python audit-images audit-images-built \
@@ -229,7 +248,8 @@ status:              ## Show every container plus the URL of each host-published
 	@printf '  %-16s%s\n' 'ClickHouse'   '$(CH_URL)/play'
 	@printf '  %-16s%s\n' 'collector'    'OTLP 127.0.0.1:$(COLLECTOR_OTLP_HOST_PORT) · metrics $(METRICS_URL)'
 	@printf '  %-16s%s\n' 'flow-ui'      '$(FLOW_UI_URL)'
-	@printf '  %-16s%s\n' 'HyperDX'      '$(HYPERDX_URL)   (first visit: create a local account)'
+	@printf '  %-16s%s\n' 'HyperDX'      '$(HYPERDX_URL)   (first visit: sign up, or make hyperdx-seed)'
+	@printf '  %-16s%s\n' 'local-dev login' 'ClickHouse sentinel_dev_u · HyperDX $(SENTINEL_DEV_EMAIL) · password in .env.example (local only)'
 	@printf '  %-16s%s\n' 'generator'    'one-shot: make generate / make generate-stream / make e2e'
 	@echo ""
 
@@ -317,7 +337,7 @@ hyperdx:             ## Start ClickHouse + HyperDX alone (HYPERDX_HOST_PORT, def
 	$(MAKE) migrate
 	docker compose up -d --wait --wait-timeout 300 hyperdx
 	$(call wait_http,HyperDX,$(HYPERDX_URL)/,60,hyperdx,$(HYPERDX_HOST_PORT),HYPERDX_HOST_PORT)
-	@echo "HyperDX ready at $(HYPERDX_URL) (create the first account on first visit; collector is optional)"
+	@echo "HyperDX ready at $(HYPERDX_URL) (sign up on first visit, or run make hyperdx-seed for the local-dev login; collector is optional)"
 
 down-hyperdx:        ## Stop only HyperDX and its Mongo (accounts and saved views are kept)
 	docker compose stop hyperdx hyperdx-mongo
@@ -329,6 +349,24 @@ reset-hyperdx:       ## Drop HyperDX's Mongo volume so infra/hyperdx/sources.jso
 	@vol="$$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data/db"}}{{.Name}}{{end}}{{end}}' $$(docker compose ps -aq hyperdx-mongo) 2>/dev/null)"; \
 	docker compose rm -sfv hyperdx hyperdx-mongo; \
 	if [ -n "$$vol" ]; then docker volume rm "$$vol"; fi
+
+# HyperDX 2.40.0 has no env-var or config seeding for its app account (no user or
+# password key in its config; DEFAULT_CONNECTIONS/DEFAULT_SOURCES seed the connection
+# and sources only), so the one non-interactive route is the same endpoint the sign-up
+# page posts to. It accepts exactly one registration per Mongo: the first account
+# creates the team and every later call answers 409. Idempotent by that rule.
+hyperdx-seed:        ## Create the local-dev HyperDX login (SENTINEL_DEV_EMAIL / SENTINEL_DEV_PASSWORD) if none exists
+	@code="$$(printf '{"email":"%s","password":"%s","confirmPassword":"%s"}' \
+		"$$SENTINEL_DEV_EMAIL" "$$SENTINEL_DEV_PASSWORD" "$$SENTINEL_DEV_PASSWORD" | \
+		curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+		--data-binary @- $(HYPERDX_URL)/api/register/password)"; \
+	case "$$code" in \
+		200) echo "HyperDX: created $$SENTINEL_DEV_EMAIL at $(HYPERDX_URL) (local development only)";; \
+		409) echo "HyperDX: an account already exists, so nothing was created (first registration wins)."; \
+		     echo "  Sign in with that account, or 'make reset-hyperdx' then 'make hyperdx-seed' to start empty.";; \
+		400) echo "HyperDX: refused the credential. The password needs 12-72 chars with upper, lower, a digit and one of !@#$$%^&*(),.?\":{}|<>;-+=" >&2; exit 1;; \
+		*)   echo "HyperDX: unexpected HTTP $$code from $(HYPERDX_URL)/api/register/password (is it up? make hyperdx)" >&2; exit 1;; \
+	esac
 
 e2e: up init generate ## Whole stack (make up) + a generator run into bronze.*
 	@echo ""

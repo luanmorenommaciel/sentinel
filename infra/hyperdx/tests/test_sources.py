@@ -130,3 +130,21 @@ def test_hyperdx_role_is_select_only():
     assert all(privilege.strip() == "SELECT" for privilege, _ in grants)
     assert "{pw:String}" in code
     assert re.search(r"SETTINGS\s+readonly\s*=\s*2", code)
+
+
+def test_hyperdx_introspection_grant_is_one_select_on_data_skipping_indices():
+    sql = (MIGRATIONS / "0009_hyperdx_data_skipping_indices.sql").read_text()
+    code = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+    grants = re.findall(r"GRANT\s+(.*?)\s+ON\s+(\S+)\s+TO\s+(\S+?);", code, re.DOTALL)
+    assert grants == [("SELECT", "system.data_skipping_indices", "sentinel_hyperdx")]
+
+
+def test_dev_account_is_read_only_and_takes_its_password_as_a_parameter():
+    sql = (MIGRATIONS / "0010_dev_account.sql").read_text()
+    code = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+    grants = re.findall(r"GRANT\s+(.*?)\s+ON\s+(\S+)\s+TO\s+sentinel_dev\b", code, re.DOTALL)
+    assert {on for _, on in grants} == {"bronze.*", "silver.*", "system.tables", "system.columns"}
+    assert all(privilege.strip() == "SELECT" for privilege, _ in grants)
+    assert "{dev_pw:String}" in code
+    assert re.search(r"SETTINGS\s+readonly\s*=\s*2", code)
+    assert not re.search(r"ACCESS\s+MANAGEMENT|\bALL\b|WITH\s+GRANT", code, re.IGNORECASE)
