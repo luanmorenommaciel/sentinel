@@ -48,7 +48,7 @@ bytes = "1"
 prometheus = { version = "0.13", default-features = false }
 
 # Async runtime
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.53.3", features = ["full"] }
 tokio-stream = "0.1"
 futures = "0.3"
 

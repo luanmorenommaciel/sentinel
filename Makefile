@@ -48,10 +48,12 @@ export FLOW_UI_HOST_PORT HYPERDX_HOST_PORT
 # migration 0010 (`make migrate`) and the HyperDX account by `make hyperdx-seed`.
 #
 # Resolution order, first hit wins: the make line / environment, then a line in
-# `.env`, then the default here. `.env` is read for these three keys only: Compose
+# `.env`. The password has NO default: set SENTINEL_DEV_PASSWORD in `.env` or the
+# environment; `make migrate` and `make hyperdx-seed` refuse to run without it. The
+# email still defaults below. `.env` is read for these three keys only: Compose
 # does not consume them, so nothing else would see an edit there.
 dotenv = $(shell sed -n 's/^$(1)=//p' .env 2>/dev/null | tail -n 1)
-SENTINEL_DEV_PASSWORD ?= $(or $(call dotenv,SENTINEL_DEV_PASSWORD),Sentinel-Dev-2026!)
+SENTINEL_DEV_PASSWORD ?= $(call dotenv,SENTINEL_DEV_PASSWORD)
 SENTINEL_DEV_EMAIL    ?= $(or $(call dotenv,SENTINEL_DEV_EMAIL),dev@sentinel.local)
 export SENTINEL_DEV_PASSWORD SENTINEL_DEV_EMAIL
 
@@ -249,7 +251,7 @@ status:              ## Show every container plus the URL of each host-published
 	@printf '  %-16s%s\n' 'collector'    'OTLP 127.0.0.1:$(COLLECTOR_OTLP_HOST_PORT) · metrics $(METRICS_URL)'
 	@printf '  %-16s%s\n' 'flow-ui'      '$(FLOW_UI_URL)'
 	@printf '  %-16s%s\n' 'HyperDX'      '$(HYPERDX_URL)   (first visit: sign up, or make hyperdx-seed)'
-	@printf '  %-16s%s\n' 'local-dev login' 'ClickHouse sentinel_dev_u · HyperDX $(SENTINEL_DEV_EMAIL) · password in .env.example (local only)'
+	@printf '  %-16s%s\n' 'local-dev login' 'ClickHouse sentinel_dev_u · HyperDX $(SENTINEL_DEV_EMAIL) · password from SENTINEL_DEV_PASSWORD in .env (local only)'
 	@printf '  %-16s%s\n' 'generator'    'one-shot: make generate / make generate-stream / make e2e'
 	@echo ""
 
@@ -271,6 +273,10 @@ init:                ## No-op: the canonical bronze schema auto-applies on Click
 # infra/secrets/ch_password.example to infra/secrets/ch_password (gitignored) once;
 # the root stack mounts the same file into the collector and flow-ui.
 migrate:             ## Apply ClickHouse DDL migrations, recording each in _meta.schema_migrations
+	@test -n "$$SENTINEL_DEV_PASSWORD" || { \
+		echo "$@: SENTINEL_DEV_PASSWORD is not set (no hardcoded default)."; \
+		echo "  Set it in .env (see .env.example) or on the make line."; \
+		exit 1; }
 	@test -r infra/secrets/ch_password || { \
 		echo "migrate: infra/secrets/ch_password is missing."; \
 		echo "  cp infra/secrets/ch_password.example infra/secrets/ch_password"; \
@@ -356,6 +362,10 @@ reset-hyperdx:       ## Drop HyperDX's Mongo volume so infra/hyperdx/sources.jso
 # page posts to. It accepts exactly one registration per Mongo: the first account
 # creates the team and every later call answers 409. Idempotent by that rule.
 hyperdx-seed:        ## Create the local-dev HyperDX login (SENTINEL_DEV_EMAIL / SENTINEL_DEV_PASSWORD) if none exists
+	@test -n "$$SENTINEL_DEV_PASSWORD" || { \
+		echo "$@: SENTINEL_DEV_PASSWORD is not set (no hardcoded default)."; \
+		echo "  Set it in .env (see .env.example) or on the make line."; \
+		exit 1; }
 	@code="$$(printf '{"email":"%s","password":"%s","confirmPassword":"%s"}' \
 		"$$SENTINEL_DEV_EMAIL" "$$SENTINEL_DEV_PASSWORD" "$$SENTINEL_DEV_PASSWORD" | \
 		curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \

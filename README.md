@@ -275,8 +275,8 @@ deployment credential, and it sits beside the per-service users rather than repl
 | ClickHouse | `http://127.0.0.1:8123/play`, `clickhouse-client`, `curl` | `sentinel_dev_u` | `SENTINEL_DEV_PASSWORD` |
 | HyperDX | `http://127.0.0.1:8082` | `SENTINEL_DEV_EMAIL` | `SENTINEL_DEV_PASSWORD` |
 
-Defaults are `dev@sentinel.local` and `Sentinel-Dev-2026!`, listed in [`.env.example`](.env.example)
-and overridable on the make line or in `.env`.
+The email defaults to `dev@sentinel.local`. The password has no default: set
+`SENTINEL_DEV_PASSWORD` in `.env` (see [`.env.example`](.env.example)) or on the make line.
 
 - **ClickHouse:** created by migration `0010` (`make up` or `make migrate`). Read-only:
   `SELECT` on `bronze.*` and `silver.*` plus `system.tables` and `system.columns`, `readonly = 2`,

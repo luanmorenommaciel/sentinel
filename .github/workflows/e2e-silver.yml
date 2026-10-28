@@ -77,6 +77,15 @@ jobs:
           openssl rand -hex 24 > infra/secrets/ch_password
           chmod 0444 infra/secrets/ch_password
 
+      # The local-dev login has no hardcoded default any more, so CI generates a
+      # per-run throwaway for `make migrate` (migration 0010).
+      - name: Create the CI dev-login password
+        run: |
+          set -euo pipefail
+          pw="Ci-$(openssl rand -hex 16)!"
+          echo "::add-mask::$pw"
+          echo "SENTINEL_DEV_PASSWORD=$pw" >> "$GITHUB_ENV"
+
       - name: Up (ClickHouse + collector)
         run: make up
 

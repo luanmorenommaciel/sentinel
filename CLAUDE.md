@@ -43,7 +43,7 @@ Makefile                   # one-command UX
 | `make status` | The same container table and URL list on its own, without starting anything |
 | `make ui` / `make down-ui` | Start or stop flow-ui independently on http://127.0.0.1:8080 |
 | `make hyperdx` / `make down-hyperdx` / `make reset-hyperdx` | Start or stop HyperDX (UI + Mongo, direct to ClickHouse as `sentinel_hyperdx_u`) on http://127.0.0.1:8082; `reset` drops its Mongo so `sources.json` is re-read (ADR-0011) |
-| `make hyperdx-seed` | Create the generic **local-dev-only** HyperDX login (`SENTINEL_DEV_EMAIL` / `SENTINEL_DEV_PASSWORD`, defaults in `.env.example`); HyperDX 2.40.0 has no env seeding, and the first registration wins. The read-only ClickHouse twin, `sentinel_dev_u`, comes from migration `0010` |
+| `make hyperdx-seed` | Create the generic **local-dev-only** HyperDX login (`SENTINEL_DEV_EMAIL` / `SENTINEL_DEV_PASSWORD`, password set in `.env`, no default); HyperDX 2.40.0 has no env seeding, and the first registration wins. The read-only ClickHouse twin, `sentinel_dev_u`, comes from migration `0010` |
 | `make generate-stream DURATION=10m` | Real-time telemetry paced by the wall clock, rather than a backfilled window |
 | `make up / init / migrate / generate / logs / ps / down / reset` | Local pipeline steps; `make up` starts every container in order (ClickHouse → migrate → collector → flow-ui + HyperDX), `make down` stops them all, `make reset` also drops the ClickHouse and HyperDX Mongo volumes |
 | `make build` | Build all service images |
