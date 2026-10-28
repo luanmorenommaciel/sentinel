@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from otelgen.exporters.base import Exporter
 from otelgen.model import LogSignal, MetricSignal, Signal, SpanSignal
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     pass
@@ -291,15 +294,15 @@ class OTLPExporter(Exporter):
 
     def close(self) -> None:
         self.flush()
-        try:
-            self._span_exporter.shutdown()
-        except Exception:
-            pass
-        try:
-            self._log_exporter.shutdown()
-        except Exception:
-            pass
-        try:
-            self._metric_exporter.shutdown()
-        except Exception:
-            pass
+        # Teardown is best-effort by design: one exporter failing must not stop
+        # the other two from shutting down. It is no longer silent, though — a
+        # swallowed shutdown error is how a half-closed exporter goes unnoticed.
+        for name, exporter in (
+            ("span", self._span_exporter),
+            ("log", self._log_exporter),
+            ("metric", self._metric_exporter),
+        ):
+            try:
+                exporter.shutdown()
+            except Exception:
+                log.warning("%s exporter shutdown failed", name, exc_info=True)

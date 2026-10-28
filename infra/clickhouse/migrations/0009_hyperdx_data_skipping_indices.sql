@@ -1,0 +1,24 @@
+-- `system.data_skipping_indices` for the HyperDX role (ADR-0011 — extends `0007_hyperdx_role.sql`).
+--
+-- A new file, not an edit to `0007`: that file has been applied, and the runner
+-- refuses a changed checksum with exit 3 (`migrate.sh` §exit codes). `0007`
+-- granted `system.tables` and `system.columns` for table and column discovery;
+-- this is the third system table that same introspection reads.
+--
+-- Found by a full-stack run of `hyperdx/hyperdx:2.40.0`: three HTTP 500s, each
+-- the same exception in `system.query_log` (code 497, `ExceptionBeforeStart`),
+-- raised while it introspected `bronze.otel_logs`, `bronze.otel_traces` and
+-- `system.tables`:
+--
+--   Code: 497 … sentinel_hyperdx_u: Not enough privileges. To execute this
+--   query, it's necessary to have the grant SELECT(name, type, type_full, expr,
+--   granularity, database, `table`) ON system.data_skipping_indices.
+--   (ACCESS_DENIED)
+--
+-- Search over bronze was unaffected; only the schema-introspection panel broke.
+--
+-- One table, SELECT only, to the role rather than the user (the 0007 pattern).
+-- It exposes index names and expressions, metadata of the same kind the role
+-- already reads from `system.tables` and `system.columns`. Nothing here is
+-- writable and nothing broader than this table is granted.
+GRANT SELECT ON system.data_skipping_indices TO sentinel_hyperdx;

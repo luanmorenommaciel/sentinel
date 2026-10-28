@@ -97,6 +97,11 @@ flowchart LR
 | lineage · 5 s | `FLOW_UI_LINEAGE_INTERVAL` | `count()` and `system.tables` read part metadata; no scan |
 | contract · 30 s | `FLOW_UI_CONTRACT_INTERVAL` | probes the **unindexed** `ResourceAttributes` Map — 1.26 s measured |
 
+Bronze fallback removal is operationally gated: remove a board's Bronze path only in the first
+PR after its Silver coverage has reached the 30-day Bronze TTL horizon continuously for seven days.
+The snapshot `source` field makes that observation auditable; CI tests the predicate, not seven
+days of a target environment.
+
 Each slow task owns its own `while True` and swallows its own exceptions, so a failing
 ClickHouse degrades the boards it feeds and never stops the tick. `stop()` cancels and awaits
 both, so a reload does not leak them.

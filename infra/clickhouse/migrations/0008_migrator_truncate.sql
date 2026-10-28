@@ -1,0 +1,35 @@
+-- `TRUNCATE` for the migrator role (REQ-H-03, REQ-H-04 — extends `0002_roles.sql`).
+--
+-- A new file, not an edit to `0002`: that file has been applied, and the runner
+-- refuses a changed checksum with exit 3 (`migrate.sh` §exit codes). `0002`'s own
+-- header says a later change to this posture needs a new migration, and this is
+-- that migration.
+--
+-- Found by running the `integration` job for the first time (run `37875017554`).
+-- Its ClickHouse round-trip starts from a clean slate with
+-- `TRUNCATE TABLE bronze.otel_logs`, and measured against 25.4.13.22 the
+-- migrator could not:
+--
+--   Code: 497 … sentinel_migrator_u: Not enough privileges. To execute this
+--   query, it's necessary to have the grant TRUNCATE ON bronze.otel_logs.
+--   (ACCESS_DENIED)
+--
+-- `TRUNCATE` is its own privilege in ClickHouse and `DROP` does not imply it,
+-- which is the whole of the surprise here: the role already holds
+-- `CREATE TABLE` + `DROP` on both databases, so it can already delete a table
+-- and build it again. `TRUNCATE` is strictly weaker than that pair, so this
+-- grant widens nothing the role could not already do — it only lets it do the
+-- cheap version. Verified empirically before committing: with the grant the same
+-- statement succeeds and `count()` returns 0.
+--
+-- Granted on `bronze.*` AND `silver.*` even though only bronze is needed today.
+-- `0002` grants the migrator the identical DDL set over both, and an asymmetry
+-- between them would read as a deliberate distinction rather than as the
+-- accident it would be.
+--
+-- Deliberately NOT granted to `sentinel_collector`: the collector's clean-slate
+-- problem does not exist (it only appends), and REQ-H-04 is the reason that role
+-- stays at INSERT + SELECT.
+
+GRANT TRUNCATE ON bronze.* TO sentinel_migrator;
+GRANT TRUNCATE ON silver.* TO sentinel_migrator;
