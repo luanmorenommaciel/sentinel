@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed** — discussion open in `#crew-b` |
+| Status | **Accepted** (2026-08-12, recorded 2026-10-06) — Rust selected. See *Selection* below; the argument text is left as written |
 | Date | 2026-06-01 |
 | Owners | Pod 2 (Collector) — Alex Botelho, Ruan Pomponet, Victor Urquiola |
 | Proposer | Victor Urquiola |
@@ -52,6 +52,51 @@ Concretely:
   4. Ecosystem maturity for OTLP + ClickHouse
   5. Container image size (matters for cold start in CI / preview envs)
 - Pick the winner at end of Sprint 2.
+
+## Selection — recorded 2026-10-06, taken 2026-08-12
+
+**Rust was selected.** `services/collector-go/` was removed from the repository in
+[PR #28](https://github.com/luanmorenommaciel/sentinel/pull/28) (merged 2026-08-12,
+*"feat: standardize Sentinel on the Rust collector"*), and `services/collector-rust/` has been the
+only ingestion path since. This section records that outcome; everything above is left exactly as
+proposed on 2026-06-01, because an ADR that is edited to agree with the present stops being a
+record of what was argued.
+
+**The decision was taken by merge, not by the process this ADR specified**, and the difference is
+worth stating plainly rather than leaving the status field to imply otherwise.
+
+What §Decision asked for:
+
+- the same minimum-viable collector built in both languages, ~1 week each;
+- a stress test on the shared 8 GB VM measuring sustained throughput, p99 latency, RSS at
+  saturation, image size and cold-start;
+- five ranked decision criteria, led by Pod 2 team velocity;
+- a winner picked at end of Sprint 2, with results published as ADR-0005.
+
+What exists:
+
+- **No head-to-head measurement of a Go collector against the Rust one is recorded anywhere in
+  this repository.** The performance figures in `docs/research/rust-otel-collector.md` are
+  third-party brackets — Discord's Go→Rust migration, upstream OTel Collector throughput — and that
+  document says of them, in its own words, "these aren't apples-to-apples for our workload".
+- PR #28's rationale states that "the collector bake-off has converged on Rust", but its Validation
+  section lists Rust-side checks only (`cargo fmt`, `clippy`, unit/golden/gRPC/doc tests).
+- **ADR-0005 was never the bake-off report.** That number was taken by the ClickHouse storage
+  schema, which ADR-0007 has since superseded. The comparative write-up this ADR promised does
+  not exist.
+- What *is* measured is the Rust collector alone, end to end: 233,100 signals in 4.5s, 0 rejected
+  / 0 dropped / 0 export errors, 32.3 ms average export latency (2026-08-04, README §8). Those are
+  absolute numbers against the pipeline's requirements, not comparative ones against Go.
+
+**So the honest status is: the outcome is settled and the comparison is not.** Rust is selected,
+has been in sole production use since 2026-08-12, and meets the collector health gates. What the
+project does not have — and should stop implying it has — is evidence that Rust beat Go on the five
+criteria listed above. Anyone citing this ADR as proof that the bake-off was run should read this
+section instead.
+
+This matters mainly if the choice is ever revisited: there is no baseline to revisit *from*. Were
+that to happen, the bake-off would have to be run from scratch, against a Go collector that no
+longer exists in the tree.
 
 ## Options considered
 

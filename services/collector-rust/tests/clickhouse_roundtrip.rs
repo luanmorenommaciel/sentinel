@@ -46,9 +46,7 @@ use std::path::PathBuf;
 
 use tokio::time::{sleep, Duration, Instant};
 
-use sentinel_collector::clickhouse_exporter::{
-    build_client_with_database, url_from_env, DEFAULT_CLICKHOUSE_URL,
-};
+mod support;
 
 /// Resolve the path to the golden fixture from the crate's manifest directory.
 /// Tests run from `services/collector-rust/`; the fixture lives two levels up.
@@ -64,10 +62,10 @@ fn golden_path() -> PathBuf {
     p
 }
 
-/// A ClickHouse client targeting the `bronze` database.
+/// A ClickHouse client targeting the `bronze` database, with the credential the
+/// environment supplies. See `tests/support/mod.rs` for why one is needed.
 fn bronze_client() -> clickhouse::Client {
-    let url = url_from_env().unwrap_or_else(|| DEFAULT_CLICKHOUSE_URL.to_string());
-    build_client_with_database(&url, "bronze")
+    support::client("bronze")
 }
 
 /// Truncate the bronze tables the collector writes, for idempotent re-runs.

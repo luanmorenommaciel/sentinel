@@ -1,0 +1,60 @@
+[
+  {
+    "name": "Logs",
+    "kind": "log",
+    "connection": "Sentinel ClickHouse",
+    "from": { "databaseName": "bronze", "tableName": "otel_logs" },
+    "timestampValueExpression": "TimestampTime",
+    "displayedTimestampValueExpression": "Timestamp",
+    "implicitColumnExpression": "Body",
+    "serviceNameExpression": "ServiceName",
+    "bodyExpression": "Body",
+    "severityTextExpression": "SeverityText",
+    "eventAttributesExpression": "LogAttributes",
+    "resourceAttributesExpression": "ResourceAttributes",
+    "traceIdExpression": "TraceId",
+    "spanIdExpression": "SpanId",
+    "defaultTableSelectExpression": "Timestamp,ServiceName,SeverityText,Body",
+    "traceSourceId": "Traces",
+    "metricSourceId": "Metrics"
+  },
+  {
+    "name": "Traces",
+    "kind": "trace",
+    "connection": "Sentinel ClickHouse",
+    "from": { "databaseName": "bronze", "tableName": "otel_traces" },
+    "timestampValueExpression": "Timestamp",
+    "displayedTimestampValueExpression": "Timestamp",
+    "implicitColumnExpression": "SpanName",
+    "serviceNameExpression": "ServiceName",
+    "eventAttributesExpression": "SpanAttributes",
+    "resourceAttributesExpression": "ResourceAttributes",
+    "traceIdExpression": "TraceId",
+    "spanIdExpression": "SpanId",
+    "parentSpanIdExpression": "ParentSpanId",
+    "spanNameExpression": "SpanName",
+    "spanKindExpression": "SpanKind",
+    "durationExpression": "Duration",
+    "durationPrecision": 9,
+    "statusCodeExpression": "StatusCode",
+    "statusMessageExpression": "StatusMessage",
+    "defaultTableSelectExpression": "Timestamp,ServiceName,StatusCode,round(Duration/1e6),SpanName",
+    "logSourceId": "Logs",
+    "metricSourceId": "Metrics"
+  },
+  {
+    "name": "Metrics",
+    "kind": "metric",
+    "connection": "Sentinel ClickHouse",
+    "from": { "databaseName": "bronze", "tableName": "" },
+    "timestampValueExpression": "TimeUnix",
+    "resourceAttributesExpression": "ResourceAttributes",
+    "metricTables": {
+      "gauge": "otel_metrics_gauge",
+      "sum": "otel_metrics_sum",
+      "histogram": "otel_metrics_histogram"
+    },
+    "logSourceId": "Logs",
+    "traceSourceId": "Traces"
+  }
+]

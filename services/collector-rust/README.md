@@ -51,6 +51,10 @@ cargo test                         # unit + integration (live-ClickHouse tests a
 
 `CLICKHOUSE_URL` and `RUST_LOG` override the config file.
 
+SERVER mode handles SIGINT (Ctrl-C) and, on Unix, SIGTERM (`docker stop`).
+Both stop the receivers and drain acknowledged buffered signals before exiting.
+Flush failures retain the exporter's existing bounded retry policy.
+
 ## Lint + test gates
 
 These are the gates `.github/workflows/rust-ci.yml` enforces:
@@ -59,7 +63,7 @@ These are the gates `.github/workflows/rust-ci.yml` enforces:
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --locked
-cargo test --test clickhouse_roundtrip --locked -- --ignored   # needs a live ClickHouse
+cargo test --locked -- --ignored                              # all live-ClickHouse tests, including shutdown flush
 cargo deny check                                               # advisories + licenses (deny.toml)
 ```
 
@@ -72,7 +76,9 @@ The enforced lint policy is package-level `[lints]` in `Cargo.toml`: `unsafe_cod
 deliberately commented out** — aspirational until a dedicated cleanup PR clears the existing
 warnings. Don't assume pedantic is on. (It becomes `[workspace.lints]` if a second Rust crate
 ever appears.) Full standards:
-[`.claude/docs/RUST_PROJECT_STANDARDS.md`](../../.claude/docs/RUST_PROJECT_STANDARDS.md).
+[`.claude/docs/RUST_PROJECT_STANDARDS.md`](../../.claude/docs/RUST_PROJECT_STANDARDS.md),
+restored on this branch; the workspace lint policy in `Cargo.toml` is the enforceable
+statement of them.
 
 ## Layout
 
@@ -98,7 +104,8 @@ services/collector-rust/
     ├── golden_parse.rs           # golden fixture → 48 logs / 48 spans / 183 metrics
     ├── grpc_smoke.rs             # server accepts OTLP
     ├── grpc_export_roundtrip.rs  # OTLP in → bronze rows out
-    └── clickhouse_roundtrip.rs   # live-ClickHouse export (#[ignore]d by default)
+    ├── clickhouse_roundtrip.rs   # live-ClickHouse export (#[ignore]d by default)
+    └── shutdown_signals.rs       # actual process SIGINT/SIGTERM + live buffer drain
 ```
 
 **Ports:** OTLP gRPC `:4317` · Prometheus `/metrics` `:9090` · ClickHouse **HTTP `:8123`**

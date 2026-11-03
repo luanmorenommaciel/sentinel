@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
+import jsonschema
 import pytest
 
 from otelgen.contract.loader import load_contract
@@ -16,8 +17,6 @@ from otelgen.scenarios.engine import ScenarioEngine
 from otelgen.seeding import make_rng
 from otelgen.signals.factory import SignalFactory
 from otelgen.topology import Topology
-
-jsonschema = pytest.importorskip("jsonschema")
 
 WINDOW_START = 1_700_000_000_000_000_000
 

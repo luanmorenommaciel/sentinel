@@ -1,0 +1,76 @@
+# The one ClickHouse definition in this repository (REQ-I-01, REQ-I-02).
+#
+# Every stack takes its ClickHouse from here via `include:`, so there is one
+# version, one set of DDL mounts and one auth posture to reason about. Before
+# this file existed, three Compose files each pinned their own image and CI
+# tested bronze on an engine the local stack did not run.
+#
+# The service is named `clickhouse` and that name is load-bearing (REQ-I-07):
+# `make migrate` and `make test-silver` reach the database with
+# `docker compose exec -T clickhouse …`, so a rename breaks S1 silently. Assert
+# `02-service-named-clickhouse.sh` inspects merged `docker compose config` for it.
+#
+# Relative mounts below resolve against THIS file's directory, not the including
+# one — measured on Compose v5.1.4 (infra/clickhouse/README.md, T03) — so every
+# consumer gets the same absolute paths without restating them.
+#
+# Deliberately absent, each for a reason:
+#   * `CLICKHOUSE_USER` / `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT` — the CI stack set
+#     these, which makes the entrypoint generate its own users file and opens a
+#     second `::/0` route independent of `zz-default-network.xml` (REQ-B-14).
+#   * the `infra/clickhouse-init.sql` and `infra/clickhouse-users.d/` mounts — both
+#     become migration `0002`'s business (T17/T19); mounting them here would keep
+#     the vestigial `otelgen` user and the dev-only network override alive.
+#   * `CLICKHOUSE_DB` — the bronze DDL creates the database itself, and the probes
+#     behind DEC-I1 §4 were measured without it.
+#   * `container_name` — the CI stack pinned `sentinel-clickhouse`. A fixed name in
+#     a shared definition would make the two stacks mutually exclusive, and nothing
+#     references it: CI only runs `up -d --wait` and `down -v`.
+#   * host port `9000` — the CI stack published it for `clickhouse-client`, but both
+#     stacks reach the client through `docker compose exec`, and the Rust crate
+#     speaks RowBinary over HTTP :8123. Publishing it would also collide with
+#     `services/generator-python/docker-compose.yaml` until T15 deletes that file.
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.4
+    ports:
+      # Local HTTP interface (+ /play UI). Host-side only: `make migrate`,
+      # `make test-silver` and every in-stack client reach the database through
+      # `docker compose exec` or the Compose network name, so moving this port
+      # changes nothing but the browser URL.
+      - "127.0.0.1:${CLICKHOUSE_HOST_PORT:-8123}:8123"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      # POD 3 canonical bronze schema (bronze.*, ADR-0007). The collector writes
+      # it directly and issues no DDL, so the tables must exist before it connects.
+      - ./init.d/01-bronze-otel.sql:/docker-entrypoint-initdb.d/01-bronze-otel.sql:ro
+      # POD 3 typed Silver models and Watcher read models (ADR-0010). CI has never
+      # mounted this file, so it has never tested the DDL the local stack runs
+      # (REQ-B-12, REQ-I-04).
+      - ./init.d/02-silver-layer.sql:/docker-entrypoint-initdb.d/02-silver-layer.sql:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/?query=SELECT+1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ulimits:
+      # ClickHouse opens many descriptors during merges.
+      nofile:
+        soft: 262144
+        hard: 262144
+
+# The volume is declared HERE and only here, with its name pinned.
+#
+# Compose's `include:` merges the included file's resources into the including
+# model, and a resource the consumer ALSO declares is a conflict, not an
+# override: `volumes.clickhouse_data conflicts with imported resource`.
+# Reproduced on Compose v2.27.0 and v2.39.4, which is what CI runs; v5.1.4
+# tolerates it, which is why a local run passed 10/10 while `repo-invariants`
+# failed on the runner.
+#
+# The pin lives here so removing the consumer's duplicate costs nothing: the
+# name travels with the import. One ClickHouse definition, one volume
+# (REQ-I-01, REQ-I-02).
+volumes:
+  clickhouse_data:
+    name: sentinel-clickhouse-data

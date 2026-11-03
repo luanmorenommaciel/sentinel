@@ -5,9 +5,31 @@
 clickhouse:
   url: http://clickhouse:8123
   database: bronze   # official POD3 bronze schema (bronze.*)
+  # Credentials are a PATH, never a value (REQ-H-05, SPEC §14.2) — which is also
+  # the only shape compatible with clippy.toml's std::env::var ban, and why there
+  # is deliberately no `password` key.
+  #
+  # T18 switched this off the passwordless `default` and onto the role migration
+  # 0002 creates. `sentinel_collector` holds INSERT on bronze.* and nothing else
+  # (DS-09): the collector issues no DDL and reads nothing back. If the clickhouse
+  # crate ever probes `system.*` for a table check, this is where it surfaces —
+  # REQ-H-06 makes the live jobs the oracle, not this file.
+  user: sentinel_collector_u
+  password_file: /etc/sentinel/secrets/ch_password
+  #
+  # Deployed, that path is a projected volume from a managed secret store, mounted
+  # 0400 and owned by the container's non-root user. An unreadable file is a
+  # startup failure naming the path only.
 
 grpc:
   listen: "[::]:4317"   # all interfaces, OTLP port
+
+# Set in YAML, never through the environment (REQ-H-15). The env port override
+# rebinds to 0.0.0.0:<port> and discards any host part this file supplies, so it
+# cannot express a loopback-only bind; a deployed environment must leave that
+# variable unset. See src/config.rs `apply_env_overrides`.
+metrics:
+  listen: "0.0.0.0:9090"
 
 contract:
   expected_version: "1.0.0"
