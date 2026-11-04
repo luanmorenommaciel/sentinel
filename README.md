@@ -202,18 +202,38 @@ make down                      # stop the stack; retain data
 make reset CONFIRM=1           # delete ClickHouse and HyperDX data
 ```
 
-`make up` creates missing local credentials, starts ClickHouse, applies migrations,
-and starts the collector, flow-ui, HyperDX and Mongo. It creates the HyperDX account
-on an empty installation and verifies login and configured sources. It prints the URLs
-and leaves telemetry generation separate. Rerun it safely after a failure; started
-services and stored data remain available for inspection. `make status` returns nonzero
-when a service is not running or is unhealthy. `make logs` accepts `TAIL` (default 100).
-Reset refuses to delete the shared ClickHouse volume if another project uses it.
+`make up` is repeatable and leaves telemetry generation separate. It prepares local
+credentials, then follows this order:
 
-The default window is `5m` for baseline and `24h` for anomaly scenarios. The latter
-includes their anomaly phases and can produce a large amount of telemetry. Set a shorter window explicitly for a quick smoke
-check; a short window may not reach a scenario's anomaly phase. `make help` lists the
-available scenarios. `make generate-stream` uses wall-clock duration instead of backfill.
+1. Starts ClickHouse and waits until it can answer a query.
+2. Applies the migration ledger before any reader or writer connects.
+3. Builds and starts `collector-rust`, then starts flow-ui, HyperDX, and HyperDX's
+   Mongo metadata store.
+4. Builds the one-shot generator image without starting it.
+5. Probes the host-published ClickHouse, collector, flow-ui, and HyperDX endpoints;
+   checks flow-ui's upstream state; then signs in to HyperDX and verifies its
+   Sentinel ClickHouse connection and Logs, Traces, and Metrics sources.
+
+On an empty HyperDX Mongo volume, `make up` creates the configured local account.
+If an account already exists, it preserves it and verifies it with the configured
+credentials. A mismatch causes `make up` to fail rather than overwrite the account.
+The services that did start remain running for `make status` and `make logs`; fix the
+reported problem and rerun `make up`. `make status` is read-only and exits nonzero when
+a required service is stopped, unhealthy, or its endpoint cannot answer.
+
+`make logs` shows the most recent 100 lines for the whole stack. Use `TAIL` to change
+the limit, `SERVICE` to select a Compose service, and `FOLLOW=1` to stream logs. `make down`
+stops containers and keeps data. `make reset CONFIRM=1` deletes ClickHouse and HyperDX
+Mongo data only after explicit confirmation, and refuses if the pinned ClickHouse volume
+belongs to or is used by another Compose project.
+
+The default window is `5m` for `baseline` and `24h` for anomaly scenarios. The latter
+includes their anomaly phases and can produce a large amount of telemetry. Set a shorter
+window explicitly for a quick smoke check; it may not reach a scenario's anomaly phase.
+`make generate` rejects unknown scenarios and fails early if the collector is unavailable.
+`make generate-all` runs every supplied scenario and inherits that per-scenario default.
+`make generate-stream` uses wall-clock duration instead of a historical backfill.
+`make help` lists the installed scenarios and the active defaults.
 
 ### Host ports
 
@@ -232,8 +252,10 @@ Compose network, so moving one changes the URL you type and nothing about the pi
 HyperDX takes `8082` rather than `8081` so that `8081` stays free as the obvious second
 choice when `8080` is gone — including for moving flow-ui itself.
 
-Set them on the make line, or copy `.env.example` to `.env` (gitignored; Compose reads it
-automatically, so `make up` then needs no flags):
+Set them on the make line, through the environment, or in a gitignored `.env` file. The
+precedence is Make command-line value, environment value, `.env`, then the documented
+default. Compose, readiness checks, printed URLs, and the HyperDX redirect use the same
+resolved port values:
 
 ```sh
 make up FLOW_UI_HOST_PORT=8081 HYPERDX_HOST_PORT=8083
@@ -258,11 +280,12 @@ deployment credential, and it sits beside the per-service users rather than repl
 | ClickHouse | `http://127.0.0.1:8123/play`, `clickhouse-client`, `curl` | `sentinel_dev_u` | `SENTINEL_DEV_PASSWORD` |
 | HyperDX | `http://127.0.0.1:8082` | `SENTINEL_DEV_EMAIL` | `SENTINEL_DEV_PASSWORD` |
 
-The email defaults to `dev@sentinel.local`. `make up` creates the password in
-`infra/secrets/dev_password` if none is configured. Set `SENTINEL_DEV_PASSWORD` in
-`.env` or the environment to use an existing credential. The service password is
-stored separately in `infra/secrets/ch_password`, readable by the non-root containers.
-Both files are gitignored and are preserved by `make down` and `make reset`.
+The email defaults to `dev@sentinel.local`. When no `SENTINEL_DEV_PASSWORD` is supplied,
+`make up` generates one in `infra/secrets/dev_password`. Set the variable in `.env`, the
+environment, or on the Make command line to use an existing password instead. The separate
+service password is generated in `infra/secrets/ch_password` and mounted into non-root
+containers. Both files are gitignored and are retained by `make down` and `make reset`.
+Do not commit, print, or reuse either local credential outside this loopback-only stack.
 
 - **ClickHouse:** created by migration `0010` (`make up` or `make migrate`). Read-only:
   `SELECT` on `bronze.*` and `silver.*` plus `system.tables` and `system.columns`, `readonly = 2`,
