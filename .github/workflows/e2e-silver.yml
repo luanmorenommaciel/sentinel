@@ -151,7 +151,7 @@ jobs:
           "
 
       - name: Generate
-        run: make generate
+        run: make generate WINDOW=5m
       - name: Wait for quiescence
         run: |
           set -uo pipefail

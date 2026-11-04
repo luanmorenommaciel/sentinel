@@ -189,48 +189,31 @@ sentinel/
 
 ## 6. Quick start — end-to-end
 
-Requires Docker (no host toolchains):
-
-Create the ignored local secret file once before the first run:
+Requires Docker with Compose, Make, curl and OpenSSL. From a clean checkout:
 
 ```sh
-cp infra/secrets/ch_password.example infra/secrets/ch_password
-# Replace its single line with a local development password.
+make up                        # start the complete stack
+make status                    # inspect all services and URLs
+make generate SCENARIO=baseline WINDOW=5m  # send a short synthetic workload
+make generate-all              # run every scenario (24h for anomaly scenarios)
+make logs                      # recent logs for all services
+make logs SERVICE=flow-ui FOLLOW=1  # follow a single service
+make down                      # stop the stack; retain data
+make reset CONFIRM=1           # delete ClickHouse and HyperDX data
 ```
 
-```sh
-make e2e                  # ClickHouse → migrations → Rust collector → generator → bronze.*
-```
+`make up` creates missing local credentials, starts ClickHouse, applies migrations,
+and starts the collector, flow-ui, HyperDX and Mongo. It creates the HyperDX account
+on an empty installation and verifies login and configured sources. It prints the URLs
+and leaves telemetry generation separate. Rerun it safely after a failure; started
+services and stored data remain available for inspection. `make status` returns nonzero
+when a service is not running or is unhealthy. `make logs` accepts `TAIL` (default 100).
+Reset refuses to delete the shared ClickHouse volume if another project uses it.
 
-Step by step, plus inspect:
-
-```sh
-make up                        # the WHOLE stack: ClickHouse → migrations → collector → flow-ui + HyperDX
-make status                    # the container table + URL list again, without starting anything
-make generate SCENARIO=black_friday SEED=42   # generate → OTLP :4317
-make logs                      # tail collector logs
-make down                      # stop every container make up started (volumes kept)
-make reset                     # stop everything + drop the ClickHouse and HyperDX Mongo volumes
-```
-
-`make up` is the one command: it starts every long-running service in order, waits for
-each one at its **host-published** port, and ends by printing `docker compose ps` plus
-where everything is. If any service never answers, it exits non-zero with that service's
-last 60 log lines and the `lsof` line to find whoever holds the port — it does not leave
-you to discover a half-started stack. A finished run looks like this:
-
-```
-── readiness (host-published ports) ─────────────────────────────────
-  ClickHouse      ready   http://127.0.0.1:8123/ping
-  collector       ready   http://127.0.0.1:9090/metrics
-  flow-ui         ready   http://127.0.0.1:8080/healthz
-  HyperDX         ready   http://127.0.0.1:8082/
-```
-
-The generator is the one service `make up` does not *start*, on purpose: it is a one-shot
-CLI (`otelgen`), not a daemon. `make up` builds its image so `make generate` is instant,
-and a service that ran `otelgen --help` and exited would sit in `docker compose ps` as
-`Exited` — a healthy stack that reads as a broken one.
+The default window is `5m` for baseline and `24h` for anomaly scenarios. The latter
+includes their anomaly phases and can produce a large amount of telemetry. Set a shorter window explicitly for a quick smoke
+check; a short window may not reach a scenario's anomaly phase. `make help` lists the
+available scenarios. `make generate-stream` uses wall-clock duration instead of backfill.
 
 ### Host ports
 
@@ -265,8 +248,8 @@ services publishing the same host port.
 
 ### Local-development login
 
-One generic, published credential for a person to type into the two UIs. **Local
-development only:** the password is public, every port binds to `127.0.0.1`, and TLS is
+A local credential for a person to type into the two UIs. **Local
+development only:** every port binds to `127.0.0.1`, and TLS is
 deferred ([DEC-2026-10-06](plan/decisions/DEC-2026-10-06-local-scope.md)). It is not a
 deployment credential, and it sits beside the per-service users rather than replacing them.
 
@@ -275,8 +258,11 @@ deployment credential, and it sits beside the per-service users rather than repl
 | ClickHouse | `http://127.0.0.1:8123/play`, `clickhouse-client`, `curl` | `sentinel_dev_u` | `SENTINEL_DEV_PASSWORD` |
 | HyperDX | `http://127.0.0.1:8082` | `SENTINEL_DEV_EMAIL` | `SENTINEL_DEV_PASSWORD` |
 
-The email defaults to `dev@sentinel.local`. The password has no default: set
-`SENTINEL_DEV_PASSWORD` in `.env` (see [`.env.example`](.env.example)) or on the make line.
+The email defaults to `dev@sentinel.local`. `make up` creates the password in
+`infra/secrets/dev_password` if none is configured. Set `SENTINEL_DEV_PASSWORD` in
+`.env` or the environment to use an existing credential. The service password is
+stored separately in `infra/secrets/ch_password`, readable by the non-root containers.
+Both files are gitignored and are preserved by `make down` and `make reset`.
 
 - **ClickHouse:** created by migration `0010` (`make up` or `make migrate`). Read-only:
   `SELECT` on `bronze.*` and `silver.*` plus `system.tables` and `system.columns`, `readonly = 2`,
@@ -285,8 +271,7 @@ The email defaults to `dev@sentinel.local`. The password has no default: set
   is set once, when the migration first runs; to change it later, `ALTER USER`
   (see `.env.example`).
 - **HyperDX:** its app login lives in its own Mongo and HyperDX 2.40.0 has no environment
-  seeding for it, so run `make hyperdx-seed` once after the stack is up (or sign up by hand
-  on first visit). The first registration wins; if an account already exists the target says
+  seeding for it, so `make up` runs `make hyperdx-seed` after the stack starts. The first registration wins; if an account already exists the target says
   so and changes nothing. HyperDX still queries ClickHouse as `sentinel_hyperdx_u`, not as the account above.
 
 Flow-ui and HyperDX are part of `make up`; these start or stop either one on its own, without the collector:
@@ -306,8 +291,7 @@ make reset-hyperdx                 # drop its Mongo volume so infra/hyperdx/sour
 make hyperdx-seed                  # create the local-dev HyperDX login on an empty Mongo
 ```
 
-The first visit asks you to create a local account, or run `make hyperdx-seed` to create the
-[local-development login](#local-development-login) (HyperDX keeps users, saved searches,
+`make up` provisions the [local-development login](#local-development-login) (HyperDX keeps users, saved searches,
 dashboards and alerts in its own Mongo; none of it is telemetry). The Logs, Traces and
 Metrics sources are already mapped onto `bronze.*`. HyperDX reads `sources.json` only into
 an empty Mongo, so after editing it run `make reset-hyperdx`. It connects as

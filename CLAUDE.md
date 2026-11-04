@@ -43,15 +43,15 @@ Makefile                   # one-command UX
 | `make status` | The same container table and URL list on its own, without starting anything |
 | `make ui` / `make down-ui` | Start or stop flow-ui independently on http://127.0.0.1:8080 |
 | `make hyperdx` / `make down-hyperdx` / `make reset-hyperdx` | Start or stop HyperDX (UI + Mongo, direct to ClickHouse as `sentinel_hyperdx_u`) on http://127.0.0.1:8082; `reset` drops its Mongo so `sources.json` is re-read (ADR-0011) |
-| `make hyperdx-seed` | Create the generic **local-dev-only** HyperDX login (`SENTINEL_DEV_EMAIL` / `SENTINEL_DEV_PASSWORD`, password set in `.env`, no default); HyperDX 2.40.0 has no env seeding, and the first registration wins. The read-only ClickHouse twin, `sentinel_dev_u`, comes from migration `0010` |
+| `make hyperdx-seed` | Create the generic **local-dev-only** HyperDX login (`SENTINEL_DEV_EMAIL` / `SENTINEL_DEV_PASSWORD`, password generated in `infra/secrets/dev_password` unless configured); HyperDX 2.40.0 has no env seeding, and the first registration wins. `make up` seeds it automatically. The read-only ClickHouse twin, `sentinel_dev_u`, comes from migration `0010` |
 | `make generate-stream DURATION=10m` | Real-time telemetry paced by the wall clock, rather than a backfilled window |
-| `make up / init / migrate / generate / logs / ps / down / reset` | Local pipeline steps; `make up` starts every container in order (ClickHouse → migrate → collector → flow-ui + HyperDX), `make down` stops them all, `make reset` also drops the ClickHouse and HyperDX Mongo volumes |
+| `make up / init / migrate / generate / logs / ps / down / reset` | Local pipeline steps; `make up` starts every container in order (ClickHouse → migrate → collector → flow-ui + HyperDX), `make down` stops them all, `make reset CONFIRM=1` also drops the ClickHouse and HyperDX Mongo volumes |
 | `make build` | Build all service images |
 | `make test` | All unit suites (`test-generator` + `test-flow-ui` + `test-hyperdx` pytest, `test-collector-rust` cargo) |
 | `make lint` | `lint-generator` + `lint-flow-ui` (ruff) + `lint-collector-rust` (cargo fmt --check + clippy) |
 | `make help` | List targets + active `SCENARIO/SEED/WINDOW` + every host port |
 
-Variables: `SCENARIO` (default `baseline`), `SEED` (`42`), `WINDOW` (`5m`).
+Variables: `SCENARIO` (default `baseline`), `SEED` (`42`), `WINDOW` (`5m` for baseline; `24h` for anomaly scenarios).
 
 **Host ports** are all declared in the Makefile, exported to Compose, loopback-only, and each
 overridable when something local already owns one — `CLICKHOUSE_HOST_PORT` (8123),
@@ -79,7 +79,7 @@ invariant 09 fails the build on a hard-coded `127.0.0.1:<port>` anywhere in it.
 
 ## Gotchas
 
-- **Stale ClickHouse volume:** `CREATE TABLE IF NOT EXISTS` won't update a changed schema. After a DDL change, `make reset` before `make up`, or inserts fail with `NO_SUCH_COLUMN`.
+- **Stale ClickHouse volume:** `CREATE TABLE IF NOT EXISTS` won't update a changed schema. After a DDL change, `make reset CONFIRM=1` before `make up`, or inserts fail with `NO_SUCH_COLUMN`.
 - **Local boundary:** host ports bind to loopback; services use the private Compose network. This is for local development and does not provide remote edge authentication or TLS.
 - The Rust collector only enters OTLP **server** mode when its config (`services/collector-rust/config.docker.yaml`) has a `grpc` section. Without it, it runs FILE mode (read `input` once, exit).
 - **ClickHouse port:** the collector's `clickhouse` crate speaks RowBinary over **HTTP :8123**, not native :9000.
