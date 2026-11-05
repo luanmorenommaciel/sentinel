@@ -5,7 +5,7 @@
 
 SCENARIO  ?= baseline
 SEED      ?= 42
-WINDOW    ?= 5m
+WINDOW    ?= $(if $(filter baseline,$(SCENARIO)),5m,24h)
 # Stream-mode knobs: DURATION is the wall-clock run cap, STEP the tick interval.
 DURATION  ?= 60s
 STEP      ?= 1s
@@ -28,32 +28,47 @@ RATE      ?= 200
 # 8080 flow-ui · 8082 HyperDX. HyperDX sits on 8082, not 8081, so that 8081 stays
 # free as the obvious second choice when 8080 is taken (`FLOW_UI_HOST_PORT=8081`).
 # Keep them distinct: invariant 03 fails the build on a duplicate host port.
-CLICKHOUSE_HOST_PORT       ?= 8123
-COLLECTOR_OTLP_HOST_PORT   ?= 4317
-COLLECTOR_METRICS_HOST_PORT?= 9090
-FLOW_UI_HOST_PORT          ?= 8080
-HYPERDX_HOST_PORT          ?= 8082
+dotenv = $(shell sed -n 's/^$(1)=//p' .env 2>/dev/null | tail -n 1)
+ifneq ($(call dotenv,CLICKHOUSE_HOST_PORT),)
+CLICKHOUSE_HOST_PORT ?= $(call dotenv,CLICKHOUSE_HOST_PORT)
+endif
+CLICKHOUSE_HOST_PORT ?= 8123
+ifneq ($(call dotenv,COLLECTOR_OTLP_HOST_PORT),)
+COLLECTOR_OTLP_HOST_PORT ?= $(call dotenv,COLLECTOR_OTLP_HOST_PORT)
+endif
+COLLECTOR_OTLP_HOST_PORT ?= 4317
+ifneq ($(call dotenv,COLLECTOR_METRICS_HOST_PORT),)
+COLLECTOR_METRICS_HOST_PORT ?= $(call dotenv,COLLECTOR_METRICS_HOST_PORT)
+endif
+COLLECTOR_METRICS_HOST_PORT ?= 9090
+ifneq ($(call dotenv,FLOW_UI_HOST_PORT),)
+FLOW_UI_HOST_PORT ?= $(call dotenv,FLOW_UI_HOST_PORT)
+endif
+FLOW_UI_HOST_PORT ?= 8080
+ifneq ($(call dotenv,HYPERDX_HOST_PORT),)
+HYPERDX_HOST_PORT ?= $(call dotenv,HYPERDX_HOST_PORT)
+endif
+HYPERDX_HOST_PORT ?= 8082
 export CLICKHOUSE_HOST_PORT COLLECTOR_OTLP_HOST_PORT COLLECTOR_METRICS_HOST_PORT
 export FLOW_UI_HOST_PORT HYPERDX_HOST_PORT
 
 # ── local-development login ──────────────────────────────────────────────────
-# ONE generic, published credential for a person to type into the two UIs:
+# One local credential for a person to type into the two UIs:
 #
 #   ClickHouse (Play at $(CH_URL)/play, clickhouse-client)  sentinel_dev_u / password
 #   HyperDX    (the app login at $(HYPERDX_URL))             email / password
 #
-# LOCAL DEVELOPMENT ONLY: the password is public, the ports are loopback-bound and
+# LOCAL DEVELOPMENT ONLY: the ports are loopback-bound and
 # TLS is deferred (DEC-2026-10-06-local-scope). It does not replace the per-service
 # users; those keep their gitignored password file. The ClickHouse user is created by
 # migration 0010 (`make migrate`) and the HyperDX account by `make hyperdx-seed`.
 #
 # Resolution order, first hit wins: the make line / environment, then a line in
-# `.env`. The password has NO default: set SENTINEL_DEV_PASSWORD in `.env` or the
-# environment; `make migrate` and `make hyperdx-seed` refuse to run without it. The
-# email still defaults below. `.env` is read for these three keys only: Compose
-# does not consume them, so nothing else would see an edit there.
-dotenv = $(shell sed -n 's/^$(1)=//p' .env 2>/dev/null | tail -n 1)
-SENTINEL_DEV_PASSWORD ?= $(call dotenv,SENTINEL_DEV_PASSWORD)
+# `.env`, then the generated gitignored password file. The email defaults below.
+SENTINEL_DEV_PASSWORD ?= $(or $(call dotenv,SENTINEL_DEV_PASSWORD),$(shell cat infra/secrets/dev_password 2>/dev/null))
+ifeq ($(strip $(SENTINEL_DEV_PASSWORD)),)
+SENTINEL_DEV_PASSWORD = $(shell cat infra/secrets/dev_password 2>/dev/null)
+endif
 SENTINEL_DEV_EMAIL    ?= $(or $(call dotenv,SENTINEL_DEV_EMAIL),dev@sentinel.local)
 export SENTINEL_DEV_PASSWORD SENTINEL_DEV_EMAIL
 
@@ -62,7 +77,7 @@ METRICS_URL := http://127.0.0.1:$(COLLECTOR_METRICS_HOST_PORT)/metrics
 FLOW_UI_URL := http://127.0.0.1:$(FLOW_UI_HOST_PORT)
 HYPERDX_URL := http://127.0.0.1:$(HYPERDX_HOST_PORT)
 
-.PHONY: help up status init migrate generate generate-stream ui down-ui hyperdx down-hyperdx reset-hyperdx hyperdx-seed \
+.PHONY: help local-setup up status init migrate generate generate-all generate-stream ui down-ui hyperdx down-hyperdx reset-hyperdx hyperdx-seed \
         e2e down reset logs ps \
         build test test-generator test-collector-rust test-flow-ui test-hyperdx \
         test-generator-integration test-backfill audit-python audit-images audit-images-built \
@@ -165,13 +180,18 @@ help:                ## Show this help
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  SCENARIO=$(SCENARIO)  SEED=$(SEED)  WINDOW=$(WINDOW)  PYTHON_IMAGE=$(PYTHON_IMAGE)"
+	@echo "  Scenarios: $(basename $(notdir $(wildcard services/generator-python/config/scenarios/*.yaml)))"
+	@echo "  Prerequisites: Docker with Compose, Make, curl and openssl."
 	@echo "  DURATION=$(DURATION)  STEP=$(STEP)  RATE=$(RATE)"
 	@echo ""
 	@echo "  host ports (all loopback-only; override any of them on the make line):"
 	@echo "    CLICKHOUSE_HOST_PORT=$(CLICKHOUSE_HOST_PORT)  COLLECTOR_OTLP_HOST_PORT=$(COLLECTOR_OTLP_HOST_PORT)  COLLECTOR_METRICS_HOST_PORT=$(COLLECTOR_METRICS_HOST_PORT)"
 	@echo "    FLOW_UI_HOST_PORT=$(FLOW_UI_HOST_PORT)  HYPERDX_HOST_PORT=$(HYPERDX_HOST_PORT)"
 
-up:                  ## Start the WHOLE stack: ClickHouse → migrations → collector → flow-ui + HyperDX
+local-setup:
+	@bash scripts/local-setup.sh
+
+up: local-setup     ## Start the whole stack with local credentials
 	@echo "── starting the Sentinel stack ──────────────────────────────────────"
 	docker compose up -d --wait clickhouse
 	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
@@ -236,6 +256,9 @@ up:                  ## Start the WHOLE stack: ClickHouse → migrations → col
 	$(call wait_http,collector,$(METRICS_URL),30,collector-rust,$(COLLECTOR_METRICS_HOST_PORT),COLLECTOR_METRICS_HOST_PORT)
 	$(call wait_http,flow-ui,$(FLOW_UI_URL)/healthz,30,flow-ui,$(FLOW_UI_HOST_PORT),FLOW_UI_HOST_PORT)
 	$(call wait_http,HyperDX,$(HYPERDX_URL)/,60,hyperdx,$(HYPERDX_HOST_PORT),HYPERDX_HOST_PORT)
+	@$(MAKE) --no-print-directory hyperdx-seed
+	@HYPERDX_URL=$(HYPERDX_URL) bash scripts/hyperdx-check.sh
+	@curl -fsS $(FLOW_UI_URL)/healthz | docker compose exec -T hyperdx node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{let h=JSON.parse(s);if(!h.collector||!h.clickhouse)process.exit(1)});' || { echo "flow-ui cannot reach its dependencies" >&2; exit 1; }
 	@$(MAKE) --no-print-directory status
 
 # Printed at the end of `up` and callable on its own. `up` is only finished when
@@ -244,16 +267,26 @@ up:                  ## Start the WHOLE stack: ClickHouse → migrations → col
 status:              ## Show every container plus the URL of each host-published port
 	@echo ""
 	@echo "── containers ───────────────────────────────────────────────────────"
-	@docker compose ps
+	@docker compose ps -a
+
 	@echo ""
 	@echo "── where it all is ──────────────────────────────────────────────────"
 	@printf '  %-16s%s\n' 'ClickHouse'   '$(CH_URL)/play'
 	@printf '  %-16s%s\n' 'collector'    'OTLP 127.0.0.1:$(COLLECTOR_OTLP_HOST_PORT) · metrics $(METRICS_URL)'
 	@printf '  %-16s%s\n' 'flow-ui'      '$(FLOW_UI_URL)'
-	@printf '  %-16s%s\n' 'HyperDX'      '$(HYPERDX_URL)   (first visit: sign up, or make hyperdx-seed)'
-	@printf '  %-16s%s\n' 'local-dev login' 'ClickHouse sentinel_dev_u · HyperDX $(SENTINEL_DEV_EMAIL) · password from SENTINEL_DEV_PASSWORD in .env (local only)'
-	@printf '  %-16s%s\n' 'generator'    'one-shot: make generate / make generate-stream / make e2e'
+	@printf '  %-16s%s\n' 'HyperDX'      '$(HYPERDX_URL)'
+	@printf '  %-16s%s\n' 'local-dev login' 'ClickHouse sentinel_dev_u · HyperDX $(SENTINEL_DEV_EMAIL) · password: infra/secrets/dev_password or configured environment/.env'
+	@printf '  %-16s%s\n' 'generator'    'one-shot: make generate / make generate-all / make generate-stream'
 	@echo ""
+	@for svc in clickhouse collector-rust flow-ui hyperdx-mongo hyperdx; do \
+		cid=$$(docker compose ps -q "$$svc"); \
+		[ -n "$$cid" ] || { echo "$$svc is not running" >&2; exit 1; }; \
+		state=$$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$$cid"); \
+		case "$$state" in running\ healthy|running\ ) ;; *) echo "$$svc: $$state" >&2; exit 1;; esac; \
+	done
+	@for url in $(CH_URL)/ping $(METRICS_URL) $(FLOW_UI_URL)/healthz $(HYPERDX_URL)/api/ready; do \
+		curl -fsS --max-time 5 "$$url" >/dev/null || { echo "not ready: $$url" >&2; exit 1; }; \
+	done
 
 init:                ## No-op: the canonical bronze schema auto-applies on ClickHouse boot
 	@echo "Rust → canonical bronze schema (bronze.*) auto-applies on ClickHouse boot via infra/clickhouse/init.d/; nothing to apply"
@@ -295,12 +328,22 @@ test-backfill:        ## Verify the backfill runner refuses the live partition
 	bash infra/clickhouse/backfill/tests/canonical-sync.test.sh
 
 generate:            ## Run the generator → OTLP :4317 (SCENARIO / SEED / WINDOW configurable)
-	docker compose run --rm generator \
+	@test -f "services/generator-python/config/scenarios/$(SCENARIO).yaml" || { echo "Unknown scenario: $(SCENARIO); see make help" >&2; exit 1; }
+	@curl -fsS --max-time 5 $(METRICS_URL) >/dev/null || { echo "Collector unavailable; run make up first" >&2; exit 1; }
+	docker compose run --rm --no-deps generator \
 		--scenario $(SCENARIO) --seed $(SEED) --window $(WINDOW) \
 		--delivery otlp --otlp-endpoint http://collector:4317
 
+generate-all:        ## Generate every scenario over the configured window
+	@for file in services/generator-python/config/scenarios/*.yaml; do \
+		scenario=$${file##*/}; scenario=$${scenario%.yaml}; \
+		$(MAKE) --no-print-directory generate SCENARIO="$$scenario" || exit $$?; \
+	done
+
 generate-stream:     ## Generate in real time (paced by wall clock) — DURATION / STEP / RATE
-	docker compose run --rm generator \
+	@test -f "services/generator-python/config/scenarios/$(SCENARIO).yaml" || { echo "Unknown scenario: $(SCENARIO); see make help" >&2; exit 1; }
+	@curl -fsS --max-time 5 $(METRICS_URL) >/dev/null || { echo "Collector unavailable; run make up first" >&2; exit 1; }
+	docker compose run --rm --no-deps generator \
 		--mode stream --duration $(DURATION) --step $(STEP) --rate $(RATE) \
 		--scenario $(SCENARIO) --seed $(SEED) \
 		--delivery otlp --otlp-endpoint http://collector:4317
@@ -373,7 +416,7 @@ hyperdx-seed:        ## Create the local-dev HyperDX login (SENTINEL_DEV_EMAIL /
 	case "$$code" in \
 		200) echo "HyperDX: created $$SENTINEL_DEV_EMAIL at $(HYPERDX_URL) (local development only)";; \
 		409) echo "HyperDX: an account already exists, so nothing was created (first registration wins)."; \
-		     echo "  Sign in with that account, or 'make reset-hyperdx' then 'make hyperdx-seed' to start empty.";; \
+		     echo "  The existing account is preserved; its credentials must be configured for verification.";; \
 		400) echo "HyperDX: refused the credential. The password needs 12-72 chars with upper, lower, a digit and one of !@#$$%^&*(),.?\":{}|<>;-+=" >&2; exit 1;; \
 		*)   echo "HyperDX: unexpected HTTP $$code from $(HYPERDX_URL)/api/register/password (is it up? make hyperdx)" >&2; exit 1;; \
 	esac
@@ -388,8 +431,8 @@ e2e: up init generate ## Whole stack (make up) + a generator run into bronze.*
 ps:                  ## Show running services
 	docker compose ps
 
-logs:                ## Tail the Rust collector's logs
-	docker compose logs -f collector-rust
+logs:                ## Recent logs for all services (SERVICE=name FOLLOW=1 TAIL=100)
+	docker compose logs --tail $(or $(TAIL),100) $(if $(filter 1,$(FOLLOW)),-f) $(SERVICE)
 
 # Symmetric with `up` by construction: `down` is service-agnostic, so it stops
 # whatever `up` started without a list to keep in sync. `--remove-orphans` sweeps a
@@ -398,7 +441,9 @@ logs:                ## Tail the Rust collector's logs
 down:                ## Stop every container `make up` starts (data volumes are kept)
 	docker compose down --remove-orphans
 
-reset:               ## Stop everything and drop volumes (fresh ClickHouse and HyperDX Mongo)
+reset:               ## Delete ClickHouse and HyperDX data (requires CONFIRM=1)
+	@test "$(CONFIRM)" = 1 || { echo "reset deletes ClickHouse and HyperDX data; use make reset CONFIRM=1" >&2; exit 1; }
+	@bash scripts/check-reset-volume.sh
 	docker compose down -v --remove-orphans
 
 # ── build / test / lint (all run in Docker; no host toolchains needed) ──
