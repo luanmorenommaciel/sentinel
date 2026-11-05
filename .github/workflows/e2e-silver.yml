@@ -151,7 +151,7 @@ jobs:
           "
 
       - name: Generate
-        run: make generate
+        run: make generate WINDOW=5m
       - name: Wait for quiescence
         run: |
           set -uo pipefail
@@ -240,6 +240,9 @@ jobs:
             echo "::endgroup::"
           done
 
+      # The Makefile refuses a bare `make reset`: dropping the ClickHouse and
+      # HyperDX volumes is explicit data loss and needs CONFIRM=1. This runner
+      # is ephemeral, so that is the cleanup.
       - name: Down
         if: always()
-        run: make reset
+        run: make reset CONFIRM=1

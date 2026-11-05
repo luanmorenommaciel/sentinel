@@ -17,6 +17,7 @@ venv/
 target/
 **/*.rs.bk
 .cargo-home/
+.taskspec/
 
 # Local infra / data
 clickhouse_data/

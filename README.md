@@ -9,7 +9,7 @@ Sentinel is an open-source observability + remediation system for data pipelines
 
 ## 1. System architecture
 
-Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling (bronze → silver → read models). **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top. Alongside the path — not in it — **`flow-ui` observes the pipeline** from the collector's `/metrics` and read-only views of bronze and silver, and **HyperDX** lets an operator search the same bronze rows; nothing in the path depends on either being up. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
+Telemetry flows top-to-bottom through the Pods. **Phase 1 builds the data path:** Pod 1 *generates* telemetry and defines the OTLP contract, Pod 2 *ingests, validates, transforms, and exports* it, and Pod 3 *consumes* Pod 2's output contract for data modelling (bronze → silver → read models). **Watchers, detection, CrewAI-driven reasoning, and remediation are a future phase** layered on top. Alongside the path — not in it — **`flow-ui` observes the pipeline** from the collector's `/metrics` and read-only views of bronze and silver, **HyperDX** lets an operator search the same bronze rows, and the **end-user dashboard** (`:8083`) presents error-span business health for VP/CEO/CTO review; nothing in the path depends on those UIs being up. Each **gold gate** is a **contract boundary** — a versioned interface owned by the upstream Pod and consumed by the downstream one.
 
 ```mermaid
 flowchart TB
@@ -59,10 +59,12 @@ flowchart TB
     subgraph OBS["🔭 OBSERVABILITY · reads the path, is not in it"]
         FLOW["flow-ui :8080<br/>four boards · read-only"]
         HDX["HyperDX :8082<br/>search · traces · dashboards<br/>sentinel_hyperdx_u · SELECT only"]
+        DASH["end-user dashboard :8083<br/>executive error health<br/>sentinel_dashboard_u · SELECT only"]
     end
     POD2 -. "/metrics :9090" .-> FLOW
     STORE -. "bronze.* + silver.* read-only" .-> FLOW
     STORE -. "bronze.* + silver.* · HTTP :8123 · SELECT" .-> HDX
+    STORE -. "bronze.otel_traces Error spans · SELECT" .-> DASH
 
     classDef contract fill:#fde68a,stroke:#b45309,stroke-width:4px,color:#3a2f00;
     classDef zone fill:#f1f5f9,stroke:#94a3b8,color:#0f172a;
@@ -87,6 +89,23 @@ flowchart TB
 | **Receive** | OTLP gRPC `:4317` (real clients) **or** NDJSON file (Pod 1's generator), both conforming to **`contracts/generator/v1/otlp_output.schema.json` v1.0.0** |
 | **Process** | Parse/transform → internal `Signal` (log / span / metric) → typed rows; derive span duration; route metrics by type |
 | **Deliver** | Rows in the **bronze** `bronze.otel_logs` / `otel_traces` / `otel_metrics_gauge` / `otel_metrics_sum`, per the **Pod 2 → Pod 3 read contract**; Pod 3 builds silver (rolling-stats, read models) on top |
+
+### Interactive runtime architecture (Archify)
+
+The Mermaid figure above is the Pod / contract story. For a **local runtime** map of Compose services, host ports, credentials, and read-layer UIs, open the interactive Archify diagram:
+
+- **HTML (review in a browser):** [`docs/architecture/sentinel-runtime.html`](docs/architecture/sentinel-runtime.html)
+- **Machine-readable spec:** [`docs/architecture/sentinel-runtime.architecture.json`](docs/architecture/sentinel-runtime.architecture.json)
+
+That artifact was authored from a full-repo map of components, services, and infra config, under these rules:
+
+1. **8–12 core components** — operator, generator (otelgen), contracts SSOT, secrets mounts, `collector-rust`, ClickHouse, `flow-ui`, HyperDX, Mongo (HyperDX metadata), end-user dashboard.
+2. **Primary data path emphasized** — `make generate` → OTLP gRPC `:4317` → HTTP INSERT `:8123` into `bronze.*` (readers are side paths, not on the ingest critical path).
+3. **External dependencies and trust boundaries** — Docker Compose private network; host loopback publish `127.0.0.1`; least-privilege ClickHouse roles via password files; Mongo unpublished on the host.
+4. **Clean topology** — ports, env paths (`CONTRACTS_DIR`, `CLICKHOUSE_PASSWORD_FILE`, `MONGO_URI`), and role names live on node cards / footer cards rather than extra edges.
+5. **SRC evidence on nodes** — each component links back to verified file/line ranges at a pinned git revision (`meta.repository` in the JSON), so you can trace diagram claims to Compose, Makefile, collector config, and ClickHouse DDL.
+
+Guided views in the HTML: **Primary ingest path**, **Contracts and credentials**, **Read layer UIs**. Theme switch, pan/zoom, search, and export are built into the viewer.
 
 ---
 
@@ -170,13 +189,17 @@ sentinel/
 │
 ├── docs/                          # 🔗 SHARED · cross-cutting knowledge
 │   ├── adr/                       #   architecture decisions (numbered, Pod-spanning)
+│   ├── architecture/              #   interactive Archify runtime diagram (HTML + JSON)
+│   │   ├── sentinel-runtime.html
+│   │   └── sentinel-runtime.architecture.json
 │   └── research/ · proposals/     #   design notes, gap analysis, decision proposals
 │
 ├── services/                      # 🧩 PER-COMPONENT · self-contained implementations
 │   ├── collector-rust/            #   Pod 2 — selected Rust collector. Cargo/Docker/tests ✅
 │   ├── generator-python/          #   Pod 1 — Python telemetry generator (otelgen)
-│   └── flow-ui/                   #   the pipeline watching itself — four boards, read-only
-│       └── ARCHITECTURE.md      #     how it is built (FastAPI + SSE + no-framework SVG)
+│   ├── flow-ui/                   #   the pipeline watching itself — four boards, read-only
+│   │   └── ARCHITECTURE.md        #     how it is built (FastAPI + SSE + no-framework SVG)
+│   └── end-user-dashboard/        #   executive error-span board (Express + Vite/React) · :8083
 │
 ├── .github/
 │   ├── PULL_REQUEST_TEMPLATE.md   # what · why (the linked issue) · tests/evidence
@@ -189,52 +212,57 @@ sentinel/
 
 ## 6. Quick start — end-to-end
 
-Requires Docker (no host toolchains):
-
-Create the ignored local secret file once before the first run:
+Requires Docker with Compose, Make, curl and OpenSSL. From a clean checkout:
 
 ```sh
-cp infra/secrets/ch_password.example infra/secrets/ch_password
-# Replace its single line with a local development password.
+make up                        # start the complete stack
+make status                    # inspect all services and URLs
+make generate SCENARIO=baseline WINDOW=5m  # send a short synthetic workload
+make generate-all              # run every scenario (24h for anomaly scenarios)
+make logs                      # recent logs for all services
+make logs SERVICE=flow-ui FOLLOW=1  # follow a single service
+make down                      # stop the stack; retain data
+make reset CONFIRM=1           # delete ClickHouse and HyperDX data
 ```
 
-```sh
-make e2e                  # ClickHouse → migrations → Rust collector → generator → bronze.*
-```
+`make up` is repeatable and leaves telemetry generation separate. It prepares local
+credentials, then follows this order:
 
-Step by step, plus inspect:
+1. Starts ClickHouse and waits until it can answer a query.
+2. Applies the migration ledger before any reader or writer connects (includes
+   `0011_dashboard_role.sql` for `sentinel_dashboard_u`).
+3. Builds and starts `collector-rust`, then starts flow-ui, HyperDX (and its Mongo
+   metadata store), and the **end-user dashboard**.
+4. Builds the one-shot generator image without starting it.
+5. Probes the host-published ClickHouse, collector, flow-ui, HyperDX, and
+   **dashboard** (`/healthz`) endpoints; checks flow-ui's upstream state; then signs
+   in to HyperDX and verifies its Sentinel ClickHouse connection and Logs, Traces,
+   and Metrics sources.
 
-```sh
-make up                        # the WHOLE stack: ClickHouse → migrations → collector → flow-ui + HyperDX
-make status                    # the container table + URL list again, without starting anything
-make generate SCENARIO=black_friday SEED=42   # generate → OTLP :4317
-make logs                      # tail collector logs
-make down                      # stop every container make up started (volumes kept)
-make reset                     # stop everything + drop the ClickHouse and HyperDX Mongo volumes
-```
+On an empty HyperDX Mongo volume, `make up` creates the configured local account.
+If an account already exists, it preserves it and verifies it with the configured
+credentials. A mismatch causes `make up` to fail rather than overwrite the account.
+The services that did start remain running for `make status` and `make logs`; fix the
+reported problem and rerun `make up`. `make status` is read-only and exits nonzero when
+a required service is stopped, unhealthy, or its endpoint cannot answer.
 
-`make up` is the one command: it starts every long-running service in order, waits for
-each one at its **host-published** port, and ends by printing `docker compose ps` plus
-where everything is. If any service never answers, it exits non-zero with that service's
-last 60 log lines and the `lsof` line to find whoever holds the port — it does not leave
-you to discover a half-started stack. A finished run looks like this:
+`make logs` shows the most recent 100 lines for the whole stack. Use `TAIL` to change
+the limit, `SERVICE` to select a Compose service, and `FOLLOW=1` to stream logs. `make down`
+stops containers and keeps data. `make reset CONFIRM=1` deletes ClickHouse and HyperDX
+Mongo data only after explicit confirmation, and refuses if the pinned ClickHouse volume
+belongs to or is used by another Compose project.
 
-```
-── readiness (host-published ports) ─────────────────────────────────
-  ClickHouse      ready   http://127.0.0.1:8123/ping
-  collector       ready   http://127.0.0.1:9090/metrics
-  flow-ui         ready   http://127.0.0.1:8080/healthz
-  HyperDX         ready   http://127.0.0.1:8082/
-```
-
-The generator is the one service `make up` does not *start*, on purpose: it is a one-shot
-CLI (`otelgen`), not a daemon. `make up` builds its image so `make generate` is instant,
-and a service that ran `otelgen --help` and exited would sit in `docker compose ps` as
-`Exited` — a healthy stack that reads as a broken one.
+The default window is `5m` for `baseline` and `24h` for anomaly scenarios. The latter
+includes their anomaly phases and can produce a large amount of telemetry. Set a shorter
+window explicitly for a quick smoke check; it may not reach a scenario's anomaly phase.
+`make generate` rejects unknown scenarios and fails early if the collector is unavailable.
+`make generate-all` runs every supplied scenario and inherits that per-scenario default.
+`make generate-stream` uses wall-clock duration instead of a historical backfill.
+`make help` lists the installed scenarios and the active defaults.
 
 ### Host ports
 
-All five bind to `127.0.0.1` only, and each is overridable when something local already
+All six bind to `127.0.0.1` only, and each is overridable when something local already
 owns it. Service-to-service traffic always uses the container ports over the private
 Compose network, so moving one changes the URL you type and nothing about the pipeline.
 
@@ -245,12 +273,16 @@ Compose network, so moving one changes the URL you type and nothing about the pi
 | `COLLECTOR_METRICS_HOST_PORT` | `9090` | the collector's Prometheus `/metrics` |
 | `FLOW_UI_HOST_PORT` | `8080` | flow-ui's four boards |
 | `HYPERDX_HOST_PORT` | `8082` | HyperDX search, traces and dashboards |
+| `DASHBOARD_HOST_PORT` | `8083` | end-user executive dashboard (error-span business health) |
 
 HyperDX takes `8082` rather than `8081` so that `8081` stays free as the obvious second
-choice when `8080` is gone — including for moving flow-ui itself.
+choice when `8080` is gone — including for moving flow-ui itself. The executive dashboard
+defaults to `8083` so it stays clear of both.
 
-Set them on the make line, or copy `.env.example` to `.env` (gitignored; Compose reads it
-automatically, so `make up` then needs no flags):
+Set them on the make line, through the environment, or in a gitignored `.env` file. The
+precedence is Make command-line value, environment value, `.env`, then the documented
+default. Compose, readiness checks, printed URLs, and the HyperDX redirect use the same
+resolved port values:
 
 ```sh
 make up FLOW_UI_HOST_PORT=8081 HYPERDX_HOST_PORT=8083
@@ -265,8 +297,8 @@ services publishing the same host port.
 
 ### Local-development login
 
-One generic, published credential for a person to type into the two UIs. **Local
-development only:** the password is public, every port binds to `127.0.0.1`, and TLS is
+A local credential for a person to type into the two UIs. **Local
+development only:** every port binds to `127.0.0.1`, and TLS is
 deferred ([DEC-2026-10-06](plan/decisions/DEC-2026-10-06-local-scope.md)). It is not a
 deployment credential, and it sits beside the per-service users rather than replacing them.
 
@@ -275,8 +307,12 @@ deployment credential, and it sits beside the per-service users rather than repl
 | ClickHouse | `http://127.0.0.1:8123/play`, `clickhouse-client`, `curl` | `sentinel_dev_u` | `SENTINEL_DEV_PASSWORD` |
 | HyperDX | `http://127.0.0.1:8082` | `SENTINEL_DEV_EMAIL` | `SENTINEL_DEV_PASSWORD` |
 
-The email defaults to `dev@sentinel.local`. The password has no default: set
-`SENTINEL_DEV_PASSWORD` in `.env` (see [`.env.example`](.env.example)) or on the make line.
+The email defaults to `dev@sentinel.local`. When no `SENTINEL_DEV_PASSWORD` is supplied,
+`make up` generates one in `infra/secrets/dev_password`. Set the variable in `.env`, the
+environment, or on the Make command line to use an existing password instead. The separate
+service password is generated in `infra/secrets/ch_password` and mounted into non-root
+containers. Both files are gitignored and are retained by `make down` and `make reset`.
+Do not commit, print, or reuse either local credential outside this loopback-only stack.
 
 - **ClickHouse:** created by migration `0010` (`make up` or `make migrate`). Read-only:
   `SELECT` on `bronze.*` and `silver.*` plus `system.tables` and `system.columns`, `readonly = 2`,
@@ -285,15 +321,17 @@ The email defaults to `dev@sentinel.local`. The password has no default: set
   is set once, when the migration first runs; to change it later, `ALTER USER`
   (see `.env.example`).
 - **HyperDX:** its app login lives in its own Mongo and HyperDX 2.40.0 has no environment
-  seeding for it, so run `make hyperdx-seed` once after the stack is up (or sign up by hand
-  on first visit). The first registration wins; if an account already exists the target says
+  seeding for it, so `make up` runs `make hyperdx-seed` after the stack starts. The first registration wins; if an account already exists the target says
   so and changes nothing. HyperDX still queries ClickHouse as `sentinel_hyperdx_u`, not as the account above.
 
-Flow-ui and HyperDX are part of `make up`; these start or stop either one on its own, without the collector:
+Flow-ui, HyperDX, and the end-user dashboard are part of `make up`; these start or stop
+any one on its own (ClickHouse + migrations still run; the collector stays optional):
 
 ```sh
 make ui                            # start flow-ui independently → http://127.0.0.1:8080
 make down-ui                       # stop only flow-ui
+make dashboard                     # start end-user dashboard alone → http://127.0.0.1:8083
+make down-dashboard                # stop only the end-user dashboard
 make generate-stream DURATION=10m  # real-time telemetry, paced by the wall clock
 ```
 
@@ -306,8 +344,7 @@ make reset-hyperdx                 # drop its Mongo volume so infra/hyperdx/sour
 make hyperdx-seed                  # create the local-dev HyperDX login on an empty Mongo
 ```
 
-The first visit asks you to create a local account, or run `make hyperdx-seed` to create the
-[local-development login](#local-development-login) (HyperDX keeps users, saved searches,
+`make up` provisions the [local-development login](#local-development-login) (HyperDX keeps users, saved searches,
 dashboards and alerts in its own Mongo; none of it is telemetry). The Logs, Traces and
 Metrics sources are already mapped onto `bronze.*`. HyperDX reads `sources.json` only into
 an empty Mongo, so after editing it run `make reset-hyperdx`. It connects as
@@ -315,15 +352,16 @@ an empty Mongo, so after editing it run `make reset-hyperdx`. It connects as
 no collector of its own: ingestion stays with collector-rust. If `8082` is taken,
 `HYPERDX_HOST_PORT=8083 make hyperdx`.
 
-All host-published ports bind to `127.0.0.1`; generator, collector, flow-ui, HyperDX (and its Mongo), and
-ClickHouse communicate over the private Compose network. This is a local development
-boundary, not remote edge authentication or a production security configuration.
+All host-published ports bind to `127.0.0.1`; generator, collector, flow-ui, HyperDX (and its Mongo),
+the end-user dashboard, and ClickHouse communicate over the private Compose network. This is a local
+development boundary, not remote edge authentication or a production security configuration.
 `make up` applies the migration ledger and waits for `/metrics` readiness before the
-collector is considered ready. `make ui` can run without the collector; its status
-board reports the collector as unavailable while remaining readable.
+collector is considered ready. `make ui` / `make dashboard` can run without the collector;
+empty boards remain readable.
 
-ClickHouse, flow-ui, HyperDX and its Mongo each carry a Compose healthcheck, so `make up`
-brings them up with `--wait` and a container that never goes healthy fails the command.
+ClickHouse, flow-ui, HyperDX and its Mongo, and the end-user dashboard each carry a Compose
+healthcheck, so `make up` brings them up with `--wait` and a container that never goes healthy
+fails the command.
 **collector-rust carries none, and that is a constraint rather than an oversight:** its
 runtime stage is `gcr.io/distroless/static-debian12`, which has no shell, no `wget` and no
 `curl`, so there is no in-container command for Docker to run. Its readiness is asserted
@@ -597,8 +635,94 @@ All repository invariant checks pass (`bash scripts/ci/run-invariants.sh` report
 
 ## 10. Pointers
 
-[Rust collector](services/collector-rust/) · [ADRs](docs/adr/README.md) · [Pod 2 → Pod 3 read contract](contracts/collector/v1/pod2-pod3-read-contract.md) · [bronze gap analysis](docs/research/pod3-bronze-gap.md) · [bronze DDL](infra/clickhouse/init.d/01-bronze-otel.sql) · [ticket registry](plan/core-plan.md) · [decisions](plan/decisions/README.md) · [deployment artifacts](infra/deploy/README.md)
+[Rust collector](services/collector-rust/) · [ADRs](docs/adr/README.md) · [interactive runtime architecture](docs/architecture/sentinel-runtime.html) · [Pod 2 → Pod 3 read contract](contracts/collector/v1/pod2-pod3-read-contract.md) · [bronze gap analysis](docs/research/pod3-bronze-gap.md) · [bronze DDL](infra/clickhouse/init.d/01-bronze-otel.sql) · [ticket registry](plan/core-plan.md) · [decisions](plan/decisions/README.md) · [deployment artifacts](infra/deploy/README.md)
 
 ---
 
 *Built by Crew B · DataShip Mission 2026 · Upstream: <https://github.com/luanmorenommaciel/sentinel>*
+
+### Local end-user executive dashboard
+
+The end-user dashboard is a **read-only executive board** for VP / CEO / CTO review of
+business-path reliability. It is started by **`make up`** (same Compose stack as flow-ui
+and HyperDX) and answered at **`http://127.0.0.1:8083`** (override with
+`DASHBOARD_HOST_PORT`).
+
+It queries `bronze.otel_traces` for spans with `StatusCode = Error`. These are **error
+spans, not authoritative alerts**. The API never exposes the ClickHouse password to the
+browser; Compose mounts `infra/secrets/ch_password` and the service connects as
+`sentinel_dashboard_u` (`SELECT` on `bronze.otel_traces`, `readonly = 2`, migration
+`0011`). Localhost only — no remote authentication or TLS.
+
+#### What you see
+
+| View | Purpose |
+|---|---|
+| **Executive Summary** | Hero KPIs (error events, concentration, peak), vs-last-hour pulse, type mix donut, service load vs equal-share, volume trend, ranked service table, cloud pulse, and **Key actions** derived from live data |
+| **Service Focus** | Actual vs equal-share bars and focus controls for the hottest services |
+| **Cloud Footprint** | Provider / region / platform / account breakdowns from allowlisted `ResourceAttributes` |
+| **Investigate** | Paginated error-span list (type + cloud columns) and span detail drawer |
+
+Live soft-refresh runs every 30s while the tab is open. Time windows: last hour / 24h / 7d / 30d.
+
+#### Startup steps (full stack)
+
+```sh
+# 1. From a clean checkout, start everything (ClickHouse → migrate → collector →
+#    flow-ui + HyperDX + end-user-dashboard). `make up` waits on /healthz for the dashboard.
+make up
+
+# 2. Confirm the dashboard URL is listed and healthy
+make status
+# → Dashboard        http://127.0.0.1:8083
+
+# 3. Put Error spans in bronze (needed for non-empty executive numbers)
+make generate SCENARIO=baseline WINDOW=5m
+# or a richer window, e.g. make generate SCENARIO=<anomaly> WINDOW=24h
+
+# 4. Open the board
+open http://127.0.0.1:8083   # or browse to it
+```
+
+If `8083` is taken:
+
+```sh
+make up DASHBOARD_HOST_PORT=8084
+# or: cp .env.example .env  → set DASHBOARD_HOST_PORT=8084
+```
+
+#### Startup steps (dashboard alone)
+
+Use when ClickHouse already exists locally and you only need the executive board:
+
+```sh
+make dashboard                 # ClickHouse + migrate + end-user-dashboard → :8083
+make down-dashboard            # stop only that service
+make logs SERVICE=end-user-dashboard FOLLOW=1
+```
+
+#### Verify / develop the service
+
+```sh
+# Via Make (runs tests inside the Compose image)
+make test-dashboard
+
+# Or on the host toolchain
+cd services/end-user-dashboard
+npm ci
+npm test
+npm run build
+
+# Contract surface
+# contracts/end-user-dashboard/v1/openapi.yaml
+```
+
+#### Related docs on this branch
+
+| Artifact | Role |
+|---|---|
+| [`intent/dashboard-intent.md`](intent/dashboard-intent.md) | Working intent |
+| [`spec/end-user-dashboard-spec.md`](spec/end-user-dashboard-spec.md) | Spec |
+| [`plan/end-user-dashboard-plan.md`](plan/end-user-dashboard-plan.md) | Plan / tickets |
+| [`prompts/06-feature-user-dash.md`](prompts/06-feature-user-dash.md) | Feature prompt |
+| [`CONTEXT.md`](CONTEXT.md) | Domain language for the board |
