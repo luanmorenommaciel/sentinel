@@ -381,7 +381,7 @@ Compose file rather than read out of a log.
 | `Wait for quiescence` | success | 2 s — `quiescent at 233100 signals`, ingested == persisted |
 | `Silver assertions` (`make test-silver`) | **success** | 1 s — 18 base + 16 watcher `throwIf`, every one `0` |
 | `Generator integration suite` | **success** | 17 s — `6 passed in 0.58s` |
-| `Down` (`make reset`) | success | 15 s |
+| `Down` (`make reset CONFIRM=1`) | success | 15 s |
 
 That is the first measurement of the budget this row was written against: **3 m 35 s against
 30 minutes**. A second dispatch, `38834675607`, re-ran it on the final head after the `Cargo.lock` bump and was green in **3 m 52 s** — two consecutive greens, 3 m 35 s and 3 m 52 s, is the first thing resembling a reproducibility signal for this job.

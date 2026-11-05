@@ -242,4 +242,5 @@ jobs:
 
       - name: Down
         if: always()
-        run: make reset
+        # Makefile requires CONFIRM=1 so a bare `make reset` cannot wipe volumes by accident.
+        run: make reset CONFIRM=1
