@@ -90,6 +90,23 @@ flowchart TB
 | **Process** | Parse/transform → internal `Signal` (log / span / metric) → typed rows; derive span duration; route metrics by type |
 | **Deliver** | Rows in the **bronze** `bronze.otel_logs` / `otel_traces` / `otel_metrics_gauge` / `otel_metrics_sum`, per the **Pod 2 → Pod 3 read contract**; Pod 3 builds silver (rolling-stats, read models) on top |
 
+### Interactive runtime architecture (Archify)
+
+The Mermaid figure above is the Pod / contract story. For a **local runtime** map of Compose services, host ports, credentials, and read-layer UIs, open the interactive Archify diagram:
+
+- **HTML (review in a browser):** [`docs/architecture/sentinel-runtime.html`](docs/architecture/sentinel-runtime.html)
+- **Machine-readable spec:** [`docs/architecture/sentinel-runtime.architecture.json`](docs/architecture/sentinel-runtime.architecture.json)
+
+That artifact was authored from a full-repo map of components, services, and infra config, under these rules:
+
+1. **8–12 core components** — operator, generator (otelgen), contracts SSOT, secrets mounts, `collector-rust`, ClickHouse, `flow-ui`, HyperDX, Mongo (HyperDX metadata), end-user dashboard.
+2. **Primary data path emphasized** — `make generate` → OTLP gRPC `:4317` → HTTP INSERT `:8123` into `bronze.*` (readers are side paths, not on the ingest critical path).
+3. **External dependencies and trust boundaries** — Docker Compose private network; host loopback publish `127.0.0.1`; least-privilege ClickHouse roles via password files; Mongo unpublished on the host.
+4. **Clean topology** — ports, env paths (`CONTRACTS_DIR`, `CLICKHOUSE_PASSWORD_FILE`, `MONGO_URI`), and role names live on node cards / footer cards rather than extra edges.
+5. **SRC evidence on nodes** — each component links back to verified file/line ranges at a pinned git revision (`meta.repository` in the JSON), so you can trace diagram claims to Compose, Makefile, collector config, and ClickHouse DDL.
+
+Guided views in the HTML: **Primary ingest path**, **Contracts and credentials**, **Read layer UIs**. Theme switch, pan/zoom, search, and export are built into the viewer.
+
 ---
 
 ## 2. The Pods
@@ -172,6 +189,9 @@ sentinel/
 │
 ├── docs/                          # 🔗 SHARED · cross-cutting knowledge
 │   ├── adr/                       #   architecture decisions (numbered, Pod-spanning)
+│   ├── architecture/              #   interactive Archify runtime diagram (HTML + JSON)
+│   │   ├── sentinel-runtime.html
+│   │   └── sentinel-runtime.architecture.json
 │   └── research/ · proposals/     #   design notes, gap analysis, decision proposals
 │
 ├── services/                      # 🧩 PER-COMPONENT · self-contained implementations
@@ -615,7 +635,7 @@ All repository invariant checks pass (`bash scripts/ci/run-invariants.sh` report
 
 ## 10. Pointers
 
-[Rust collector](services/collector-rust/) · [ADRs](docs/adr/README.md) · [Pod 2 → Pod 3 read contract](contracts/collector/v1/pod2-pod3-read-contract.md) · [bronze gap analysis](docs/research/pod3-bronze-gap.md) · [bronze DDL](infra/clickhouse/init.d/01-bronze-otel.sql) · [ticket registry](plan/core-plan.md) · [decisions](plan/decisions/README.md) · [deployment artifacts](infra/deploy/README.md)
+[Rust collector](services/collector-rust/) · [ADRs](docs/adr/README.md) · [interactive runtime architecture](docs/architecture/sentinel-runtime.html) · [Pod 2 → Pod 3 read contract](contracts/collector/v1/pod2-pod3-read-contract.md) · [bronze gap analysis](docs/research/pod3-bronze-gap.md) · [bronze DDL](infra/clickhouse/init.d/01-bronze-otel.sql) · [ticket registry](plan/core-plan.md) · [decisions](plan/decisions/README.md) · [deployment artifacts](infra/deploy/README.md)
 
 ---
 
