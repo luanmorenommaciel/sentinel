@@ -49,6 +49,8 @@ ifneq ($(call dotenv,HYPERDX_HOST_PORT),)
 HYPERDX_HOST_PORT ?= $(call dotenv,HYPERDX_HOST_PORT)
 endif
 HYPERDX_HOST_PORT ?= 8082
+DASHBOARD_HOST_PORT ?= $(or $(call dotenv,DASHBOARD_HOST_PORT),8083)
+export DASHBOARD_HOST_PORT
 export CLICKHOUSE_HOST_PORT COLLECTOR_OTLP_HOST_PORT COLLECTOR_METRICS_HOST_PORT
 export FLOW_UI_HOST_PORT HYPERDX_HOST_PORT
 
@@ -76,8 +78,9 @@ CH_URL      := http://127.0.0.1:$(CLICKHOUSE_HOST_PORT)
 METRICS_URL := http://127.0.0.1:$(COLLECTOR_METRICS_HOST_PORT)/metrics
 FLOW_UI_URL := http://127.0.0.1:$(FLOW_UI_HOST_PORT)
 HYPERDX_URL := http://127.0.0.1:$(HYPERDX_HOST_PORT)
+DASHBOARD_URL := http://127.0.0.1:$(DASHBOARD_HOST_PORT)
 
-.PHONY: help local-setup up status init migrate generate generate-all generate-stream ui down-ui hyperdx down-hyperdx reset-hyperdx hyperdx-seed \
+.PHONY: help local-setup up status init migrate generate generate-all generate-stream ui down-ui dashboard down-dashboard hyperdx down-hyperdx reset-hyperdx hyperdx-seed \
         e2e down reset logs ps \
         build test test-generator test-collector-rust test-flow-ui test-hyperdx \
         test-generator-integration test-backfill audit-python audit-images audit-images-built \
@@ -186,7 +189,7 @@ help:                ## Show this help
 	@echo ""
 	@echo "  host ports (all loopback-only; override any of them on the make line):"
 	@echo "    CLICKHOUSE_HOST_PORT=$(CLICKHOUSE_HOST_PORT)  COLLECTOR_OTLP_HOST_PORT=$(COLLECTOR_OTLP_HOST_PORT)  COLLECTOR_METRICS_HOST_PORT=$(COLLECTOR_METRICS_HOST_PORT)"
-	@echo "    FLOW_UI_HOST_PORT=$(FLOW_UI_HOST_PORT)  HYPERDX_HOST_PORT=$(HYPERDX_HOST_PORT)"
+	@echo "    FLOW_UI_HOST_PORT=$(FLOW_UI_HOST_PORT)  HYPERDX_HOST_PORT=$(HYPERDX_HOST_PORT)  DASHBOARD_HOST_PORT=$(DASHBOARD_HOST_PORT)"
 
 local-setup:
 	@bash scripts/local-setup.sh
@@ -244,7 +247,7 @@ up: local-setup     ## Start the whole stack with local credentials
 		sleep $$((attempt * 5)); \
 		attempt=$$((attempt + 1)); \
 	done
-	docker compose up -d --build --wait --wait-timeout 300 flow-ui hyperdx
+	docker compose up -d --build --wait --wait-timeout 300 flow-ui hyperdx end-user-dashboard
 	@# The generator is a one-shot CLI, not a service (see docker-compose.yml): it is
 	@# BUILT here so `make generate` and `make e2e` start instantly, and never `up`ed,
 	@# because a service that runs `otelgen --help` and exits would sit in
@@ -256,6 +259,7 @@ up: local-setup     ## Start the whole stack with local credentials
 	$(call wait_http,collector,$(METRICS_URL),30,collector-rust,$(COLLECTOR_METRICS_HOST_PORT),COLLECTOR_METRICS_HOST_PORT)
 	$(call wait_http,flow-ui,$(FLOW_UI_URL)/healthz,30,flow-ui,$(FLOW_UI_HOST_PORT),FLOW_UI_HOST_PORT)
 	$(call wait_http,HyperDX,$(HYPERDX_URL)/,60,hyperdx,$(HYPERDX_HOST_PORT),HYPERDX_HOST_PORT)
+	$(call wait_http,dashboard,$(DASHBOARD_URL)/healthz,30,end-user-dashboard,$(DASHBOARD_HOST_PORT),DASHBOARD_HOST_PORT)
 	@$(MAKE) --no-print-directory hyperdx-seed
 	@HYPERDX_URL=$(HYPERDX_URL) bash scripts/hyperdx-check.sh
 	@curl -fsS $(FLOW_UI_URL)/healthz | docker compose exec -T hyperdx node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{let h=JSON.parse(s);if(!h.collector||!h.clickhouse)process.exit(1)});' || { echo "flow-ui cannot reach its dependencies" >&2; exit 1; }
@@ -275,16 +279,17 @@ status:              ## Show every container plus the URL of each host-published
 	@printf '  %-16s%s\n' 'collector'    'OTLP 127.0.0.1:$(COLLECTOR_OTLP_HOST_PORT) · metrics $(METRICS_URL)'
 	@printf '  %-16s%s\n' 'flow-ui'      '$(FLOW_UI_URL)'
 	@printf '  %-16s%s\n' 'HyperDX'      '$(HYPERDX_URL)'
+	@printf '  %-16s%s\n' 'Dashboard'    '$(DASHBOARD_URL)'
 	@printf '  %-16s%s\n' 'local-dev login' 'ClickHouse sentinel_dev_u · HyperDX $(SENTINEL_DEV_EMAIL) · password: infra/secrets/dev_password or configured environment/.env'
 	@printf '  %-16s%s\n' 'generator'    'one-shot: make generate / make generate-all / make generate-stream'
 	@echo ""
-	@for svc in clickhouse collector-rust flow-ui hyperdx-mongo hyperdx; do \
+	@for svc in clickhouse collector-rust flow-ui hyperdx-mongo hyperdx end-user-dashboard; do \
 		cid=$$(docker compose ps -q "$$svc"); \
 		[ -n "$$cid" ] || { echo "$$svc is not running" >&2; exit 1; }; \
 		state=$$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$$cid"); \
 		case "$$state" in running\ healthy|running\ ) ;; *) echo "$$svc: $$state" >&2; exit 1;; esac; \
 	done
-	@for url in $(CH_URL)/ping $(METRICS_URL) $(FLOW_UI_URL)/healthz $(HYPERDX_URL)/api/ready; do \
+	@for url in $(CH_URL)/ping $(METRICS_URL) $(FLOW_UI_URL)/healthz $(HYPERDX_URL)/api/ready $(DASHBOARD_URL)/healthz; do \
 		curl -fsS --max-time 5 "$$url" >/dev/null || { echo "not ready: $$url" >&2; exit 1; }; \
 	done
 
@@ -371,6 +376,26 @@ ui:                  ## Start ClickHouse + flow-ui alone (FLOW_UI_HOST_PORT, def
 down-ui:             ## Stop only flow-ui
 	docker compose stop flow-ui
 
+# Same ordering as `ui`: the dashboard user `sentinel_dashboard_u` is created by
+# migration 0011, so it must not start against an unmigrated volume. The collector
+# stays optional; without telemetry the executive board simply shows zeros.
+dashboard:           ## Start ClickHouse + end-user dashboard alone (DASHBOARD_HOST_PORT, default 8083)
+	docker compose up -d --wait clickhouse
+	@attempt=0; while [ "$$attempt" -lt 30 ]; do \
+		if docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1; then \
+			echo "ClickHouse ready"; break; \
+		fi; \
+		attempt=$$((attempt + 1)); sleep 2; \
+	done; \
+	[ "$$attempt" -lt 30 ] || { echo "ClickHouse did not become ready" >&2; exit 1; }
+	$(MAKE) migrate
+	docker compose up -d --build --wait --wait-timeout 300 end-user-dashboard
+	$(call wait_http,dashboard,$(DASHBOARD_URL)/healthz,30,end-user-dashboard,$(DASHBOARD_HOST_PORT),DASHBOARD_HOST_PORT)
+	@echo "end-user dashboard ready at $(DASHBOARD_URL) (collector is optional)"
+
+down-dashboard:      ## Stop only the end-user dashboard
+	docker compose stop end-user-dashboard
+
 # Same ordering as `ui`, for the same reason: HyperDX authenticates as
 # `sentinel_hyperdx_u`, which migration 0007 creates, so it must not start against an
 # unmigrated volume. The collector stays optional; without it the tables are just empty.
@@ -452,7 +477,12 @@ build:               ## Build all service images (generator + Rust collector)
 	$(call build_with_retry,collector-rust)
 	docker compose build
 
-test: test-generator test-collector-rust test-flow-ui test-hyperdx  ## Run all unit test suites
+test: test-generator test-collector-rust test-flow-ui test-hyperdx test-dashboard  ## Run all unit test suites
+
+test-dashboard:      ## Run dashboard unit tests
+	@# Vitest bundles its config beside the root-owned image sources; this override
+	@# applies only to the disposable test container, not the dashboard service.
+	docker compose run --rm --no-deps --user root end-user-dashboard npm test
 
 test-silver:            ## Verify Bronze→Silver load and Silver read-model invariants
 	docker compose exec -T clickhouse clickhouse-client --multiquery < infra/clickhouse/tests/02-silver-layer.test.sql
