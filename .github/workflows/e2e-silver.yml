@@ -151,7 +151,7 @@ jobs:
           "
 
       - name: Generate
-        run: make generate
+        run: make generate WINDOW=5m
       - name: Wait for quiescence
         run: |
           set -uo pipefail
@@ -240,6 +240,7 @@ jobs:
             echo "::endgroup::"
           done
 
+      # CI is disposable; the CONFIRM guard stays so a local `make reset` cannot drop volumes.
       - name: Down
         if: always()
-        run: make reset
+        run: make reset CONFIRM=1

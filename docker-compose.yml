@@ -93,6 +93,27 @@ services:
       clickhouse:
         condition: service_healthy
 
+  end-user-dashboard:
+    build:
+      context: ./services/end-user-dashboard
+    image: sentinel-end-user-dashboard:dev
+    environment:
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: sentinel_dashboard_u
+      CLICKHOUSE_PASSWORD_FILE: /etc/sentinel/secrets/ch_password
+    volumes:
+      - ./infra/secrets/ch_password:/etc/sentinel/secrets/ch_password:ro
+    ports:
+      - "127.0.0.1:${DASHBOARD_HOST_PORT:-8083}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r => {if (!r.ok) process.exit(1)}).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
   # HyperDX (ADR-0011): a second read-layer UI beside flow-ui, wired straight to
   # ClickHouse. Only the UI+API image runs here. ClickStack's all-in-one and local
   # images bundle their own ClickHouse and OTel collector; either would be a second
