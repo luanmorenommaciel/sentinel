@@ -230,6 +230,12 @@ jobs:
           set -euo pipefail
           umask 077
           openssl rand -hex 24 > "$RUNNER_TEMP/ch_password"
+          # Migration 0010 (local dev login) needs {dev_pw:String}; since 7cd91b8
+          # SENTINEL_DEV_PASSWORD has no default, so generate a masked per-run
+          # throwaway here, same as e2e-silver does. Rides migrate.sh's stdin prelude.
+          dev_pw="Ci-$(openssl rand -hex 16)!"
+          echo "::add-mask::$dev_pw"
+          SENTINEL_DEV_PASSWORD="$dev_pw" \
           MIGRATION_PW_FILE="$RUNNER_TEMP/ch_password" \
           CH_CLIENT="docker compose -f services/collector-rust/infra/docker-compose.yml exec -T clickhouse clickhouse-client" \
             bash infra/clickhouse/migrate.sh
