@@ -1,0 +1,146 @@
+openapi: 3.0.3
+info:
+  title: Sentinel error span dashboard API
+  version: 1.0.0
+paths:
+  /api/overview:
+    get:
+      parameters:
+        - $ref: '#/components/parameters/from'
+        - $ref: '#/components/parameters/to'
+        - $ref: '#/components/parameters/service'
+        - $ref: '#/components/parameters/span'
+      responses:
+        '200':
+          description: Error span totals and trend for the selected interval
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [from, to, total, bucketSeconds, trend, services, types, hourCompare, cloud]
+                properties:
+                  from: {type: string, format: date-time}
+                  to: {type: string, format: date-time}
+                  total: {type: integer, minimum: 0}
+                  bucketSeconds: {type: integer}
+                  trend:
+                    type: array
+                    items:
+                      type: object
+                      required: [timestamp, count]
+                      properties:
+                        timestamp: {type: string, format: date-time}
+                        count: {type: integer}
+                  services:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, count]
+                      properties:
+                        name: {type: string}
+                        count: {type: integer}
+                  types:
+                    type: array
+                    description: Sum of error spans grouped by SpanAttributes['component.type']
+                    items:
+                      type: object
+                      required: [name, count]
+                      properties:
+                        name: {type: string, description: Component type such as compute, messaging, database, storage}
+                        count: {type: integer}
+                  hourCompare:
+                    type: object
+                    required: [lastHour, previousHour, changePct, direction]
+                    properties:
+                      lastHour: {type: integer}
+                      previousHour: {type: integer}
+                      changePct: {type: number, nullable: true, description: Percent change vs prior hour; null when prior hour was zero and current is not}
+                      direction: {type: string, enum: [up, down, flat]}
+                  cloud:
+                    type: object
+                    required: [providers, regions, platforms, accounts]
+                    properties:
+                      providers:
+                        type: array
+                        items:
+                          type: object
+                          required: [name, count]
+                          properties:
+                            name: {type: string}
+                            count: {type: integer}
+                      regions:
+                        type: array
+                        items:
+                          type: object
+                          required: [name, count]
+                          properties:
+                            name: {type: string}
+                            count: {type: integer}
+                      platforms:
+                        type: array
+                        items:
+                          type: object
+                          required: [name, count]
+                          properties:
+                            name: {type: string}
+                            count: {type: integer}
+                      accounts:
+                        type: array
+                        items:
+                          type: object
+                          required: [name, count]
+                          properties:
+                            name: {type: string}
+                            count: {type: integer}
+        '400': {description: Invalid query}
+        '503': {description: Data unavailable}
+  /api/spans:
+    get:
+      parameters:
+        - $ref: '#/components/parameters/from'
+        - $ref: '#/components/parameters/to'
+        - $ref: '#/components/parameters/service'
+        - $ref: '#/components/parameters/span'
+        - {name: page, in: query, schema: {type: integer, minimum: 1, maximum: 999999, default: 1}}
+      responses:
+        '200':
+          description: Page of error spans
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [from, to, page, pageSize, total, items]
+                properties:
+                  from: {type: string, format: date-time}
+                  to: {type: string, format: date-time}
+                  page: {type: integer}
+                  pageSize: {type: integer, enum: [50]}
+                  total: {type: integer}
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [timestamp, serviceName, spanName, statusCode, durationNs, traceId, spanId, componentType, cloudProvider, cloudRegion, cloudAvailabilityZone, cloudPlatform, cloudAccountId]
+                      additionalProperties: false
+                      properties:
+                        timestamp: {type: string, format: date-time}
+                        serviceName: {type: string}
+                        spanName: {type: string}
+                        statusCode: {type: string}
+                        durationNs: {type: string}
+                        traceId: {type: string}
+                        spanId: {type: string}
+                        componentType: {type: string, description: Allowlisted SpanAttributes['component.type']}
+                        cloudProvider: {type: string, description: ResourceAttributes['cloud.provider']}
+                        cloudRegion: {type: string, description: ResourceAttributes['cloud.region']}
+                        cloudAvailabilityZone: {type: string, description: ResourceAttributes['cloud.availability_zone']}
+                        cloudPlatform: {type: string, description: ResourceAttributes['cloud.platform']}
+                        cloudAccountId: {type: string, description: ResourceAttributes['cloud.account.id']}
+        '400': {description: Invalid query}
+        '503': {description: Data unavailable}
+components:
+  parameters:
+    from: {name: from, in: query, required: true, schema: {type: string, format: date-time}, description: Inclusive UTC start; maximum interval is 30 days.}
+    to: {name: to, in: query, required: true, schema: {type: string, format: date-time}, description: Exclusive UTC end.}
+    service: {name: service, in: query, schema: {type: string, maxLength: 256}}
+    span: {name: span, in: query, schema: {type: string, maxLength: 256}}

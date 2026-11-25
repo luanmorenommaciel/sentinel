@@ -22,7 +22,7 @@ rc=0
 
 hits="$(
     grep -rl --binary-files=without-match \
-        --exclude-dir='invariants.d' 'otelgen_secret' \
+        --exclude-dir='invariants.d' --exclude-dir='node_modules' 'otelgen_secret' \
         "$ROOT/docker-compose.yml" "$ROOT/Makefile" \
         "$ROOT/infra" "$ROOT/services" "$ROOT/scripts" "$ROOT/.github" 2>/dev/null |
         sed "s#^$ROOT/##" || true
@@ -62,11 +62,11 @@ ASSIGNED='(^|[^A-Za-z_])(password|passwd|secret)[[:space:]]*[:=][[:space:]]*["'"
 
 shaped="$(
     {
-        grep -rnE --binary-files=without-match --exclude-dir='invariants.d' \
+        grep -rnE --binary-files=without-match --exclude-dir='invariants.d' --exclude-dir='node_modules' \
             "$UNAMBIGUOUS" \
             "$ROOT/docker-compose.yml" "$ROOT/Makefile" \
             "$ROOT/infra" "$ROOT/services" "$ROOT/scripts" "$ROOT/.github" 2>/dev/null || true
-        grep -rniE --binary-files=without-match --exclude-dir='invariants.d' \
+        grep -rniE --binary-files=without-match --exclude-dir='invariants.d' --exclude-dir='node_modules' \
             --include='*.yml' --include='*.yaml' --include='*.sql' \
             --include='*.sh' --include='*.conf' --include='*.env' \
             "$ASSIGNED" \

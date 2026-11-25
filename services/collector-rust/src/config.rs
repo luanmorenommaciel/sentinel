@@ -812,7 +812,8 @@ logging:
     fn config_debug_carries_the_path_never_the_credential() {
         // `Debug` is what a tracing subscriber prints. The credential is
         // returned out of band by `credential()` and never stored on the
-        // struct, so no amount of config logging can leak it (§14.2 rule 2).
+        // struct, so no amount of config logging can leak it (§14.2 rule 2):
+        // not the value, not a prefix, and not its length.
         let secret = "topsecretvalue";
         let path = scratch_file("debug", secret);
         let yaml = format!(
@@ -831,11 +832,37 @@ logging:
         );
         assert!(
             !rendered.contains(secret),
-            "the credential must never appear in Debug output"
+            "the credential must never appear in Debug output: {rendered}"
+        );
+
+        // Same path, different secret, different length. `Debug` must be
+        // byte-identical: it may carry the path (whose scratch name embeds
+        // the process id, so searching the whole dump for the decimal length
+        // false-fails whenever that id contains those digits) and nothing
+        // about the credential.
+        let other = "completely-different-secret-value";
+        assert_ne!(other.len(), secret.len());
+        std::fs::write(&path, other).expect("rewrite scratch credential");
+        let cfg_other: Config = serde_yaml::from_str(&yaml).expect("parses");
+        assert_eq!(
+            cfg_other
+                .clickhouse
+                .as_ref()
+                .expect("present")
+                .credential()
+                .expect("readable")
+                .as_deref(),
+            Some(other),
+            "the replacement credential was actually read"
+        );
+        let rendered_other = format!("{cfg_other:?}");
+        assert_eq!(
+            rendered_other, rendered,
+            "not even its length: Debug must not change when the credential does"
         );
         assert!(
-            !rendered.contains(&secret.len().to_string()),
-            "not even its length"
+            !rendered_other.contains(other),
+            "the credential must never appear in Debug output: {rendered_other}"
         );
         let _ = std::fs::remove_file(&path);
     }
