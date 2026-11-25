@@ -1,0 +1,382 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Sentinel Local Runtime Architecture",
+    "locale": "en",
+    "output": "sentinel-runtime.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/luanmorenommaciel/sentinel.git",
+      "revision": "40c52db084eb82d8db28c68fac35926c01519ac9"
+    },
+    "viewBox": [1220, 640],
+    "views": [
+      {
+        "id": "primary-ingest",
+        "label": "Primary ingest path",
+        "focus": ["operator", "generator", "collector", "clickhouse"],
+        "note": "Follow make generate → OTLP gRPC → RowBinary INSERT into bronze.*"
+      },
+      {
+        "id": "trust-boundary",
+        "label": "Contracts and credentials",
+        "focus": ["contracts", "secrets", "collector", "clickhouse"],
+        "note": "Receive-boundary contract validation and password-file mounts."
+      },
+      {
+        "id": "read-layer",
+        "label": "Read layer UIs",
+        "focus": ["clickhouse", "flowui", "hyperdx", "mongo", "dashboard"],
+        "note": "SELECT-only consumers; Mongo holds HyperDX app metadata only."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "operator",
+      "type": "external",
+      "label": "Operator",
+      "sublabel": "Host browser + Make",
+      "tag": "127.0.0.1 only",
+      "pos": [30, 230],
+      "size": [118, 58],
+      "sources": [
+        {
+          "path": "Makefile",
+          "line": 77,
+          "end_line": 81,
+          "label": "Host URLs"
+        },
+        {
+          "path": "Makefile",
+          "line": 335,
+          "end_line": 340,
+          "label": "make generate"
+        }
+      ]
+    },
+    {
+      "id": "generator",
+      "type": "backend",
+      "label": "Generator",
+      "sublabel": "otelgen one-shot CLI",
+      "tag": "Pod 1",
+      "pos": [250, 230],
+      "size": [136, 58],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 174,
+          "end_line": 187,
+          "label": "Compose image"
+        },
+        {
+          "path": "Makefile",
+          "line": 338,
+          "end_line": 340,
+          "label": "OTLP endpoint"
+        }
+      ]
+    },
+    {
+      "id": "contracts",
+      "type": "security",
+      "label": "Contracts SSOT",
+      "sublabel": "generator/v1 schema",
+      "tag": "CONTRACTS_DIR",
+      "pos": [506, 70],
+      "size": [140, 58],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 23,
+          "end_line": 27,
+          "label": "RO mount"
+        },
+        {
+          "path": "contracts/README.md",
+          "line": 1,
+          "end_line": 18,
+          "label": "Registry"
+        }
+      ]
+    },
+    {
+      "id": "secrets",
+      "type": "security",
+      "label": "Secrets files",
+      "sublabel": "ch_password mounts",
+      "tag": "path, not env",
+      "pos": [30, 70],
+      "size": [118, 58],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 29,
+          "end_line": 33,
+          "label": "Collector mount"
+        },
+        {
+          "path": "services/collector-rust/config.docker.yaml",
+          "line": 17,
+          "end_line": 18,
+          "label": "password_file"
+        }
+      ]
+    },
+    {
+      "id": "collector",
+      "type": "backend",
+      "label": "collector-rust",
+      "sublabel": "OTLP gRPC :4317",
+      "tag": "Pod 2 · /metrics :9090",
+      "pos": [500, 230],
+      "size": [152, 58],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 17,
+          "end_line": 40,
+          "label": "Compose service"
+        },
+        {
+          "path": "services/collector-rust/config.docker.yaml",
+          "line": 5,
+          "end_line": 36,
+          "label": "Runtime config"
+        }
+      ]
+    },
+    {
+      "id": "clickhouse",
+      "type": "database",
+      "label": "ClickHouse",
+      "sublabel": "25.4 · bronze + silver",
+      "tag": "HTTP :8123",
+      "brand": "clickhouse",
+      "pos": [770, 230],
+      "size": [152, 58],
+      "sources": [
+        {
+          "path": "infra/clickhouse/compose.clickhouse.yml",
+          "line": 33,
+          "end_line": 50,
+          "label": "Service + DDL"
+        },
+        {
+          "path": "infra/clickhouse/migrations/0001_bronze_otel.sql",
+          "line": 24,
+          "end_line": 29,
+          "label": "bronze.*"
+        },
+        {
+          "path": "infra/clickhouse/migrations/0004_silver_layer.sql",
+          "line": 1,
+          "end_line": 13,
+          "label": "silver.*"
+        }
+      ]
+    },
+    {
+      "id": "flowui",
+      "type": "frontend",
+      "label": "flow-ui",
+      "sublabel": "metrics + CH SELECT",
+      "tag": "host :8080",
+      "pos": [500, 400],
+      "size": [152, 58],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 53,
+          "end_line": 79,
+          "label": "Compose + env"
+        }
+      ]
+    },
+    {
+      "id": "hyperdx",
+      "type": "frontend",
+      "label": "HyperDX",
+      "sublabel": "2.40.0 read UI",
+      "tag": "host :8082",
+      "pos": [770, 400],
+      "size": [152, 58],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 134,
+          "end_line": 161,
+          "label": "Compose service"
+        },
+        {
+          "path": "infra/hyperdx/sources.json",
+          "line": 1,
+          "end_line": 25,
+          "label": "bronze sources"
+        }
+      ]
+    },
+    {
+      "id": "mongo",
+      "type": "database",
+      "label": "MongoDB",
+      "sublabel": "HyperDX metadata",
+      "tag": "no host port",
+      "brand": "mongodb",
+      "pos": [770, 520],
+      "size": [152, 58],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 122,
+          "end_line": 132,
+          "label": "Private only"
+        }
+      ]
+    },
+    {
+      "id": "dashboard",
+      "type": "frontend",
+      "label": "End-user Dashboard",
+      "sublabel": "otel_traces reader",
+      "tag": "host :8083",
+      "pos": [990, 400],
+      "size": [148, 58],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 96,
+          "end_line": 107,
+          "label": "Compose service"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Docker Compose private network",
+      "wraps": ["generator", "contracts", "collector", "clickhouse", "flowui", "hyperdx", "mongo", "dashboard", "secrets"],
+      "pad": 22
+    },
+    {
+      "kind": "security-group",
+      "label": "Host loopback publish 127.0.0.1",
+      "wraps": ["collector", "clickhouse", "flowui", "hyperdx", "dashboard"],
+      "pad": 12
+    }
+  ],
+  "connections": [
+    {
+      "id": "op-to-gen",
+      "from": "operator",
+      "to": "generator",
+      "label": "make generate",
+      "variant": "emphasis",
+      "labelDy": 42
+    },
+    {
+      "id": "gen-to-collector",
+      "from": "generator",
+      "to": "collector",
+      "label": "OTLP gRPC :4317",
+      "variant": "emphasis",
+      "labelDy": 42
+    },
+    {
+      "id": "collector-to-ch",
+      "from": "collector",
+      "to": "clickhouse",
+      "label": "HTTP INSERT :8123",
+      "variant": "emphasis",
+      "labelDy": 42
+    },
+    {
+      "id": "contracts-to-collector",
+      "from": "contracts",
+      "to": "collector",
+      "label": "grpc_validation",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelDy": 24,
+      "labelDx": 64
+    },
+    {
+      "id": "secrets-to-ch",
+      "from": "secrets",
+      "to": "clickhouse",
+      "label": "role password files",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [[89, 42], [846, 42]],
+      "labelDy": -18
+    },
+    {
+      "id": "flowui-metrics",
+      "from": "flowui",
+      "to": "collector",
+      "label": "GET /metrics",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDx": -64
+    },
+    {
+      "id": "hyperdx-select",
+      "from": "hyperdx",
+      "to": "clickhouse",
+      "label": "SELECT bronze",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDx": -70
+    },
+    {
+      "id": "hyperdx-mongo",
+      "from": "hyperdx",
+      "to": "mongo",
+      "label": "Mongo :27017",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 22,
+      "labelDx": 70
+    },
+    {
+      "id": "dashboard-select",
+      "from": "dashboard",
+      "to": "clickhouse",
+      "label": "SELECT otel_traces",
+      "variant": "dashed",
+      "labelDy": 56
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Primary data path",
+      "items": [
+        "otelgen → collector-rust :4317 → ClickHouse bronze.* (HTTP RowBinary :8123)",
+        "flow-ui / HyperDX / dashboard are optional readers — not on the ingest path"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Trust boundaries",
+      "items": [
+        "Host ports bind 127.0.0.1; Mongo has no host publish",
+        "Least-privilege CH roles via password files (TLS deferred locally)"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Node details (not edges)",
+      "items": [
+        "Ports: 8123 · 4317 · 9090 · 8080 · 8082 · 8083",
+        "Roles: sentinel_collector_u · sentinel_reader_u · sentinel_hyperdx_u · sentinel_dashboard_u"
+      ]
+    }
+  ]
+}
